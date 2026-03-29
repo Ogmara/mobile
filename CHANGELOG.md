@@ -5,6 +5,18 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-03-29
+
+### Fixed
+- Wallet creation STILL failing with crypto.subtle — root cause was Metro
+  bundling two separate copies of @noble/ed25519 (mobile's + SDK's).
+  Our sha512 patch only applied to one copy. Fix:
+  1. Removed SDK's node_modules/@noble copies (Metro resolves from mobile's)
+  2. Moved ed25519 config from import-time to runtime (`patchEd25519()`)
+     called in init(), after all modules are loaded
+  3. Downgraded @noble/hashes to v1.8.0 (v2 uses package exports that
+     Metro can't resolve via file-based fallback)
+
 ## [0.4.5] - 2026-03-29
 
 ### Fixed

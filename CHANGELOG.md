@@ -5,6 +5,14 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-03-29
+
+### Fixed
+- Wallet creation crash "crypto.subtle must be defined" — `randomBytes`
+  was imported from `@noble/ciphers/webcrypto` which requires SubtleCrypto.
+  Replaced with `crypto.getRandomValues` (available via polyfill).
+  Audited all imports to confirm no remaining webcrypto dependencies.
+
 ## [0.4.3] - 2026-03-29
 
 ### Fixed

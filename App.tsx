@@ -113,29 +113,7 @@ function AppContent() {
     return () => sub.remove();
   }, [locked]);
 
-  // Still loading initial state
-  if (startScreen === null || locked === null) return null;
-
-  // Show lock screen if app is locked
-  if (locked) {
-    return (
-      <LockScreen
-        onUnlock={() => {
-          setLocked(false);
-          // Execute pending notification navigation after unlock
-          if (pendingNavRef.current && navigationRef.current) {
-            const route = pendingNavRef.current;
-            pendingNavRef.current = null;
-            setTimeout(() => {
-              // @ts-expect-error — dynamic navigation
-              navigationRef.current?.navigate(route.screen, route.params);
-            }, 100);
-          }
-        }}
-      />
-    );
-  }
-
+  // useMemo MUST be before any conditional returns (React rules of hooks)
   const navTheme = useMemo(
     () => ({
       dark: isDark,
@@ -156,6 +134,28 @@ function AppContent() {
     }),
     [isDark, colors],
   );
+
+  // Still loading initial state
+  if (startScreen === null || locked === null) return null;
+
+  // Show lock screen if app is locked
+  if (locked) {
+    return (
+      <LockScreen
+        onUnlock={() => {
+          setLocked(false);
+          if (pendingNavRef.current && navigationRef.current) {
+            const route = pendingNavRef.current;
+            pendingNavRef.current = null;
+            setTimeout(() => {
+              // @ts-expect-error — dynamic navigation
+              navigationRef.current?.navigate(route.screen, route.params);
+            }, 100);
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <NavigationContainer ref={navigationRef} theme={navTheme} linking={getLinkingConfig()}>

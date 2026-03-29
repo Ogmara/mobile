@@ -5,6 +5,21 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-03-29
+
+### Added
+- User profile section in Settings (visible when wallet connected)
+  - Avatar with initial letter, display name, address
+  - Edit mode: name + bio text inputs, save to L2 node via SDK
+- Language picker as modal dropdown (clean single-row selector)
+  - Shows current language name (e.g., "Deutsch" not "DE")
+  - Tap opens modal with all 6 languages
+
+### Changed
+- Language selection replaced from full list to compact dropdown
+- Settings sections reordered: Profile → Start Screen → Theme →
+  Language → Security → Wallet → Connection → About
+
 ## [0.4.7] - 2026-03-29
 
 ### Added

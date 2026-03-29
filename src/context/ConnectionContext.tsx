@@ -1,0 +1,199 @@
+/**
+ * Connection context — manages L2 node connection state and wallet auth.
+ *
+ * Provides the SDK client, WebSocket subscription, connection status,
+ * and wallet signer to all screens. Handles node failover and reconnection.
+ */
+
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
+import { OgmaraClient, WsSubscription, subscribe, type WsEvent } from '@ogmara/sdk';
+import type { WalletSigner } from '@ogmara/sdk';
+import { getSetting, setSetting } from '../lib/settings';
+import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultGetAddress, vaultWipe } from '../lib/vault';
+
+const DEFAULT_NODE_URL = 'http://localhost:41721';
+
+type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
+
+interface ConnectionContextValue {
+  client: OgmaraClient | null;
+  status: ConnectionStatus;
+  signer: WalletSigner | null;
+  address: string | null;
+  peers: number;
+  /** Connect to a node URL (persists the choice). */
+  connectToNode: (url: string) => Promise<void>;
+  /** Store a private key in the vault and activate the wallet. Pass null to wipe. */
+  setWallet: (privateKeyHex: string | null) => Promise<void>;
+  /** Generate a new random wallet in the vault. */
+  generateWallet: () => Promise<void>;
+  /** Subscribe to a WebSocket event handler. Returns unsubscribe function. */
+  onWsEvent: (handler: (event: WsEvent) => void) => () => void;
+}
+
+const ConnectionContext = createContext<ConnectionContextValue>({
+  client: null,
+  status: 'disconnected',
+  signer: null,
+  address: null,
+  peers: 0,
+  connectToNode: async () => {},
+  setWallet: async () => {},
+  generateWallet: async () => {},
+  onWsEvent: () => () => {},
+});
+
+export function ConnectionProvider({ children }: { children: React.ReactNode }) {
+  const [client, setClient] = useState<OgmaraClient | null>(null);
+  const [status, setStatus] = useState<ConnectionStatus>('connecting');
+  const [signer, setSignerState] = useState<WalletSigner | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [peers, setPeers] = useState(0);
+
+  const wsRef = useRef<WsSubscription | null>(null);
+  const eventHandlersRef = useRef<Set<(event: WsEvent) => void>>(new Set());
+  const nodeUrlRef = useRef<string>(DEFAULT_NODE_URL);
+  const signerRef = useRef<WalletSigner | null>(null);
+
+  // Initialize client on mount
+  useEffect(() => {
+    initClient();
+    return () => {
+      wsRef.current?.close();
+    };
+  }, []);
+
+  // Pause/resume WebSocket on app background/foreground
+  useEffect(() => {
+    const handleAppState = (nextState: AppStateStatus) => {
+      if (nextState === 'active') {
+        connectWs(nodeUrlRef.current);
+      } else if (nextState === 'background') {
+        wsRef.current?.close();
+        wsRef.current = null;
+      }
+    };
+    const sub = AppState.addEventListener('change', handleAppState);
+    return () => sub.remove();
+  }, []);
+
+  async function initClient() {
+    try {
+      const savedUrl = await getSetting('nodeUrl');
+      const url = savedUrl || DEFAULT_NODE_URL;
+      nodeUrlRef.current = url;
+
+      const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
+      setClient(newClient);
+
+      // Restore wallet if saved
+      await restoreWallet(newClient);
+
+      // Check node health
+      const health = await newClient.health();
+      setPeers(health.peers);
+      setStatus('connected');
+
+      // Start WebSocket
+      connectWs(url);
+    } catch {
+      setStatus('disconnected');
+    }
+  }
+
+  function connectWs(nodeUrl: string) {
+    wsRef.current?.close();
+
+    wsRef.current = subscribe({
+      nodeUrl,
+      signer: signerRef.current ?? undefined,
+      autoReconnect: true,
+      reconnectDelay: 1000,
+      maxReconnectDelay: 30000,
+      onEvent: (event) => {
+        eventHandlersRef.current.forEach((handler) => handler(event));
+      },
+      onStateChange: (connected) => {
+        setStatus(connected ? 'connected' : 'reconnecting');
+      },
+    });
+  }
+
+  async function restoreWallet(c: OgmaraClient) {
+    const addr = await vaultInit();
+    if (addr) {
+      const s = vaultGetSigner();
+      signerRef.current = s;
+      setSignerState(s);
+      setAddress(addr);
+      if (s) c.withSigner(s);
+    }
+  }
+
+  const connectToNode = useCallback(async (url: string) => {
+    nodeUrlRef.current = url;
+    await setSetting('nodeUrl', url);
+
+    const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
+    if (signerRef.current) newClient.withSigner(signerRef.current);
+    setClient(newClient);
+    setStatus('connecting');
+
+    try {
+      const health = await newClient.health();
+      setPeers(health.peers);
+      setStatus('connected');
+      connectWs(url);
+    } catch {
+      setStatus('disconnected');
+    }
+  }, []);
+
+  const setWallet = useCallback(async (privateKeyHex: string | null) => {
+    if (privateKeyHex) {
+      const addr = await vaultStore(privateKeyHex);
+      const s = vaultGetSigner();
+      signerRef.current = s;
+      setSignerState(s);
+      setAddress(addr);
+      if (client && s) client.withSigner(s);
+    } else {
+      await vaultWipe();
+      signerRef.current = null;
+      setSignerState(null);
+      setAddress(null);
+    }
+    connectWs(nodeUrlRef.current);
+  }, [client]);
+
+  const generateWallet = useCallback(async () => {
+    const addr = await vaultGenerate();
+    const s = vaultGetSigner();
+    signerRef.current = s;
+    setSignerState(s);
+    setAddress(addr);
+    if (client && s) client.withSigner(s);
+    connectWs(nodeUrlRef.current);
+  }, [client]);
+
+  const onWsEvent = useCallback((handler: (event: WsEvent) => void) => {
+    eventHandlersRef.current.add(handler);
+    return () => {
+      eventHandlersRef.current.delete(handler);
+    };
+  }, []);
+
+  return (
+    <ConnectionContext.Provider
+      value={{ client, status, signer, address, peers, connectToNode, setWallet, generateWallet, onWsEvent }}
+    >
+      {children}
+    </ConnectionContext.Provider>
+  );
+}
+
+/** Access connection state and SDK client. */
+export function useConnection() {
+  return useContext(ConnectionContext);
+}

@@ -162,6 +162,25 @@ export function vaultGetAddress(): string | null {
   return cachedSigner?.address ?? null;
 }
 
+/**
+ * Export the private key for user backup.
+ *
+ * SECURITY: This is the ONLY way to get the raw private key out of the vault.
+ * The caller MUST show a warning before displaying the key to the user.
+ * Returns the hex string from SecureStore, or null if unavailable.
+ */
+export async function vaultExportKey(): Promise<string | null> {
+  // Try raw key first (unencrypted mode)
+  const raw = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
+  if (raw) return raw;
+
+  // If encrypted, the key is only in memory via cachedSigner —
+  // but WalletSigner doesn't expose the raw bytes. The encrypted
+  // storage holds the hex, so we need the PIN to decrypt it.
+  // Return null here — caller must unlock via PIN first.
+  return null;
+}
+
 /** Wipe the wallet from memory and all storage. */
 export async function vaultWipe(): Promise<void> {
   cachedSigner = null;

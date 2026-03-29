@@ -20,6 +20,8 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
+import { vaultExportKey } from '../lib/vault';
+import * as Clipboard from 'expo-clipboard';
 
 const HEX_REGEX = /^[0-9a-fA-F]{64}$/;
 
@@ -29,6 +31,8 @@ export default function WalletScreen() {
   const { address, signer, setWallet, generateWallet } = useConnection();
   const [importKey, setImportKey] = useState('');
   const [showImport, setShowImport] = useState(false);
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const handleCreate = async () => {
     try {
@@ -51,6 +55,44 @@ export default function WalletScreen() {
     } catch (e) {
       Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
     }
+  };
+
+  const handleRevealKey = () => {
+    Alert.alert(
+      'Reveal Private Key',
+      'Your private key gives FULL ACCESS to your wallet and all funds.\n\n' +
+      'NEVER share it with anyone.\n' +
+      'NEVER enter it on a website.\n' +
+      'NEVER send it in a message.\n\n' +
+      'Anyone who has this key can steal your wallet.',
+      [
+        { text: t('cancel'), style: 'cancel' },
+        {
+          text: 'I understand, reveal key',
+          style: 'destructive',
+          onPress: async () => {
+            const key = await vaultExportKey();
+            if (key) {
+              setRevealedKey(key);
+              setCopied(false);
+            } else {
+              Alert.alert(t('error_generic'), 'Could not export key. PIN unlock may be required.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleCopyKey = async () => {
+    if (!revealedKey) return;
+    await Clipboard.setStringAsync(revealedKey);
+    setCopied(true);
+    // Auto-hide key after 60 seconds
+    setTimeout(() => {
+      setRevealedKey(null);
+      setCopied(false);
+    }, 60000);
   };
 
   const handleDisconnect = () => {
@@ -91,8 +133,49 @@ export default function WalletScreen() {
           </Text>
         </View>
 
+        {/* Reveal Private Key */}
+        {!revealedKey ? (
+          <TouchableOpacity
+            style={[styles.btn, { backgroundColor: colors.warning }]}
+            onPress={handleRevealKey}
+          >
+            <Text style={[styles.btnText, { color: colors.textInverse }]}>
+              Reveal Private Key
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.revealSection}>
+            <View style={[styles.warningBanner, { backgroundColor: colors.error }]}>
+              <Text style={[styles.warningText, { color: colors.textInverse }]}>
+                NEVER share this key with anyone!
+              </Text>
+            </View>
+            <View style={[styles.keyBox, { backgroundColor: colors.bgTertiary, borderColor: colors.error }]}>
+              <Text style={[styles.keyText, { color: colors.textPrimary }]} selectable>
+                {revealedKey}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.btn, { backgroundColor: copied ? colors.success : colors.accentPrimary }]}
+              onPress={handleCopyKey}
+            >
+              <Text style={[styles.btnText, { color: colors.textInverse }]}>
+                {copied ? 'Copied!' : 'Copy to Clipboard'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btn, { backgroundColor: colors.bgSecondary, borderWidth: 1, borderColor: colors.border }]}
+              onPress={() => { setRevealedKey(null); setCopied(false); }}
+            >
+              <Text style={[styles.btnText, { color: colors.textPrimary }]}>
+                Hide Key
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <TouchableOpacity
-          style={[styles.btn, { backgroundColor: colors.error }]}
+          style={[styles.btn, { backgroundColor: colors.error, marginTop: spacing.xl }]}
           onPress={handleDisconnect}
         >
           <Text style={[styles.btnText, { color: colors.textInverse }]}>
@@ -199,5 +282,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     fontSize: fontSize.sm,
     marginBottom: spacing.md,
+  },
+  revealSection: { width: '100%', marginTop: spacing.md },
+  warningBanner: {
+    padding: spacing.md,
+    borderRadius: radius.md,
+    marginBottom: spacing.md,
+    alignItems: 'center',
+  },
+  warningText: { fontSize: fontSize.sm, fontWeight: '700', textAlign: 'center' },
+  keyBox: {
+    width: '100%',
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 2,
+    marginBottom: spacing.md,
+  },
+  keyText: {
+    fontSize: fontSize.xs,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    lineHeight: 20,
   },
 });

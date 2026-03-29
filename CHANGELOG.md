@@ -5,6 +5,15 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-03-29
+
+### Fixed
+- Wallet creation "crypto.subtle must be defined" — root cause was
+  `@noble/ed25519` v2.x uses `crypto.subtle` for SHA-512 internally.
+  Fixed by configuring `ed.etc.sha512Sync` and `ed.etc.sha512Async`
+  to use `@noble/hashes/sha512` (pure JS) at app startup, before
+  any ed25519 operations occur.
+
 ## [0.4.4] - 2026-03-29
 
 ### Fixed

@@ -32,6 +32,7 @@ export type MoreStackParamList = {
   Settings: undefined;
   Wallet: undefined;
   PinSetup: undefined;
+  DebugLogs: undefined;
   UserProfile: { address: string };
 };
 

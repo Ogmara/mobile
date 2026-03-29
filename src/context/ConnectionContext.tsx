@@ -11,6 +11,7 @@ import { OgmaraClient, WsSubscription, subscribe, type WsEvent } from '@ogmara/s
 import type { WalletSigner } from '@ogmara/sdk';
 import { getSetting, setSetting } from '../lib/settings';
 import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultGetAddress, vaultWipe } from '../lib/vault';
+import { debugLog } from '../lib/debug';
 
 const DEFAULT_NODE_URL = 'http://localhost:41721';
 
@@ -80,44 +81,56 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   async function initClient() {
     try {
-      const savedUrl = await getSetting('nodeUrl');
+      const savedUrl = await getSetting('nodeUrl').catch(() => null);
       const url = savedUrl || DEFAULT_NODE_URL;
       nodeUrlRef.current = url;
+      debugLog('info', `Connecting to node: ${url}`);
 
       const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
       setClient(newClient);
 
-      // Restore wallet if saved
-      await restoreWallet(newClient);
+      // Restore wallet if saved (non-blocking — wallet errors shouldn't prevent app start)
+      await restoreWallet(newClient).catch((e) => {
+        debugLog('warn', 'Wallet restore failed', e);
+      });
 
-      // Check node health
-      const health = await newClient.health();
-      setPeers(health.peers);
-      setStatus('connected');
-
-      // Start WebSocket
-      connectWs(url);
-    } catch {
+      // Check node health (non-fatal — app works offline)
+      try {
+        const health = await newClient.health();
+        setPeers(health.peers);
+        setStatus('connected');
+        debugLog('info', `Node connected, ${health.peers} peers`);
+        connectWs(url);
+      } catch (e) {
+        debugLog('warn', 'Node unreachable, starting in offline mode', e);
+        setStatus('disconnected');
+      }
+    } catch (e) {
+      debugLog('error', 'Client init failed', e);
       setStatus('disconnected');
     }
   }
 
   function connectWs(nodeUrl: string) {
-    wsRef.current?.close();
-
-    wsRef.current = subscribe({
-      nodeUrl,
-      signer: signerRef.current ?? undefined,
-      autoReconnect: true,
-      reconnectDelay: 1000,
-      maxReconnectDelay: 30000,
-      onEvent: (event) => {
-        eventHandlersRef.current.forEach((handler) => handler(event));
-      },
-      onStateChange: (connected) => {
-        setStatus(connected ? 'connected' : 'reconnecting');
-      },
-    });
+    try {
+      wsRef.current?.close();
+      wsRef.current = subscribe({
+        nodeUrl,
+        signer: signerRef.current ?? undefined,
+        autoReconnect: true,
+        reconnectDelay: 1000,
+        maxReconnectDelay: 30000,
+        onEvent: (event) => {
+          eventHandlersRef.current.forEach((handler) => handler(event));
+        },
+        onStateChange: (connected) => {
+          setStatus(connected ? 'connected' : 'reconnecting');
+        },
+      });
+      debugLog('info', 'WebSocket subscription started');
+    } catch (e) {
+      debugLog('error', 'WebSocket subscribe failed', e);
+    }
   }
 
   async function restoreWallet(c: OgmaraClient) {

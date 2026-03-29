@@ -36,6 +36,7 @@ import SearchScreen from '../screens/SearchScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import WalletScreen from '../screens/WalletScreen';
 import PinSetupScreen from '../screens/PinSetupScreen';
+import DebugScreen from '../screens/DebugScreen';
 import UserProfileScreen from '../screens/UserProfileScreen';
 
 const Tab = createBottomTabNavigator();
@@ -81,6 +82,7 @@ function MoreTab() {
       <MoreStack.Screen name="Settings" component={SettingsScreen} />
       <MoreStack.Screen name="Wallet" component={WalletScreen} />
       <MoreStack.Screen name="PinSetup" component={PinSetupScreen} />
+      <MoreStack.Screen name="DebugLogs" component={DebugScreen} />
       <MoreStack.Screen name="UserProfile" component={UserProfileScreen} />
     </MoreStack.Navigator>
   );

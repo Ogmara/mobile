@@ -18,6 +18,7 @@ import { ThemeProvider, useTheme } from './src/theme';
 import { ConnectionProvider } from './src/context/ConnectionContext';
 import { getStartScreen, type StartScreen } from './src/lib/settings';
 import { isLockEnabled, getLockTimeout } from './src/lib/appLock';
+import { initDebugMode, installGlobalErrorHandler, debugLog } from './src/lib/debug';
 import { runVaultMigrations, verifyVaultIntegrity } from './src/lib/vaultMigration';
 import { setupNotificationChannel, parseNotificationData } from './src/lib/push';
 import { getLinkingConfig } from './src/lib/deepLinks';
@@ -39,8 +40,15 @@ function AppContent() {
   // Load initial state
   useEffect(() => {
     async function init() {
+      // Initialize debug mode and global error handler
+      await initDebugMode().catch(() => {});
+      installGlobalErrorHandler();
+      debugLog('info', 'App starting v0.4.1');
+
       // Run vault migrations FIRST (safe on every launch)
-      await runVaultMigrations().catch(() => {});
+      await runVaultMigrations().catch((e) => {
+        debugLog('error', 'Vault migration failed', e);
+      });
 
       // Verify vault integrity (log warning if corrupt, don't crash)
       const integrity = await verifyVaultIntegrity().catch(() => null);

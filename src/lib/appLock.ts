@@ -14,7 +14,6 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { pbkdf2 } from '@noble/hashes/pbkdf2';
 import { sha256 } from '@noble/hashes/sha256';
 import { gcm } from '@noble/ciphers/aes';
-import { randomBytes } from '@noble/ciphers/webcrypto';
 
 const SALT_KEY = 'ogmara.app_lock.salt';
 const PIN_VERIFY_KEY = 'ogmara.app_lock.pin_verify';
@@ -54,7 +53,8 @@ export function deriveKeyFromPin(pin: string, salt: Uint8Array): Uint8Array {
 
 /** Encrypt data with AES-256-GCM. Returns "ivHex:ciphertextHex". */
 export function encryptWithKey(key: Uint8Array, plaintext: string): string {
-  const iv = randomBytes(12);
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
   const encoder = new TextEncoder();
   const aes = gcm(key, iv);
   const ciphertext = aes.encrypt(encoder.encode(plaintext));
@@ -93,7 +93,8 @@ export async function hasPinSetup(): Promise<boolean> {
 export async function setupPin(pin: string): Promise<Uint8Array> {
   if (!/^\d{6,}$/.test(pin)) throw new Error('PIN must be at least 6 digits');
 
-  const salt = randomBytes(16);
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
   const key = deriveKeyFromPin(pin, salt);
 
   // Encrypt a known token to verify PIN on unlock

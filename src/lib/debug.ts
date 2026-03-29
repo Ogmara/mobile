@@ -93,27 +93,21 @@ export function formatLogEntry(entry: LogEntry): string {
 
 /**
  * Global error handler — catches unhandled JS errors.
- * Install this early in the app lifecycle.
+ * Install this early in the app lifecycle. Safe to call in any environment.
  */
 export function installGlobalErrorHandler(): void {
-  const originalHandler = ErrorUtils.getGlobalHandler();
-
-  ErrorUtils.setGlobalHandler((error, isFatal) => {
-    debugLog('error', `${isFatal ? 'FATAL' : 'Unhandled'}: ${error.message}`, error.stack?.slice(0, 500));
-
-    // Call original handler (shows red screen in dev)
-    if (originalHandler) {
-      originalHandler(error, isFatal);
+  try {
+    // ErrorUtils is a React Native global (not standard JS)
+    if (typeof ErrorUtils !== 'undefined') {
+      const originalHandler = ErrorUtils.getGlobalHandler();
+      ErrorUtils.setGlobalHandler((error: Error, isFatal?: boolean) => {
+        debugLog('error', `${isFatal ? 'FATAL' : 'Unhandled'}: ${error?.message}`, error?.stack?.slice(0, 500));
+        if (originalHandler) {
+          originalHandler(error, isFatal);
+        }
+      });
     }
-  });
-
-  // Catch unhandled promise rejections
-  const tracking = require('promise/setimmediate/rejection-tracking');
-  tracking.enable({
-    allRejections: true,
-    onUnhandled: (_id: number, error: Error) => {
-      debugLog('error', `Unhandled promise: ${error?.message || error}`, error?.stack?.slice(0, 500));
-    },
-    onHandled: () => {},
-  });
+  } catch {
+    // Silently fail — better than crashing the app
+  }
 }

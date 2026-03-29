@@ -61,7 +61,7 @@ export async function vaultHasWallet(): Promise<boolean> {
  * Decrypts the stored private key and loads it into memory.
  * Returns the public address on success, null on failure.
  */
-export async function vaultUnlockWithPin(pinKey: CryptoKey): Promise<string | null> {
+export async function vaultUnlockWithPin(pinKey: Uint8Array): Promise<string | null> {
   try {
     const encrypted = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY);
     if (!encrypted) return null;
@@ -101,7 +101,7 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
  * Migrates from raw → encrypted storage. Call after PIN setup.
  * The raw key is deleted after successful encryption.
  */
-export async function vaultEncryptWithPin(pinKey: CryptoKey): Promise<void> {
+export async function vaultEncryptWithPin(pinKey: Uint8Array): Promise<void> {
   // Get the raw key (either from memory or storage)
   let hex: string | null = null;
 
@@ -126,7 +126,7 @@ export async function vaultEncryptWithPin(pinKey: CryptoKey): Promise<void> {
  * Decrypt vault and switch back to raw storage (when PIN is removed).
  * Requires the PIN-derived key to decrypt first.
  */
-export async function vaultDecryptToRaw(pinKey: CryptoKey): Promise<void> {
+export async function vaultDecryptToRaw(pinKey: Uint8Array): Promise<void> {
   const encrypted = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY);
   if (!encrypted) return;
 

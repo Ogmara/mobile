@@ -222,8 +222,17 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.1.0</Text>
+          <Text style={{ color: colors.textSecondary }}>0.4.1</Text>
         </View>
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() => navigation.navigate('DebugLogs')}
+        >
+          <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+            Debug Logs
+          </Text>
+          <Text style={{ color: colors.textSecondary }}>{'\u203A'}</Text>
+        </TouchableOpacity>
       </View>
     </ScrollView>
   );

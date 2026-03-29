@@ -5,6 +5,31 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-03-29
+
+### Added
+- Concept-3 logo (purple-blue monogram "O") for all icon assets:
+  app icon (1024px), adaptive icon, splash screen, favicon
+- Debug mode with in-app log viewer
+  - Captures info/warn/error logs in memory (500 entries max)
+  - Debug Logs screen accessible from Settings → About
+  - Toggle on/off, export logs via share sheet, clear logs
+  - Global error handler catches unhandled JS errors and promise rejections
+  - Default: ON in development, OFF in production
+- Version number displayed in Settings (0.4.1)
+
+### Fixed
+- App crash on first start when no L2 node is running — now starts
+  gracefully in offline mode with "disconnected" status
+- Node health check failure is non-fatal (app works without node)
+- Wallet restore failure is non-fatal (app works without wallet)
+- WebSocket connect wrapped in try/catch (no crash on connection error)
+- All init paths logged to debug console for diagnostics
+
+### Changed
+- ConnectionContext: all async operations wrapped with individual
+  try/catch blocks and debug logging (no single failure crashes the app)
+
 ## [0.4.0] - 2026-03-29
 
 ### Added

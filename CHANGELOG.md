@@ -5,6 +5,14 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-03-29
+
+### Changed
+- Settings: Start Screen, Theme, and Language all use compact dropdown
+  modals (one row each with current value + arrow, tap opens picker)
+- Settings: grouped Start Screen, Theme, Language under "Preferences" card
+- Profile edit placeholder changed from "Address" to "Username"
+
 ## [0.4.8] - 2026-03-29
 
 ### Added

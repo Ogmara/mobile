@@ -49,6 +49,8 @@ export default function SettingsScreen() {
   const [bioEnabled, setBioEnabled] = useState(false);
   const [bioType, setBioType] = useState<string | null>(null);
   const [langPickerOpen, setLangPickerOpen] = useState(false);
+  const [startPickerOpen, setStartPickerOpen] = useState(false);
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
 
   // Profile state
   const [displayName, setDisplayName] = useState('');
@@ -134,7 +136,7 @@ export default function SettingsScreen() {
                 {editingProfile ? (
                   <TextInput
                     style={[styles.profileInput, { color: colors.textPrimary, borderBottomColor: colors.accentPrimary }]}
-                    placeholder={t('profile_address')}
+                    placeholder="Username"
                     placeholderTextColor={colors.textSecondary}
                     value={displayName}
                     onChangeText={setDisplayName}
@@ -183,80 +185,89 @@ export default function SettingsScreen() {
         </>
       )}
 
-      {/* Default Start Screen */}
+      {/* Preferences — compact dropdowns */}
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        {t('settings_start_screen')}
+        Preferences
       </Text>
       <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-        {startOptions.map((opt) => (
-          <TouchableOpacity
-            key={opt.key}
-            style={styles.row}
-            onPress={() => handleStartScreen(opt.key)}
-          >
-            <Text style={[styles.rowText, { color: colors.textPrimary }]}>
-              {opt.label}
-            </Text>
-            {startScreen === opt.key && (
-              <Text style={{ color: colors.accentPrimary, fontSize: fontSize.lg }}>
-                {'\u2713'}
-              </Text>
-            )}
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Theme */}
-      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        {t('settings_theme')}
-      </Text>
-      <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-        {themeOptions.map((opt) => (
-          <TouchableOpacity
-            key={opt.key}
-            style={styles.row}
-            onPress={() => handleTheme(opt.key)}
-          >
-            <Text style={[styles.rowText, { color: colors.textPrimary }]}>
-              {opt.label}
-            </Text>
-            {mode === opt.key && (
-              <Text style={{ color: colors.accentPrimary, fontSize: fontSize.lg }}>
-                {'\u2713'}
-              </Text>
-            )}
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Language — dropdown style */}
-      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        {t('settings_language')}
-      </Text>
-      <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-        <TouchableOpacity
-          style={styles.row}
-          onPress={() => setLangPickerOpen(true)}
-        >
+        {/* Start Screen */}
+        <TouchableOpacity style={styles.row} onPress={() => setStartPickerOpen(true)}>
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
-            {LANGUAGE_NAMES[i18n.language] || i18n.language}
+            {t('settings_start_screen')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>{'\u25BE'}</Text>
+          <Text style={{ color: colors.textSecondary }}>
+            {startOptions.find((o) => o.key === startScreen)?.label} {'\u25BE'}
+          </Text>
+        </TouchableOpacity>
+        {/* Theme */}
+        <TouchableOpacity style={styles.row} onPress={() => setThemePickerOpen(true)}>
+          <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+            {t('settings_theme')}
+          </Text>
+          <Text style={{ color: colors.textSecondary }}>
+            {themeOptions.find((o) => o.key === mode)?.label} {'\u25BE'}
+          </Text>
+        </TouchableOpacity>
+        {/* Language */}
+        <TouchableOpacity style={styles.row} onPress={() => setLangPickerOpen(true)}>
+          <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+            {t('settings_language')}
+          </Text>
+          <Text style={{ color: colors.textSecondary }}>
+            {LANGUAGE_NAMES[i18n.language] || i18n.language} {'\u25BE'}
+          </Text>
         </TouchableOpacity>
       </View>
 
+      {/* Start Screen picker modal */}
+      <Modal visible={startPickerOpen} transparent animationType="fade" onRequestClose={() => setStartPickerOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setStartPickerOpen(false)}>
+          <View style={[styles.modalContent, { backgroundColor: colors.bgSecondary }]}>
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+              {t('settings_start_screen')}
+            </Text>
+            {startOptions.map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.modalRow, { borderBottomColor: colors.border }]}
+                onPress={() => { handleStartScreen(opt.key); setStartPickerOpen(false); }}
+              >
+                <Text style={[styles.rowText, { color: colors.textPrimary }]}>{opt.label}</Text>
+                {startScreen === opt.key && (
+                  <Text style={{ color: colors.accentPrimary, fontSize: fontSize.lg }}>{'\u2713'}</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Theme picker modal */}
+      <Modal visible={themePickerOpen} transparent animationType="fade" onRequestClose={() => setThemePickerOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setThemePickerOpen(false)}>
+          <View style={[styles.modalContent, { backgroundColor: colors.bgSecondary }]}>
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+              {t('settings_theme')}
+            </Text>
+            {themeOptions.map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.modalRow, { borderBottomColor: colors.border }]}
+                onPress={() => { handleTheme(opt.key); setThemePickerOpen(false); }}
+              >
+                <Text style={[styles.rowText, { color: colors.textPrimary }]}>{opt.label}</Text>
+                {mode === opt.key && (
+                  <Text style={{ color: colors.accentPrimary, fontSize: fontSize.lg }}>{'\u2713'}</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Language picker modal */}
-      <Modal
-        visible={langPickerOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setLangPickerOpen(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setLangPickerOpen(false)}
-        >
+      <Modal visible={langPickerOpen} transparent animationType="fade" onRequestClose={() => setLangPickerOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setLangPickerOpen(false)}>
           <View style={[styles.modalContent, { backgroundColor: colors.bgSecondary }]}>
             <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
               {t('settings_language')}
@@ -267,13 +278,9 @@ export default function SettingsScreen() {
                 style={[styles.modalRow, { borderBottomColor: colors.border }]}
                 onPress={() => handleLanguage(lang)}
               >
-                <Text style={[styles.rowText, { color: colors.textPrimary }]}>
-                  {LANGUAGE_NAMES[lang]}
-                </Text>
+                <Text style={[styles.rowText, { color: colors.textPrimary }]}>{LANGUAGE_NAMES[lang]}</Text>
                 {i18n.language === lang && (
-                  <Text style={{ color: colors.accentPrimary, fontSize: fontSize.lg }}>
-                    {'\u2713'}
-                  </Text>
+                  <Text style={{ color: colors.accentPrimary, fontSize: fontSize.lg }}>{'\u2713'}</Text>
                 )}
               </TouchableOpacity>
             ))}
@@ -354,7 +361,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.4.8</Text>
+          <Text style={{ color: colors.textSecondary }}>0.4.9</Text>
         </View>
         <TouchableOpacity
           style={styles.row}

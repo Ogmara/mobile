@@ -5,6 +5,22 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-03-29
+
+### Fixed
+- **CRITICAL: App crash on startup** — `crypto.subtle` (SubtleCrypto) is not
+  available in React Native Hermes engine. Replaced PBKDF2 and AES-256-GCM
+  with `@noble/hashes` (pbkdf2) and `@noble/ciphers` (gcm) which are pure JS
+  and work in all environments.
+- Global error handler now wrapped in try/catch — won't crash if ErrorUtils
+  is unavailable. Removed `promise/rejection-tracking` require (fragile).
+
+### Changed
+- `deriveKeyFromPin()` now returns `Uint8Array` instead of `CryptoKey`
+- `encryptWithKey()` / `decryptWithKey()` accept `Uint8Array` keys
+- Vault `vaultUnlockWithPin()`, `vaultEncryptWithPin()`, `vaultDecryptToRaw()`
+  all updated to use `Uint8Array` key type
+
 ## [0.4.1] - 2026-03-29
 
 ### Added

@@ -9,6 +9,19 @@
 import 'react-native-get-random-values';
 import 'fast-text-encoding';
 
+// Configure @noble/ed25519 to use pure JS SHA-512 instead of crypto.subtle
+// (Hermes does not have SubtleCrypto)
+import { sha512 } from '@noble/hashes/sha512';
+import * as ed from '@noble/ed25519';
+const sha512Noble = (...msgs: Uint8Array[]) => {
+  const merged = new Uint8Array(msgs.reduce((sum, m) => sum + m.length, 0));
+  let offset = 0;
+  for (const m of msgs) { merged.set(m, offset); offset += m.length; }
+  return sha512(merged);
+};
+ed.etc.sha512Sync = sha512Noble;
+ed.etc.sha512Async = async (...msgs: Uint8Array[]) => sha512Noble(...msgs);
+
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import { StatusBar } from 'expo-status-bar';

@@ -15,6 +15,7 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme, fontSize } from '../theme';
 import type { StartScreen } from '../lib/settings';
 import type {
@@ -129,6 +130,9 @@ export default function TabNavigator({ startScreen }: Props) {
         options={{
           title: t('nav_news'),
           tabBarLabel: t('nav_news'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="newspaper-outline" size={size} color={color} />
+          ),
         }}
       />
       <Tab.Screen
@@ -137,6 +141,9 @@ export default function TabNavigator({ startScreen }: Props) {
         options={{
           title: t('nav_chat'),
           tabBarLabel: t('nav_chat'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubbles-outline" size={size} color={color} />
+          ),
         }}
       />
       <Tab.Screen
@@ -145,6 +152,9 @@ export default function TabNavigator({ startScreen }: Props) {
         options={{
           title: t('nav_dms'),
           tabBarLabel: t('nav_dms'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="mail-outline" size={size} color={color} />
+          ),
         }}
       />
       <Tab.Screen
@@ -153,6 +163,9 @@ export default function TabNavigator({ startScreen }: Props) {
         options={{
           title: t('nav_search'),
           tabBarLabel: t('nav_search'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="search-outline" size={size} color={color} />
+          ),
         }}
       />
       <Tab.Screen
@@ -161,6 +174,9 @@ export default function TabNavigator({ startScreen }: Props) {
         options={{
           title: t('nav_settings'),
           tabBarLabel: t('nav_more'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="ellipsis-horizontal" size={size} color={color} />
+          ),
         }}
       />
     </Tab.Navigator>

@@ -107,5 +107,9 @@
   "format_italic": "Italic",
   "format_underline": "Underline",
   "format_code": "Code",
-  "format_strikethrough": "Strikethrough"
+  "format_strikethrough": "Strikethrough",
+  "anchor_verified": "Verified",
+  "anchor_active": "Active Anchorer",
+  "anchor_tooltip_active": "Actively anchoring state on-chain for 7+ days",
+  "anchor_tooltip_verified": "Recently anchored state on-chain"
 }

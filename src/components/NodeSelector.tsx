@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { getAvailableNodes, getCurrentNodeUrl, switchNode } from '../lib/api';
 import type { NodeWithPing } from '@ogmara/sdk';
+import AnchorBadge from './AnchorBadge';
 
 interface Props {
   visible: boolean;
@@ -72,9 +73,14 @@ export default function NodeSelector({ visible, onClose }: Props) {
       ]}
       onPress={() => handleSelect(item.url)}
     >
-      <Text style={[styles.nodeUrl, { color: colors.textPrimary }]}>
-        {item.url.replace(/^https?:\/\//, '')}
-      </Text>
+      <View style={styles.nodeLeft}>
+        <Text style={[styles.nodeUrl, { color: colors.textPrimary }]}>
+          {item.url.replace(/^https?:\/\//, '')}
+        </Text>
+        {item.anchorStatus && item.anchorStatus.level !== 'none' && (
+          <AnchorBadge level={item.anchorStatus.level} />
+        )}
+      </View>
       <Text style={[styles.nodePing, { color: pingColor(item.ping) }]}>
         {item.ping}ms
       </Text>
@@ -172,6 +178,12 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radius.md,
     marginBottom: spacing.xs,
+  },
+  nodeLeft: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing.xs,
+    flex: 1,
   },
   nodeUrl: { fontSize: fontSize.md, flex: 1 },
   nodePing: { fontSize: fontSize.sm, fontWeight: '700' },

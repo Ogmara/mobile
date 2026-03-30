@@ -79,5 +79,7 @@
   "notification_permission": "最新情報を受け取るには通知を有効にしてください",
   "notification_enable": "有効にする",
   "notification_later": "後で",
-  "pull_to_refresh": "引っ張って更新"
+  "pull_to_refresh": "引っ張って更新",
+  "anchor_verified": "認証済み",
+  "anchor_active": "アクティブアンカー"
 }

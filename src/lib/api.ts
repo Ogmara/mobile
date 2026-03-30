@@ -5,10 +5,8 @@
  * from settings (ogmara.node_url), defaulting to a local dev node.
  */
 
-import { OgmaraClient } from '@ogmara/sdk';
-import { getSetting } from './settings';
-
-const DEFAULT_NODE_URL = 'http://localhost:41721';
+import { OgmaraClient, DEFAULT_NODE_URL, discoverAndPingNodes, type NodeWithPing } from '@ogmara/sdk';
+import { getSetting, setSetting } from './settings';
 
 let client: OgmaraClient | null = null;
 
@@ -24,4 +22,21 @@ export async function getClient(): Promise<OgmaraClient> {
 /** Reset the client (e.g., when node URL changes). */
 export function resetClient(): void {
   client = null;
+}
+
+/** Switch to a different node URL. */
+export async function switchNode(nodeUrl: string): Promise<void> {
+  await setSetting('nodeUrl', nodeUrl);
+  resetClient();
+}
+
+/** Get the current node URL. */
+export async function getCurrentNodeUrl(): Promise<string> {
+  return (await getSetting('nodeUrl')) || DEFAULT_NODE_URL;
+}
+
+/** Discover available nodes with ping times, sorted by latency. */
+export async function getAvailableNodes(): Promise<NodeWithPing[]> {
+  const currentUrl = await getCurrentNodeUrl();
+  return discoverAndPingNodes(currentUrl);
 }

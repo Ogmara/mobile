@@ -26,6 +26,7 @@ import { getStartScreen, setStartScreen, setSetting, getSetting, type StartScree
 import { isLockEnabled, hasPinSetup, isBiometricAvailable, isBiometricEnabled, setBiometricEnabled, getBiometricType } from '../lib/appLock';
 import { LANGUAGES, type LanguageCode } from '../i18n/init';
 import type { MoreStackParamList } from '../navigation/types';
+import NodeSelector from '../components/NodeSelector';
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
@@ -51,6 +52,7 @@ export default function SettingsScreen() {
   const [langPickerOpen, setLangPickerOpen] = useState(false);
   const [startPickerOpen, setStartPickerOpen] = useState(false);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [nodeSelectorOpen, setNodeSelectorOpen] = useState(false);
 
   // Profile state
   const [displayName, setDisplayName] = useState('');
@@ -337,20 +339,22 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Connection */}
+      {/* Connection — tap to open node selector */}
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        {t('status_connected')}
+        {t('settings_node_url')}
       </Text>
       <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-        <View style={styles.row}>
+        <TouchableOpacity style={styles.row} onPress={() => setNodeSelectorOpen(true)}>
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t(`status_${status}`)}
           </Text>
           <Text style={{ color: status === 'connected' ? colors.success : colors.warning }}>
-            {status === 'connected' ? t('status_peers', { count: peers }) : ''}
+            {status === 'connected' ? t('status_peers', { count: peers }) : ''} {'\u25BE'}
           </Text>
-        </View>
+        </TouchableOpacity>
       </View>
+
+      <NodeSelector visible={nodeSelectorOpen} onClose={() => setNodeSelectorOpen(false)} />
 
       {/* About */}
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
@@ -361,7 +365,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.6.0</Text>
+          <Text style={{ color: colors.textSecondary }}>0.6.1</Text>
         </View>
         <TouchableOpacity
           style={styles.row}

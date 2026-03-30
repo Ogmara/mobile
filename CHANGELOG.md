@@ -5,6 +5,26 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-03-30
+
+### Fixed
+- Balance screen crash — React hooks violation: `useState` was called after
+  conditional early returns, causing "Rendered more hooks" error. Moved all
+  hooks before conditional returns.
+- PIN verification took ~83 seconds — PBKDF2 600k iterations in pure-JS
+  Hermes is far too slow for mobile. Reduced to 10,000 iterations (~1.4s).
+  Security maintained by SecureStore hardware backing + escalating cooldowns.
+- PIN verification on lock screen appeared frozen — added "Verifying PIN..."
+  loading screen during key derivation.
+
+### Security
+- Vault format v2: PBKDF2 iterations 600k → 10k (mobile-appropriate).
+  Auto-migration on first successful PIN unlock after update — re-derives
+  key with new count, re-encrypts verify token and vault key. One-time
+  slow unlock (~83s) with "Upgrading security..." message, then fast forever.
+- Iteration count now stored in SecureStore (`ogmara.app_lock.kdf_iterations`)
+  for forward-compatible migration.
+
 ## [0.7.4] - 2026-03-30
 
 ### Added

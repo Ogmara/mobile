@@ -39,6 +39,15 @@ export default function WalletBalanceScreen() {
     [address],
   );
 
+  const [addressCopied, setAddressCopied] = useState(false);
+
+  const handleCopyAddress = async () => {
+    if (!address) return;
+    await Clipboard.setStringAsync(address);
+    setAddressCopied(true);
+    setTimeout(() => setAddressCopied(false), 2000);
+  };
+
   if (!address) {
     return (
       <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
@@ -54,15 +63,6 @@ export default function WalletBalanceScreen() {
       </View>
     );
   }
-
-  const [addressCopied, setAddressCopied] = useState(false);
-
-  const handleCopyAddress = async () => {
-    if (!address) return;
-    await Clipboard.setStringAsync(address);
-    setAddressCopied(true);
-    setTimeout(() => setAddressCopied(false), 2000);
-  };
 
   const klvBalance = data ? formatTokenAmount(data.balance, 6) : '0';
   const klvFrozen = data ? formatTokenAmount(data.frozenBalance, 6) : '0';

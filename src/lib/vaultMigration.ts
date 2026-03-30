@@ -13,15 +13,19 @@
  * 5. Every format version must have a migration path to the next
  *
  * Storage format history:
- *   v1 (0.1.0–0.3.0): raw hex in 'ogmara.vault.private_key' or
+ *   v1 (0.1.0–0.7.4): raw hex in 'ogmara.vault.private_key' or
  *       AES-256-GCM encrypted in 'ogmara.vault.encrypted_key'
  *       PBKDF2 iterations: 600,000. IV: 12 bytes. Format: "ivHex:ctHex"
+ *   v2 (0.7.5+): same keys, but PBKDF2 iterations reduced to 10,000
+ *       for mobile perf (600k took 83s in Hermes pure-JS).
+ *       Migration: auto on next successful PIN unlock (re-encrypt with
+ *       new key). Stored in 'ogmara.app_lock.kdf_iterations'.
  */
 
 import * as SecureStore from 'expo-secure-store';
 
 /** Current vault storage format version. */
-export const VAULT_VERSION = 1;
+export const VAULT_VERSION = 2;
 
 const VERSION_KEY = 'ogmara.vault.version';
 
@@ -39,6 +43,11 @@ const V1_KEYS = {
   cooldownUntil: 'ogmara.app_lock.cooldown_until',
   biometricEnabled: 'ogmara.app_lock.biometric_enabled',
 } as const;
+// v2 adds: iteration count stored alongside PIN data
+const V2_KEYS = {
+  ...V1_KEYS,
+  kdfIterations: 'ogmara.app_lock.kdf_iterations',
+} as const;
 
 /** Encryption parameters for each version (for documentation and migration). */
 export const VAULT_PARAMS = {
@@ -49,6 +58,15 @@ export const VAULT_PARAMS = {
     ivBytes: 12,
     saltBytes: 16,
     format: 'ivHex:ciphertextHex',
+  },
+  2: {
+    kdf: 'PBKDF2-SHA256',
+    kdfIterations: 10_000,
+    cipher: 'AES-256-GCM',
+    ivBytes: 12,
+    saltBytes: 16,
+    format: 'ivHex:ciphertextHex',
+    note: 'Reduced iterations for Hermes pure-JS perf. Migration auto on PIN unlock.',
   },
 } as const;
 
@@ -75,9 +93,14 @@ export async function runVaultMigrations(): Promise<number> {
     return VAULT_VERSION;
   }
 
-  // Future: add migration steps here
-  // if (storedVersion === 1) { await migrateV1toV2(); }
-  // if (storedVersion === 2) { await migrateV2toV3(); }
+  // v1 → v2: iteration count reduction is handled lazily by appLock.ts
+  // on next successful PIN unlock (re-derives + re-encrypts automatically).
+  // We just bump the version tag here — the actual crypto migration
+  // happens in verifyPin() → migrateIterations().
+  if (storedVersion === 1) {
+    await SecureStore.setItemAsync(VERSION_KEY, '2');
+    return 2;
+  }
 
   return storedVersion;
 }
@@ -139,7 +162,7 @@ export async function verifyVaultIntegrity(): Promise<{
  */
 export async function getVaultDiagnostics(): Promise<Record<string, boolean>> {
   const result: Record<string, boolean> = {};
-  for (const [name, key] of Object.entries(V1_KEYS)) {
+  for (const [name, key] of Object.entries(V2_KEYS)) {
     const val = await SecureStore.getItemAsync(key).catch(() => null);
     result[name] = !!val;
   }

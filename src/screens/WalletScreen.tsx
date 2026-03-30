@@ -37,6 +37,17 @@ export default function WalletScreen() {
   const [showImport, setShowImport] = useState(false);
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const hideTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear revealed key and clipboard on unmount (W2 audit fix)
+  React.useEffect(() => {
+    return () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      if (revealedKey) {
+        Clipboard.setStringAsync('').catch(() => {});
+      }
+    };
+  }, [revealedKey]);
 
   const handleCreate = async () => {
     try {
@@ -88,15 +99,20 @@ export default function WalletScreen() {
     );
   };
 
+  const hideKey = () => {
+    setRevealedKey(null);
+    setCopied(false);
+    Clipboard.setStringAsync('').catch(() => {}); // wipe clipboard (W1)
+    if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; }
+  };
+
   const handleCopyKey = async () => {
     if (!revealedKey) return;
     await Clipboard.setStringAsync(revealedKey);
     setCopied(true);
-    // Auto-hide key after 60 seconds
-    setTimeout(() => {
-      setRevealedKey(null);
-      setCopied(false);
-    }, 60000);
+    // Auto-hide key after 60 seconds and wipe clipboard
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(hideKey, 60000);
   };
 
   const handleDisconnect = () => {
@@ -179,7 +195,7 @@ export default function WalletScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.btn, { backgroundColor: colors.bgSecondary, borderWidth: 1, borderColor: colors.border }]}
-              onPress={() => { setRevealedKey(null); setCopied(false); }}
+              onPress={hideKey}
             >
               <Text style={[styles.btnText, { color: colors.textPrimary }]}>
                 Hide Key

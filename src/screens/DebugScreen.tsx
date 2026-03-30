@@ -13,6 +13,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Share,
+  Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -53,7 +54,7 @@ export default function DebugScreen() {
     const diag = await getVaultDiagnostics().catch(() => ({}));
     const report = [
       `Ogmara Debug Report`,
-      `Version: 0.7.1`,
+      `Version: 0.7.2`,
       `Status: ${status}`,
       `Peers: ${peers}`,
       `Wallet: ${address ? address.slice(0, 16) + '...' : 'none'}`,
@@ -107,9 +108,22 @@ export default function DebugScreen() {
             styles.networkBtn,
             { backgroundColor: kleverNet === 'mainnet' ? colors.success : colors.bgTertiary },
           ]}
-          onPress={async () => {
-            await setKleverNetwork('mainnet');
-            setKleverNet('mainnet');
+          onPress={() => {
+            Alert.alert(
+              'Switch to Mainnet',
+              'This will use real KLV for transactions. Are you sure?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Switch to Mainnet',
+                  style: 'destructive',
+                  onPress: async () => {
+                    await setKleverNetwork('mainnet');
+                    setKleverNet('mainnet');
+                  },
+                },
+              ],
+            );
           }}
         >
           <Text style={{ color: kleverNet === 'mainnet' ? colors.textInverse : colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' }}>

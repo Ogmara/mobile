@@ -41,13 +41,20 @@ function hexToBytes(hex: string): Uint8Array {
 
 /**
  * Derive a 32-byte AES key from a PIN using PBKDF2-SHA256.
- * Returns raw key bytes (not a CryptoKey — Hermes has no SubtleCrypto).
+ * Runs in a setTimeout to avoid blocking the UI thread.
+ * 600k iterations takes ~2-5s on mobile — UI stays responsive.
  */
-export function deriveKeyFromPin(pin: string, salt: Uint8Array): Uint8Array {
-  const encoder = new TextEncoder();
-  return pbkdf2(sha256, encoder.encode(pin), salt, {
-    c: PBKDF2_ITERATIONS,
-    dkLen: 32,
+export function deriveKeyFromPin(pin: string, salt: Uint8Array): Promise<Uint8Array> {
+  return new Promise((resolve) => {
+    // Yield to UI thread before starting heavy computation
+    setTimeout(() => {
+      const encoder = new TextEncoder();
+      const key = pbkdf2(sha256, encoder.encode(pin), salt, {
+        c: PBKDF2_ITERATIONS,
+        dkLen: 32,
+      });
+      resolve(key);
+    }, 50);
   });
 }
 
@@ -95,7 +102,7 @@ export async function setupPin(pin: string): Promise<Uint8Array> {
 
   const salt = new Uint8Array(16);
   crypto.getRandomValues(salt);
-  const key = deriveKeyFromPin(pin, salt);
+  const key = await deriveKeyFromPin(pin, salt);
 
   // Encrypt a known token to verify PIN on unlock
   const verifyToken = encryptWithKey(key, 'ogmara-pin-ok');
@@ -118,7 +125,7 @@ export async function verifyPin(pin: string): Promise<Uint8Array | null> {
   if (!saltHex || !verifyToken) return null;
 
   const salt = hexToBytes(saltHex);
-  const key = deriveKeyFromPin(pin, salt);
+  const key = await deriveKeyFromPin(pin, salt);
 
   try {
     const decrypted = decryptWithKey(key, verifyToken);

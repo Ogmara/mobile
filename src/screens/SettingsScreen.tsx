@@ -18,7 +18,7 @@ import {
   Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius, type ThemeMode } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
@@ -61,16 +61,17 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     getStartScreen().then(setStartScreenState);
-    hasPinSetup().then(setPinEnabled);
-    isBiometricAvailable().then(setBioAvailable);
-    isBiometricEnabled().then(setBioEnabled);
-    getBiometricType().then(setBioType);
-    // Load saved profile
-    getSetting('walletAddress').then(() => {
-      // Profile is stored locally for display; L2 node has the canonical copy
-      getSetting('nodeUrl'); // trigger load
-    });
   }, []);
+
+  // Refresh security state every time screen gains focus (e.g., after PinSetup)
+  useFocusEffect(
+    React.useCallback(() => {
+      hasPinSetup().then(setPinEnabled);
+      isBiometricAvailable().then(setBioAvailable);
+      isBiometricEnabled().then(setBioEnabled);
+      getBiometricType().then(setBioType);
+    }, []),
+  );
 
   const handleStartScreen = (screen: StartScreen) => {
     setStartScreenState(screen);
@@ -365,7 +366,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.7.2</Text>
+          <Text style={{ color: colors.textSecondary }}>0.7.3</Text>
         </View>
         <TouchableOpacity
           style={styles.row}

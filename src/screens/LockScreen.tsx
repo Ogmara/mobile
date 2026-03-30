@@ -12,6 +12,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -22,6 +23,7 @@ import {
   getRemainingCooldown,
   isBiometricEnabled,
   authenticateBiometric,
+  needsIterationMigration,
 } from '../lib/appLock';
 import { vaultUnlockWithPin } from '../lib/vault';
 
@@ -41,6 +43,7 @@ export default function LockScreen({ onUnlock }: Props) {
   const [error, setError] = useState('');
   const [cooldown, setCooldown] = useState(0);
   const [checking, setChecking] = useState(false);
+  const [migrating, setMigrating] = useState(false);
   const [bioAttempts, setBioAttempts] = useState(0);
 
   // Check for existing cooldown and attempt biometric on mount
@@ -84,6 +87,10 @@ export default function LockScreen({ onUnlock }: Props) {
     setChecking(true);
     setError('');
 
+    // Check if this will be a slow legacy migration
+    const willMigrate = await needsIterationMigration();
+    if (willMigrate) setMigrating(true);
+
     const pinKey = await verifyPin(pin);
     if (pinKey) {
       // PIN correct — decrypt vault with the derived key
@@ -101,6 +108,7 @@ export default function LockScreen({ onUnlock }: Props) {
       }
     }
     setChecking(false);
+    setMigrating(false);
   };
 
   const handleDigit = (digit: string) => {
@@ -112,6 +120,17 @@ export default function LockScreen({ onUnlock }: Props) {
   const handleBackspace = () => {
     setPin((p) => p.slice(0, -1));
   };
+
+  if (checking) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
+        <ActivityIndicator color={colors.accentPrimary} size="large" />
+        <Text style={[styles.checkingText, { color: colors.textSecondary }]}>
+          {migrating ? 'Upgrading security... (one-time, please wait)' : 'Verifying PIN...'}
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
@@ -203,6 +222,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   padText: { fontSize: fontSize.xl, fontWeight: '600' },
+  checkingText: { fontSize: fontSize.md, marginTop: spacing.lg },
   biometricBtn: { marginTop: spacing.xl },
   biometricText: { fontSize: fontSize.sm },
 });

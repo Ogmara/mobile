@@ -5,6 +5,18 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-03-30
+
+### Security
+- Private key clipboard wiped on "Hide Key" and after 60s auto-hide (W1)
+- Revealed key state + timer cleared on component unmount (W2)
+- Mainnet switch requires confirmation dialog (W6)
+
+### Fixed
+- Klever API fetch now has 10s timeout (W4, prevents infinite spinner)
+- Token balance formatting uses string-based decimal shift instead of
+  floating-point division (W5, correct for large balances)
+
 ## [0.7.1] - 2026-03-30
 
 ### Added

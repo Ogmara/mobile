@@ -63,9 +63,13 @@ export interface KleverAccount {
 export async function fetchAccountData(address: string): Promise<KleverAccount | null> {
   try {
     const apiUrl = await getKleverApiUrl();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     const resp = await fetch(`${apiUrl}/v1.0/address/${address}`, {
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!resp.ok) return null;
 
@@ -100,9 +104,13 @@ export async function fetchAccountData(address: string): Promise<KleverAccount |
   }
 }
 
-/** Format a token amount with its precision (e.g., 1000000 with precision 6 = "1.000000"). */
+/** Format a token amount with its precision using string-based decimal shifting. */
 export function formatTokenAmount(amount: number, precision: number): string {
   if (precision === 0) return amount.toString();
-  const divisor = Math.pow(10, precision);
-  return (amount / divisor).toFixed(precision);
+  const str = amount.toString().padStart(precision + 1, '0');
+  const intPart = str.slice(0, str.length - precision) || '0';
+  const decPart = str.slice(str.length - precision);
+  // Trim trailing zeros but keep at least 2 decimal places
+  const trimmed = decPart.replace(/0+$/, '').padEnd(2, '0');
+  return `${intPart}.${trimmed}`;
 }

@@ -30,10 +30,15 @@ export type SearchStackParamList = {
 
 export type MoreStackParamList = {
   Settings: undefined;
+  Bookmarks: undefined;
   Wallet: undefined;
   PinSetup: undefined;
   DebugLogs: undefined;
   UserProfile: { address: string };
+};
+
+export type ChannelAdminParamList = {
+  ChannelAdmin: { channelId: number; channelName: string };
 };
 
 /** Shared params used by multiple stacks. */

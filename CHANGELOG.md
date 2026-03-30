@@ -5,6 +5,47 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-03-30
+
+### Added
+- **Message Rendering**
+  - FormattedText component — renders bold, italic, underline, code, strikethrough
+  - Auto-detected URLs open in system browser via Linking
+  - Inline image display for IPFS attachments
+  - Non-image attachments as tappable file links
+- **Formatting Toolbar**
+  - FormatToolbar component — floating bar for B/I/U/Code/Strikethrough
+  - Applies Markdown markers around selected text
+- **Node Selector**
+  - NodeSelector modal (bottom sheet) with discovered nodes and ping latency
+  - Manual "Add custom node" input field
+  - Auto-sorts by latency, persists user selection
+- **Default Node**
+  - Changed from localhost:41721 to node.ogmara.org
+
+## [0.5.0] - 2026-03-30
+
+### Added
+- **News Engagement**
+  - Reaction buttons on news feed cards (👍 👎 ❤️ 🔥 😂) with live counts
+  - Repost button with visual feedback on news feed and detail screens
+  - Bookmark/save button with toggle state on both screens
+  - NewsCard component with full engagement action bar
+- **News Detail**
+  - Large reaction buttons with counts
+  - Repost and bookmark actions below post content
+- **Bookmarks Screen**
+  - New BookmarksScreen accessible from More tab
+  - Pull-to-refresh, tap-to-navigate to detail
+- **Chat Enhancements**
+  - Reply-to indicator bar above input with cancel button
+  - Reply state management in ChannelMessagesScreen
+- **i18n**
+  - 15+ new translation keys for engagement and channel admin features (en locale)
+- **Navigation**
+  - Bookmarks route added to MoreStack
+  - ChannelAdminParamList type for future channel admin screen
+
 ## [0.4.9] - 2026-03-29
 
 ### Changed

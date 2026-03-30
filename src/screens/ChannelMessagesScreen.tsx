@@ -33,6 +33,7 @@ export default function ChannelMessagesScreen({ route }: Props) {
   const { client, signer, onWsEvent } = useConnection();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Envelope[]>([]);
+  const [replyTo, setReplyTo] = useState<Envelope | null>(null);
 
   const { data, loading } = useApi(
     async () => {
@@ -72,6 +73,7 @@ export default function ChannelMessagesScreen({ route }: Props) {
     try {
       await client.sendMessage(channelId, input.trim());
       setInput('');
+      setReplyTo(null);
     } catch {
       // TODO: show error toast
     }
@@ -110,6 +112,20 @@ export default function ChannelMessagesScreen({ route }: Props) {
         }
       />
 
+      {/* Reply indicator */}
+      {replyTo && (
+        <View style={[styles.replyBar, { backgroundColor: colors.bgTertiary, borderTopColor: colors.border }]}>
+          <View style={styles.replyContent}>
+            <Text style={[styles.replyLabel, { color: colors.accentPrimary }]}>
+              {t('channel_reply_to')} {replyTo.author.slice(0, 12)}...
+            </Text>
+          </View>
+          <TouchableOpacity onPress={() => setReplyTo(null)}>
+            <Text style={{ color: colors.textSecondary, fontSize: fontSize.lg }}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {signer && (
         <View style={[styles.inputBar, { backgroundColor: colors.bgSecondary, borderTopColor: colors.border }]}>
           <TextInput
@@ -143,6 +159,15 @@ const styles = StyleSheet.create({
   msgRow: { paddingVertical: spacing.sm },
   msgAuthor: { fontSize: fontSize.sm, fontWeight: '600' },
   msgTime: { fontSize: fontSize.xs, marginTop: spacing.xs },
+  replyBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderTopWidth: 1,
+  },
+  replyContent: { flex: 1 },
+  replyLabel: { fontSize: fontSize.sm, fontWeight: '600' },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',

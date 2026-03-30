@@ -19,6 +19,7 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { getDebugLogs, clearDebugLogs, formatLogEntry, isDebugEnabled, setDebugEnabled } from '../lib/debug';
 import { getVaultDiagnostics } from '../lib/vaultMigration';
+import { getKleverNetwork, setKleverNetwork, type KleverNetwork } from '../lib/klever';
 
 export default function DebugScreen() {
   const { t } = useTranslation();
@@ -26,6 +27,12 @@ export default function DebugScreen() {
   const { status, peers, address } = useConnection();
   const [logs, setLogs] = useState(getDebugLogs());
   const [debugOn, setDebugOn] = useState(isDebugEnabled());
+  const [kleverNet, setKleverNet] = useState<KleverNetwork>('testnet');
+
+  // Load current network on mount
+  React.useEffect(() => {
+    getKleverNetwork().then(setKleverNet);
+  }, []);
 
   const refresh = useCallback(() => {
     setLogs(getDebugLogs());
@@ -46,7 +53,7 @@ export default function DebugScreen() {
     const diag = await getVaultDiagnostics().catch(() => ({}));
     const report = [
       `Ogmara Debug Report`,
-      `Version: 0.4.0`,
+      `Version: 0.7.1`,
       `Status: ${status}`,
       `Peers: ${peers}`,
       `Wallet: ${address ? address.slice(0, 16) + '...' : 'none'}`,
@@ -74,6 +81,41 @@ export default function DebugScreen() {
         <Text style={[styles.statusText, { color: colors.textSecondary }]}>
           {address ? address.slice(0, 12) + '...' : 'no wallet'}
         </Text>
+      </View>
+
+      {/* Klever Network Switcher */}
+      <View style={[styles.networkRow, { backgroundColor: colors.bgSecondary }]}>
+        <Text style={[styles.networkLabel, { color: colors.textPrimary }]}>
+          Klever Network:
+        </Text>
+        <TouchableOpacity
+          style={[
+            styles.networkBtn,
+            { backgroundColor: kleverNet === 'testnet' ? colors.warning : colors.bgTertiary },
+          ]}
+          onPress={async () => {
+            await setKleverNetwork('testnet');
+            setKleverNet('testnet');
+          }}
+        >
+          <Text style={{ color: kleverNet === 'testnet' ? colors.textInverse : colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' }}>
+            Testnet
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.networkBtn,
+            { backgroundColor: kleverNet === 'mainnet' ? colors.success : colors.bgTertiary },
+          ]}
+          onPress={async () => {
+            await setKleverNetwork('mainnet');
+            setKleverNet('mainnet');
+          }}
+        >
+          <Text style={{ color: kleverNet === 'mainnet' ? colors.textInverse : colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' }}>
+            Mainnet
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Action buttons */}
@@ -171,4 +213,17 @@ const styles = StyleSheet.create({
   logMsg: { fontSize: fontSize.sm, marginTop: 2 },
   logData: { fontSize: fontSize.xs, marginTop: 2, fontFamily: 'monospace' },
   empty: { textAlign: 'center', padding: spacing.xl, fontSize: fontSize.md },
+  networkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  networkLabel: { fontSize: fontSize.sm, fontWeight: '600', marginRight: spacing.sm },
+  networkBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
 });

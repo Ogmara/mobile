@@ -5,6 +5,24 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-03-30
+
+### Added
+- Wallet Balance screen — displays KLV balance, frozen balance, and all
+  token holdings from the Klever blockchain API
+  - Purple balance card with KLV amount and address
+  - Token list with asset names, IDs, and formatted amounts
+  - Pull-to-refresh, loading indicator, network error banner
+- Klever API client (`klever.ts`) — fetches account data from Klever API
+  - Supports testnet and mainnet endpoints
+  - `fetchAccountData()`, `formatTokenAmount()`
+  - Network preference persisted in AsyncStorage
+- Testnet/Mainnet switcher in Debug screen
+  - Toggle buttons: yellow (Testnet) / green (Mainnet)
+  - Persists selection, affects wallet balance queries
+  - Default: Testnet (per testnet-first development rule)
+- "View Balance" button on Wallet screen navigates to WalletBalance
+
 ## [0.7.0] - 2026-03-30
 
 ### Added

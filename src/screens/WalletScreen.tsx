@@ -18,6 +18,9 @@ import {
   Platform,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { MoreStackParamList } from '../navigation/types';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { vaultExportKey } from '../lib/vault';
@@ -28,6 +31,7 @@ const HEX_REGEX = /^[0-9a-fA-F]{64}$/;
 export default function WalletScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const navigation = useNavigation<NativeStackNavigationProp<MoreStackParamList, 'Wallet'>>();
   const { address, signer, setWallet, generateWallet } = useConnection();
   const [importKey, setImportKey] = useState('');
   const [showImport, setShowImport] = useState(false);
@@ -132,6 +136,16 @@ export default function WalletScreen() {
             {address}
           </Text>
         </View>
+
+        {/* Balance */}
+        <TouchableOpacity
+          style={[styles.btn, { backgroundColor: colors.accentPrimary }]}
+          onPress={() => navigation.navigate('WalletBalance')}
+        >
+          <Text style={[styles.btnText, { color: colors.textInverse }]}>
+            View Balance
+          </Text>
+        </TouchableOpacity>
 
         {/* Reveal Private Key */}
         {!revealedKey ? (

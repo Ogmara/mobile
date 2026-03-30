@@ -5,7 +5,7 @@
  * debug settings). Shows available balance, frozen balance, and all tokens.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,9 @@ import {
   RefreshControl,
   StyleSheet,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
@@ -53,6 +55,15 @@ export default function WalletBalanceScreen() {
     );
   }
 
+  const [addressCopied, setAddressCopied] = useState(false);
+
+  const handleCopyAddress = async () => {
+    if (!address) return;
+    await Clipboard.setStringAsync(address);
+    setAddressCopied(true);
+    setTimeout(() => setAddressCopied(false), 2000);
+  };
+
   const klvBalance = data ? formatTokenAmount(data.balance, 6) : '0';
   const klvFrozen = data ? formatTokenAmount(data.frozenBalance, 6) : '0';
   const tokens = data ? Object.values(data.assets).filter((a) => a.assetId !== 'KLV') : [];
@@ -68,9 +79,11 @@ export default function WalletBalanceScreen() {
             Frozen: {klvFrozen} KLV
           </Text>
         )}
-        <Text style={[styles.addressText, { color: colors.textInverse }]} numberOfLines={1}>
-          {address}
-        </Text>
+        <TouchableOpacity onPress={handleCopyAddress} activeOpacity={0.7}>
+          <Text style={[styles.addressText, { color: colors.textInverse }]} numberOfLines={1}>
+            {addressCopied ? 'Copied!' : address}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {error && (

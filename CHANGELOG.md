@@ -5,6 +5,17 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-30
+
+### Added
+
+- **Node Anchor Verification Badges** — Ionicons checkmark-circle badge for
+  nodes that anchor L2 state on-chain
+- `AnchorBadge` component — renders green checkmark for verified/active nodes
+- Anchor badge shown in NodeSelector modal next to each node URL
+- Anchor badge shown in Settings connection row when connected
+- 2 new i18n keys across all 6 languages (`anchor_verified`, `anchor_active`)
+
 ## [0.6.1] - 2026-03-30
 
 ### Fixed

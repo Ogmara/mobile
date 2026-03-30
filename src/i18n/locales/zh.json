@@ -79,5 +79,7 @@
   "notification_permission": "开启通知以获取最新动态",
   "notification_enable": "开启",
   "notification_later": "稍后",
-  "pull_to_refresh": "下拉刷新"
+  "pull_to_refresh": "下拉刷新",
+  "anchor_verified": "已验证",
+  "anchor_active": "活跃锚定者"
 }

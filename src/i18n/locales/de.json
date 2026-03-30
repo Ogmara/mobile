@@ -79,5 +79,7 @@
   "notification_permission": "Aktiviere Benachrichtigungen, um auf dem Laufenden zu bleiben",
   "notification_enable": "Aktivieren",
   "notification_later": "Später",
-  "pull_to_refresh": "Zum Aktualisieren ziehen"
+  "pull_to_refresh": "Zum Aktualisieren ziehen",
+  "anchor_verified": "Verifiziert",
+  "anchor_active": "Aktiver Ankerer"
 }

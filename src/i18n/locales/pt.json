@@ -79,5 +79,7 @@
   "notification_permission": "Ative as notificações para se manter atualizado",
   "notification_enable": "Ativar",
   "notification_later": "Depois",
-  "pull_to_refresh": "Puxe para atualizar"
+  "pull_to_refresh": "Puxe para atualizar",
+  "anchor_verified": "Verificado",
+  "anchor_active": "Ancorador Ativo"
 }

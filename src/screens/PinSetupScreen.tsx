@@ -6,7 +6,7 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -22,6 +22,7 @@ export default function PinSetupScreen() {
   const [firstPin, setFirstPin] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const handleDigit = (digit: string) => {
     if (pin.length >= PIN_LENGTH) return;
@@ -37,11 +38,13 @@ export default function PinSetupScreen() {
       } else {
         // Confirm step — check match
         if (newPin === firstPin) {
+          setSaving(true);
           setupPin(newPin)
             .then(() => {
+              setSaving(false);
               Alert.alert(t('done'), '', [{ text: 'OK', onPress: () => navigation.goBack() }]);
             })
-            .catch(() => setError(t('error_generic')));
+            .catch(() => { setSaving(false); setError(t('error_generic')); });
         } else {
           setPin('');
           setStep('enter');
@@ -57,6 +60,17 @@ export default function PinSetupScreen() {
   };
 
   const title = step === 'enter' ? t('wallet_pin_setup') : 'Confirm PIN';
+
+  if (saving) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
+        <ActivityIndicator color={colors.accentPrimary} size="large" />
+        <Text style={[styles.savingText, { color: colors.textSecondary }]}>
+          Securing your PIN...
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
@@ -106,6 +120,7 @@ const styles = StyleSheet.create({
   title: { fontSize: fontSize.xl, fontWeight: '700', marginBottom: spacing.xl },
   dotsRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.lg },
   dot: { width: 16, height: 16, borderRadius: radius.full, borderWidth: 2 },
+  savingText: { fontSize: fontSize.md, marginTop: spacing.lg },
   error: { fontSize: fontSize.sm, marginBottom: spacing.md },
   pad: {
     flexDirection: 'row',

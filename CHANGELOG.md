@@ -5,6 +5,15 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-03-30
+
+### Fixed
+- PIN setup froze the app — PBKDF2 600k iterations ran synchronously on
+  the JS thread. Now wrapped in setTimeout to yield to UI first, with
+  a "Securing your PIN..." loading screen during key derivation.
+- Settings PIN status not updating after setup — used `useFocusEffect`
+  to refresh security state when returning from PinSetup screen.
+
 ## [0.7.2] - 2026-03-30
 
 ### Security

@@ -169,21 +169,31 @@ export default function SettingsScreen() {
                 numberOfLines={3}
               />
             )}
-            {/* Edit / Save button */}
-            <TouchableOpacity
-              style={styles.row}
-              onPress={() => {
-                if (editingProfile) {
-                  handleSaveProfile();
-                } else {
-                  setEditingProfile(true);
-                }
-              }}
-            >
-              <Text style={[styles.rowText, { color: colors.accentPrimary }]}>
-                {editingProfile ? t('save') : t('chat_edit')}
-              </Text>
-            </TouchableOpacity>
+            {/* Edit + Balance row */}
+            <View style={styles.profileActions}>
+              <TouchableOpacity
+                style={styles.profileActionBtn}
+                onPress={() => {
+                  if (editingProfile) {
+                    handleSaveProfile();
+                  } else {
+                    setEditingProfile(true);
+                  }
+                }}
+              >
+                <Text style={[styles.rowText, { color: colors.accentPrimary }]}>
+                  {editingProfile ? t('save') : t('chat_edit')}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.profileActionBtn}
+                onPress={() => navigation.navigate('WalletBalance')}
+              >
+                <Text style={[styles.rowText, { color: colors.accentPrimary }]}>
+                  Balance
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </>
       )}
@@ -366,7 +376,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.7.3</Text>
+          <Text style={{ color: colors.textSecondary }}>0.7.4</Text>
         </View>
         <TouchableOpacity
           style={styles.row}
@@ -422,6 +432,13 @@ const styles = StyleSheet.create({
   profileInfo: { flex: 1, marginLeft: spacing.md },
   profileName: { fontSize: fontSize.lg, fontWeight: '600' },
   profileAddr: { fontSize: fontSize.xs, marginTop: spacing.xs },
+  profileActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  profileActionBtn: {},
   profileInput: {
     fontSize: fontSize.lg,
     fontWeight: '600',

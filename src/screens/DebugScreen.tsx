@@ -54,7 +54,7 @@ export default function DebugScreen() {
     const diag = await getVaultDiagnostics().catch(() => ({}));
     const report = [
       `Ogmara Debug Report`,
-      `Version: 0.7.3`,
+      `Version: 0.7.4`,
       `Status: ${status}`,
       `Peers: ${peers}`,
       `Wallet: ${address ? address.slice(0, 16) + '...' : 'none'}`,

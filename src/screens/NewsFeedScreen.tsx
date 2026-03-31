@@ -61,7 +61,7 @@ export default function NewsFeedScreen() {
     <NewsCard
       post={item}
       colors={colors}
-      onPress={() => navigation.navigate('NewsDetail', { msgId: item.msg_id })}
+      onPress={() => navigation.navigate('NewsDetail', { msgId: item.msg_id, post: item })}
       onAuthorPress={() => navigation.navigate('UserProfile', { address: item.author })}
     />
   );

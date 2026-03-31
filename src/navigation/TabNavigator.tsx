@@ -11,13 +11,16 @@
  * Per spec 06-frontend.md section 5.2.
  */
 
-import React from 'react';
+import React, { useState, useCallback } from 'react';
+import { TouchableOpacity } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, fontSize } from '../theme';
+import { useTheme, fontSize, spacing } from '../theme';
 import type { StartScreen } from '../lib/settings';
+import QuickMenu from '../components/QuickMenu';
 import type {
   NewsStackParamList,
   ChatStackParamList,
@@ -112,13 +115,35 @@ interface Props {
 export default function TabNavigator({ startScreen }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Navigation must be obtained from a nested ref since TabNavigator
+  // is at the root. Menu items use the tab navigator to switch tabs,
+  // then navigate within the target stack.
+  const nav = useNavigation<any>();
+
+  const menuItems = [
+    { icon: 'people-outline' as const, label: 'Followed', onPress: () => nav.navigate('NewsTab') },
+    { icon: 'bookmarks-outline' as const, label: 'Bookmarks', onPress: () => nav.navigate('MoreTab', { screen: 'Bookmarks' }) },
+    { icon: 'book-outline' as const, label: 'Addressbook', onPress: () => nav.navigate('DmTab') },
+    { icon: 'wallet-outline' as const, label: 'Wallet', onPress: () => nav.navigate('MoreTab', { screen: 'WalletBalance' }) },
+  ];
+
+  const headerRight = () => (
+    <TouchableOpacity onPress={() => setMenuOpen(true)} style={{ paddingRight: spacing.md }}>
+      <Ionicons name="menu" size={24} color={colors.textPrimary} />
+    </TouchableOpacity>
+  );
 
   return (
+    <>
+    <QuickMenu visible={menuOpen} onClose={() => setMenuOpen(false)} items={menuItems} />
     <Tab.Navigator
       initialRouteName={startScreenToRoute(startScreen)}
       screenOptions={{
         headerStyle: { backgroundColor: colors.bgSecondary },
         headerTintColor: colors.textPrimary,
+        headerRight,
         tabBarStyle: {
           backgroundColor: colors.bgSecondary,
           borderTopColor: colors.border,
@@ -184,5 +209,6 @@ export default function TabNavigator({ startScreen }: Props) {
         }}
       />
     </Tab.Navigator>
+    </>
   );
 }

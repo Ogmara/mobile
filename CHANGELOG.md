@@ -5,6 +5,14 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-03-31
+
+### Fixed
+- App crash on startup — `getSetting('displayName')` used a key not in
+  the KEYS map, causing `AsyncStorage.getItem(undefined)` which crashes
+  with "bind value at index 1 is null". Added `displayName` to settings
+  KEYS map.
+
 ## [0.10.0] - 2026-03-31
 
 ### Added

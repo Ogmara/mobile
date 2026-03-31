@@ -23,6 +23,7 @@ const KEYS = {
   pinnedChannels: 'ogmara.pinned_channels',
   mutedChannels: 'ogmara.muted_channels',
   mutedUsers: 'ogmara.muted_users',
+  displayName: 'ogmara.display_name',
 } as const;
 
 /** Read a string setting. */

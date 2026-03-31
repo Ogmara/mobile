@@ -16,9 +16,10 @@ import es from './locales/es.json';
 import pt from './locales/pt.json';
 import ja from './locales/ja.json';
 import zh from './locales/zh.json';
+import ru from './locales/ru.json';
 
 /** Supported language codes. */
-export const LANGUAGES = ['en', 'de', 'es', 'pt', 'ja', 'zh'] as const;
+export const LANGUAGES = ['en', 'de', 'es', 'pt', 'ja', 'zh', 'ru'] as const;
 export type LanguageCode = (typeof LANGUAGES)[number];
 
 /** Detect the user's preferred language from OS locale. */
@@ -41,6 +42,7 @@ i18n.use(initReactI18next).init({
     pt: { translation: pt },
     ja: { translation: ja },
     zh: { translation: zh },
+    ru: { translation: ru },
   },
   lng: detectLanguage(),
   fallbackLng: 'en',

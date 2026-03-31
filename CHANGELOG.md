@@ -5,6 +5,14 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-03-31
+
+### Added
+- **Russian Language** — 7th language (Русский) added to i18n
+  - Full translation of all 100+ UI strings
+  - Language selector updated with Русский option
+  - Auto-detection from OS locale for Russian-speaking users
+
 ## [0.11.1] - 2026-03-31
 
 ### Fixed

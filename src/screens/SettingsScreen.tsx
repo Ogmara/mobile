@@ -23,6 +23,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius, type ThemeMode } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { getStartScreen, setStartScreen, setSetting, getSetting, type StartScreen } from '../lib/settings';
+import { debugLog } from '../lib/debug';
 import { isLockEnabled, hasPinSetup, isBiometricAvailable, isBiometricEnabled, setBiometricEnabled, getBiometricType } from '../lib/appLock';
 import { LANGUAGES, type LanguageCode } from '../i18n/init';
 import type { MoreStackParamList } from '../navigation/types';
@@ -98,6 +99,10 @@ export default function SettingsScreen() {
         display_name: displayName.trim() || undefined,
         bio: bio.trim() || undefined,
       });
+      // Save display name locally for header display
+      if (displayName.trim()) {
+        await setSetting('displayName', displayName.trim());
+      }
       setEditingProfile(false);
     } catch (e) {
       Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
@@ -380,7 +385,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.9.0</Text>
+          <Text style={{ color: colors.textSecondary }}>0.10.0</Text>
         </View>
         <TouchableOpacity
           style={styles.row}

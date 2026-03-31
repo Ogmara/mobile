@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { TouchableOpacity } from 'react-native';
+import { TouchableOpacity, Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme, fontSize, spacing } from '../theme';
 import type { StartScreen } from '../lib/settings';
 import QuickMenu from '../components/QuickMenu';
+import { useConnection } from '../context/ConnectionContext';
 import type {
   NewsStackParamList,
   ChatStackParamList,
@@ -42,6 +43,7 @@ import WalletScreen from '../screens/WalletScreen';
 import PinSetupScreen from '../screens/PinSetupScreen';
 import DebugScreen from '../screens/DebugScreen';
 import BookmarksScreen from '../screens/BookmarksScreen';
+import AddressbookScreen from '../screens/AddressbookScreen';
 import WalletBalanceScreen from '../screens/WalletBalanceScreen';
 import UserProfileScreen from '../screens/UserProfileScreen';
 
@@ -87,6 +89,7 @@ function MoreTab() {
     <MoreStack.Navigator screenOptions={{ headerShown: false }}>
       <MoreStack.Screen name="Settings" component={SettingsScreen} />
       <MoreStack.Screen name="Bookmarks" component={BookmarksScreen} />
+      <MoreStack.Screen name="Addressbook" component={AddressbookScreen} />
       <MoreStack.Screen name="Wallet" component={WalletScreen} />
       <MoreStack.Screen name="WalletBalance" component={WalletBalanceScreen} />
       <MoreStack.Screen name="PinSetup" component={PinSetupScreen} />
@@ -115,6 +118,7 @@ interface Props {
 export default function TabNavigator({ startScreen }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const { displayName } = useConnection();
   const [menuOpen, setMenuOpen] = useState(false);
 
   // Navigation must be obtained from a nested ref since TabNavigator
@@ -125,12 +129,20 @@ export default function TabNavigator({ startScreen }: Props) {
   const menuItems = [
     { icon: 'people-outline' as const, label: 'Followed', onPress: () => nav.navigate('NewsTab') },
     { icon: 'bookmarks-outline' as const, label: 'Bookmarks', onPress: () => nav.navigate('MoreTab', { screen: 'Bookmarks' }) },
-    { icon: 'book-outline' as const, label: 'Addressbook', onPress: () => nav.navigate('DmTab') },
+    { icon: 'book-outline' as const, label: 'Addressbook', onPress: () => nav.navigate('MoreTab', { screen: 'Addressbook' }) },
     { icon: 'wallet-outline' as const, label: 'Wallet', onPress: () => nav.navigate('MoreTab', { screen: 'WalletBalance' }) },
   ];
 
   const headerRight = () => (
-    <TouchableOpacity onPress={() => setMenuOpen(true)} style={{ paddingRight: spacing.md }}>
+    <TouchableOpacity
+      onPress={() => setMenuOpen(true)}
+      style={{ flexDirection: 'row', alignItems: 'center', paddingRight: spacing.md, gap: 6 }}
+    >
+      {displayName ? (
+        <Text style={{ color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: '600' }}>
+          {displayName}
+        </Text>
+      ) : null}
       <Ionicons name="menu" size={24} color={colors.textPrimary} />
     </TouchableOpacity>
   );

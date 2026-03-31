@@ -22,6 +22,7 @@ interface ConnectionContextValue {
   nodeUrl: string;
   signer: WalletSigner | null;
   address: string | null;
+  displayName: string | null;
   peers: number;
   /** Connect to a node URL (persists the choice). */
   connectToNode: (url: string) => Promise<void>;
@@ -39,6 +40,7 @@ const ConnectionContext = createContext<ConnectionContextValue>({
   nodeUrl: DEFAULT_NODE_URL,
   signer: null,
   address: null,
+  displayName: null,
   peers: 0,
   connectToNode: async () => {},
   setWallet: async () => {},
@@ -52,6 +54,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const [nodeUrl, setNodeUrl] = useState<string>(DEFAULT_NODE_URL);
   const [signer, setSignerState] = useState<WalletSigner | null>(null);
   const [address, setAddress] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [peers, setPeers] = useState(0);
 
   const wsRef = useRef<WsSubscription | null>(null);
@@ -87,9 +90,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   async function initClient() {
     try {
       const savedUrl = await getSetting('nodeUrl').catch(() => null);
+      const savedName = await getSetting('displayName').catch(() => null);
       const url = savedUrl || DEFAULT_NODE_URL;
       nodeUrlRef.current = url;
       setNodeUrl(url);
+      if (savedName) setDisplayName(savedName);
       debugLog('info', `Connecting to node: ${url}`);
 
       const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
@@ -215,7 +220,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   return (
     <ConnectionContext.Provider
-      value={{ client, status, nodeUrl, signer, address, peers, connectToNode, setWallet, generateWallet, onWsEvent }}
+      value={{ client, status, nodeUrl, signer, address, displayName, peers, connectToNode, setWallet, generateWallet, onWsEvent }}
     >
       {children}
     </ConnectionContext.Provider>

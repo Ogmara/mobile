@@ -5,6 +5,28 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-03-31
+
+### Added
+- **Addressbook** — local contact list (AsyncStorage). Add contacts with
+  klv1 address + display name, tap to open DM, long-press to remove.
+  Accessible from quick menu.
+- **Username in header** — display name shown next to burger menu icon
+  when the user has set one in Settings profile
+- **User profile page** — shows avatar, address (tap to copy), bio,
+  follower/following/post counts (when API available), Follow + DM buttons.
+  Gracefully handles missing /users/:address endpoint (no crash).
+
+### Fixed
+- **Bookmarks not loading** — missing `signer` dependency in useApi hook.
+  Added signer, useFocusEffect refresh, payload decoding, envelope
+  normalization. Bookmarks now properly sync with the node.
+- **Tapping author address crashed** — UserProfile tried API fetch that
+  returned 404. Now catches and shows address-only fallback view.
+- **Repost/react/bookmark error handling** — errors logged to debug
+  console instead of crashing with hex validation error.
+- Profile save now persists display name to local settings for header
+
 ## [0.9.0] - 2026-03-31
 
 ### Added

@@ -1,128 +1,149 @@
 /**
- * User Profile — display a user's profile, posts, and follow actions.
+ * User Profile — display a user's profile with follow/DM actions.
  *
- * Reachable from channel messages, news feed, DMs, and search.
+ * Shows address, avatar initial, and action buttons.
+ * Tries to load profile from node, falls back to address-only display
+ * when the /users/:address endpoint is not deployed yet.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
+  Alert,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useTranslation } from 'react-i18next';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
+import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { SharedStackParams } from '../navigation/types';
 
 type Props = NativeStackScreenProps<SharedStackParams, 'UserProfile'>;
 
-export default function UserProfileScreen({ route }: Props) {
+export default function UserProfileScreen({ route, navigation }: Props) {
   const { address: profileAddress } = route.params;
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client, address: myAddress, signer } = useConnection();
+  const [copied, setCopied] = useState(false);
+  const [following, setFollowing] = useState(false);
 
-  const { data, loading, error } = useApi(
+  // Try to load profile — gracefully handle 404
+  const { data } = useApi(
     async () => {
-      if (!client) throw new Error('Not connected');
-      return client.getUserProfile(profileAddress);
+      if (!client) return null;
+      try {
+        return await client.getUserProfile(profileAddress);
+      } catch {
+        return null; // endpoint may not exist yet
+      }
     },
     [profileAddress, client],
   );
 
   const isOwnProfile = myAddress === profileAddress;
+  const displayName = data?.user?.display_name || null;
+  const bio = data?.user?.bio || null;
+
+  const handleCopyAddress = async () => {
+    await Clipboard.setStringAsync(profileAddress);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleFollow = async () => {
     if (!client || !signer) return;
     try {
       await client.follow(profileAddress);
-    } catch {}
+      setFollowing(true);
+    } catch (e) {
+      debugLog('warn', `Follow failed: ${e instanceof Error ? e.message : e}`);
+      Alert.alert('Error', 'Could not follow user');
+    }
   };
 
-  if (loading) {
-    return (
-      <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
-        <ActivityIndicator color={colors.accentPrimary} size="large" />
-      </View>
-    );
-  }
-
-  if (error || !data) {
-    return (
-      <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
-        <Text style={{ color: colors.error }}>{error || t('error_not_found')}</Text>
-      </View>
-    );
-  }
+  const handleDm = () => {
+    navigation.navigate('DmConversation' as any, { address: profileAddress, displayName });
+  };
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
-      {/* Avatar placeholder */}
-      <View style={[styles.avatarCircle, { backgroundColor: colors.accentSecondary }]}>
+      {/* Avatar */}
+      <View style={[styles.avatarCircle, { backgroundColor: colors.accentPrimary }]}>
         <Text style={[styles.avatarText, { color: colors.textInverse }]}>
-          {(data.user.display_name || profileAddress)[0].toUpperCase()}
+          {(displayName || profileAddress)[0]?.toUpperCase() || '?'}
         </Text>
       </View>
 
+      {/* Display name */}
       <Text style={[styles.displayName, { color: colors.textPrimary }]}>
-        {data.user.display_name || profileAddress.slice(0, 16) + '...'}
+        {displayName || profileAddress.slice(0, 20) + '...'}
       </Text>
 
-      <Text style={[styles.address, { color: colors.textSecondary }]}>
-        {profileAddress}
-      </Text>
+      {/* Address (tappable to copy) */}
+      <TouchableOpacity onPress={handleCopyAddress}>
+        <Text style={[styles.address, { color: colors.textSecondary }]}>
+          {copied ? 'Copied!' : profileAddress}
+        </Text>
+      </TouchableOpacity>
 
-      {data.user.bio && (
-        <Text style={[styles.bio, { color: colors.textPrimary }]}>{data.user.bio}</Text>
+      {/* Bio */}
+      {bio && (
+        <Text style={[styles.bio, { color: colors.textPrimary }]}>{bio}</Text>
       )}
 
-      {/* Stats row */}
-      <View style={styles.statsRow}>
-        <View style={styles.stat}>
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>
-            {data.follower_count}
-          </Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-            {t('profile_followers')}
-          </Text>
+      {/* Stats (if available from API) */}
+      {data && (
+        <View style={styles.statsRow}>
+          <View style={styles.stat}>
+            <Text style={[styles.statValue, { color: colors.textPrimary }]}>
+              {data.follower_count ?? 0}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+              {t('profile_followers')}
+            </Text>
+          </View>
+          <View style={styles.stat}>
+            <Text style={[styles.statValue, { color: colors.textPrimary }]}>
+              {data.following_count ?? 0}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+              {t('profile_following')}
+            </Text>
+          </View>
+          <View style={styles.stat}>
+            <Text style={[styles.statValue, { color: colors.textPrimary }]}>
+              {data.post_count ?? 0}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+              {t('profile_posts')}
+            </Text>
+          </View>
         </View>
-        <View style={styles.stat}>
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>
-            {data.following_count}
-          </Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-            {t('profile_following')}
-          </Text>
-        </View>
-        <View style={styles.stat}>
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>
-            {data.post_count}
-          </Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-            {t('profile_posts')}
-          </Text>
-        </View>
-      </View>
+      )}
 
       {/* Action buttons */}
       {!isOwnProfile && signer && (
         <View style={styles.actions}>
           <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: colors.accentPrimary }]}
+            style={[styles.actionBtn, { backgroundColor: following ? colors.success : colors.accentPrimary }]}
             onPress={handleFollow}
+            disabled={following}
           >
             <Text style={{ color: colors.textInverse, fontWeight: '600' }}>
-              {t('profile_follow')}
+              {following ? t('profile_following') : t('profile_follow')}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: colors.dm }]}
+            style={[styles.actionBtn, { backgroundColor: colors.accentSecondary }]}
+            onPress={handleDm}
           >
             <Text style={{ color: colors.textInverse, fontWeight: '600' }}>
               {t('profile_send_dm')}
@@ -130,13 +151,19 @@ export default function UserProfileScreen({ route }: Props) {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Own profile indicator */}
+      {isOwnProfile && (
+        <Text style={[styles.ownLabel, { color: colors.textSecondary }]}>
+          This is your profile
+        </Text>
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   avatarCircle: {
     width: 80,
     height: 80,
@@ -153,7 +180,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: spacing.md,
   },
-  address: { fontSize: fontSize.xs, textAlign: 'center', marginTop: spacing.xs },
+  address: { fontSize: fontSize.xs, textAlign: 'center', marginTop: spacing.xs, paddingHorizontal: spacing.lg },
   bio: { fontSize: fontSize.md, textAlign: 'center', marginTop: spacing.md, paddingHorizontal: spacing.xl },
   statsRow: {
     flexDirection: 'row',
@@ -176,5 +203,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderRadius: radius.md,
     alignItems: 'center',
+  },
+  ownLabel: {
+    textAlign: 'center',
+    marginTop: spacing.lg,
+    fontSize: fontSize.sm,
   },
 });

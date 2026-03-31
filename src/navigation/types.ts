@@ -31,6 +31,7 @@ export type SearchStackParamList = {
 export type MoreStackParamList = {
   Settings: undefined;
   Bookmarks: undefined;
+  Addressbook: undefined;
   Wallet: undefined;
   WalletBalance: undefined;
   PinSetup: undefined;

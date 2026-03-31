@@ -5,7 +5,7 @@
  * Pull-to-refresh, tap to navigate to detail.
  */
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,49 +15,67 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
+import { decodeNewsPost } from '../lib/payloadDecoder';
+import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import type { Envelope } from '@ogmara/sdk';
 
 export default function BookmarksScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client } = useConnection();
+  const { client, signer } = useConnection();
   const navigation = useNavigation<any>();
 
   const { data, loading, refreshing, onRefresh } = useApi(
     async () => {
-      if (!client) return { bookmarks: [], total: 0 };
-      return client.listBookmarks({ page: 1, limit: 50 });
+      if (!client || !signer) return { bookmarks: [], total: 0 };
+      const resp = await client.listBookmarks({ page: 1, limit: 50 });
+      return { ...resp, bookmarks: normalizeEnvelopes(resp.bookmarks) };
     },
-    [client],
+    [client, signer],
+  );
+
+  // Refresh when screen gains focus
+  useFocusEffect(
+    useCallback(() => {
+      if (client && signer) onRefresh();
+    }, [client, signer]),
   );
 
   const bookmarks = data?.bookmarks ?? [];
 
-  const renderItem = ({ item }: { item: Envelope }) => (
-    <TouchableOpacity
-      style={[styles.card, { backgroundColor: colors.bgSecondary }]}
-      onPress={() => navigation.navigate('NewsDetail', { msgId: item.msg_id })}
-      activeOpacity={0.7}
-    >
-      <Text style={[styles.author, { color: colors.accentPrimary }]}>
-        {item.author.slice(0, 16)}...
-      </Text>
-      <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={3}>
-        {item.payload}
-      </Text>
-      <Text style={[styles.time, { color: colors.textSecondary }]}>
-        {new Date(item.timestamp).toLocaleDateString()}
-      </Text>
-    </TouchableOpacity>
-  );
+  const renderItem = ({ item }: { item: Envelope }) => {
+    const decoded = decodeNewsPost(item.payload);
+    return (
+      <TouchableOpacity
+        style={[styles.card, { backgroundColor: colors.bgSecondary }]}
+        onPress={() => navigation.navigate('NewsDetail', { msgId: item.msg_id, post: item })}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.author, { color: colors.accentPrimary }]}>
+          {item.author.slice(0, 16)}...
+        </Text>
+        {decoded?.title ? (
+          <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={1}>
+            {decoded.title}
+          </Text>
+        ) : null}
+        <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={3}>
+          {decoded?.content || ''}
+        </Text>
+        <Text style={[styles.time, { color: colors.textSecondary }]}>
+          {new Date(item.timestamp).toLocaleDateString()}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
-      <Text style={[styles.title, { color: colors.textPrimary }]}>
+      <Text style={[styles.heading, { color: colors.textPrimary }]}>
         {t('bookmarks_title')}
       </Text>
       <FlatList
@@ -74,7 +92,9 @@ export default function BookmarksScreen() {
         contentContainerStyle={bookmarks.length === 0 ? styles.emptyContainer : styles.list}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={{ color: colors.textSecondary }}>{t('bookmarks_empty')}</Text>
+            <Text style={{ color: colors.textSecondary }}>
+              {!signer ? t('wallet_connect') : t('bookmarks_empty')}
+            </Text>
           </View>
         }
       />
@@ -84,7 +104,7 @@ export default function BookmarksScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  title: {
+  heading: {
     fontSize: fontSize.xl,
     fontWeight: '700',
     padding: spacing.md,
@@ -99,6 +119,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   author: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs },
+  title: { fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
   time: { fontSize: fontSize.xs },
 });

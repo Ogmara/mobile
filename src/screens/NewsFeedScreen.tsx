@@ -14,13 +14,15 @@ import {
   RefreshControl,
   StyleSheet,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
+import { decodeNewsPost } from '../lib/payloadDecoder';
 import type { Envelope } from '@ogmara/sdk';
 import type { NewsStackParamList } from '../navigation/types';
 
@@ -41,6 +43,13 @@ export default function NewsFeedScreen() {
       return client.listNews();
     },
     [client],
+  );
+
+  // Auto-refresh when screen gains focus (e.g., after posting)
+  useFocusEffect(
+    useCallback(() => {
+      if (client) onRefresh();
+    }, [client]),
   );
 
   const posts = data?.posts ?? [];
@@ -105,6 +114,11 @@ function NewsCard({
   const [bookmarked, setBookmarked] = useState(false);
   const [reposted, setReposted] = useState(false);
 
+  // Decode the MessagePack payload into readable title/content
+  const decoded = decodeNewsPost(post.payload);
+  const title = decoded?.title || '';
+  const body = decoded?.content || (typeof post.payload === 'string' ? post.payload : '');
+
   const handleReaction = useCallback(
     async (emoji: string) => {
       if (!client) return;
@@ -114,8 +128,10 @@ function NewsCard({
           ...prev,
           [emoji]: (prev[emoji] ?? 0) + 1,
         }));
-      } catch {
-        // reaction failed silently
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : '';
+        if (msg.includes('404')) return; // endpoint not deployed yet
+        Alert.alert('Error', msg);
       }
     },
     [client, post.msg_id],
@@ -157,8 +173,13 @@ function NewsCard({
           {post.author.slice(0, 16)}...
         </Text>
       </TouchableOpacity>
+      {title ? (
+        <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={2}>
+          {title}
+        </Text>
+      ) : null}
       <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={4}>
-        {post.payload}
+        {body}
       </Text>
       <Text style={[styles.time, { color: colors.textSecondary }]}>
         {new Date(post.timestamp).toLocaleDateString()}
@@ -211,6 +232,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   author: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs },
+  title: { fontSize: fontSize.lg, fontWeight: '700', lineHeight: 24, marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   actions: {

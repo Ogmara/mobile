@@ -5,6 +5,21 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-03-31
+
+### Added
+- Payload decoder (`payloadDecoder.ts`) — decodes MessagePack bytes from
+  API envelope responses into human-readable title/content/tags
+- News feed auto-refresh on screen focus (loads new posts after composing)
+
+### Fixed
+- News posts showed raw payload bytes as decimal numbers instead of the
+  actual title and content text. Now properly decodes MessagePack payload.
+- News card now displays title (bold, large) separately from body text
+- Media upload gracefully handles 404 (node endpoint not deployed yet) —
+  shows "Media upload unavailable" and submits post without attachments
+- Reaction errors silently swallowed for 404 (endpoint not deployed yet)
+
 ## [0.8.1] - 2026-03-31
 
 ### Fixed

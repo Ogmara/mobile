@@ -89,8 +89,8 @@ export default function ComposePostScreen() {
         }
         try {
           const safeName = sanitizeFilename(att.fileName);
-          const response = await fetch(att.uri);
-          const blob = await response.blob();
+          const resp = await fetch(att.uri);
+          const blob = await resp.blob();
           const result = await client.uploadMedia(blob, safeName);
           const attachment: Attachment = {
             cid: result.cid,
@@ -103,6 +103,10 @@ export default function ComposePostScreen() {
           uploaded.push(attachment);
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Upload failed';
+          if (msg.includes('404')) {
+            Alert.alert('Media upload unavailable', 'The node does not support media uploads yet. Your post will be submitted without attachments.');
+            return uploaded; // skip remaining uploads
+          }
           Alert.alert('Upload error', `${att.fileName}: ${msg}`);
         }
       }

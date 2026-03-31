@@ -5,6 +5,19 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-03-31
+
+### Changed
+- Node selector repositioned from bottom sheet to centered modal —
+  keyboard no longer overlaps the URL input field
+- KeyboardAvoidingView wraps the modal for proper input visibility
+- "Node unreachable" error shown when entering a dead/invalid URL
+
+### Added
+- Delete node: tap ✕ button or long-press any non-active node to remove it
+  (confirmation dialog). Active node cannot be deleted (switch first).
+- Hint text at bottom of node list ("Long-press or tap ✕ to remove")
+
 ## [0.7.5] - 2026-03-30
 
 ### Fixed

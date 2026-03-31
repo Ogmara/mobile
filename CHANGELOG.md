@@ -5,6 +5,17 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-03-31
+
+### Fixed
+- "crypto.subtle must be defined" on wallet import/create — adding
+  @msgpack/msgpack to SDK caused npm to reinstall @noble/ed25519 in
+  sdk-js/node_modules, creating a duplicate unpatched instance. Removed
+  SDK's @noble copies and added @msgpack/msgpack to Metro extraNodeModules.
+- "signature verification failed for both formats" on post/message send —
+  SDK v0.6.1 fix: msg_type sent as variant name string ("NewsPost") instead
+  of numeric discriminant (0x20) to match rmp-serde enum deserialization.
+
 ## [0.8.0] - 2026-03-31
 
 ### Added

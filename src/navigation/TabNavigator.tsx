@@ -90,8 +90,8 @@ function MoreTab() {
   return (
     <MoreStack.Navigator screenOptions={{ headerShown: false }}>
       <MoreStack.Screen name="Settings" component={SettingsScreen} />
-      <MoreStack.Screen name="Bookmarks" component={BookmarksScreen} />
-      <MoreStack.Screen name="Addressbook" component={AddressbookScreen} />
+      <MoreStack.Screen name="Bookmarks" component={BookmarksScreen} options={{ headerShown: true, title: 'Bookmarks' }} />
+      <MoreStack.Screen name="Addressbook" component={AddressbookScreen} options={{ headerShown: true, title: 'Addressbook' }} />
       <MoreStack.Screen name="Wallet" component={WalletScreen} />
       <MoreStack.Screen name="WalletBalance" component={WalletBalanceScreen} />
       <MoreStack.Screen name="PinSetup" component={PinSetupScreen} />
@@ -177,6 +177,9 @@ export default function TabNavigator({ startScreen }: Props) {
             <Ionicons name="newspaper-outline" size={size} color={color} />
           ),
         }}
+        listeners={({ navigation: tabNav }) => ({
+          tabPress: () => { tabNav.navigate('NewsTab', { screen: 'NewsFeed' }); },
+        })}
       />
       <Tab.Screen
         name="ChatTab"
@@ -188,6 +191,9 @@ export default function TabNavigator({ startScreen }: Props) {
             <Ionicons name="chatbubbles-outline" size={size} color={color} />
           ),
         }}
+        listeners={({ navigation: tabNav }) => ({
+          tabPress: () => { tabNav.navigate('ChatTab', { screen: 'ChannelList' }); },
+        })}
       />
       <Tab.Screen
         name="DmTab"
@@ -199,6 +205,9 @@ export default function TabNavigator({ startScreen }: Props) {
             <Ionicons name="mail-outline" size={size} color={color} />
           ),
         }}
+        listeners={({ navigation: tabNav }) => ({
+          tabPress: () => { tabNav.navigate('DmTab', { screen: 'DmList' }); },
+        })}
       />
       <Tab.Screen
         name="SearchTab"

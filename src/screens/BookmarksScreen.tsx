@@ -21,6 +21,7 @@ import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
 import { decodeNewsPost } from '../lib/payloadDecoder';
 import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
+import { debugLog } from '../lib/debug';
 import type { Envelope } from '@ogmara/sdk';
 
 export default function BookmarksScreen() {
@@ -29,11 +30,16 @@ export default function BookmarksScreen() {
   const { client, signer } = useConnection();
   const navigation = useNavigation<any>();
 
-  const { data, refreshing, onRefresh } = useApi(
+  const { data, error, refreshing, onRefresh } = useApi(
     async () => {
       if (!client || !signer) return { bookmarks: [], total: 0 };
-      const resp = await client.listBookmarks({ page: 1, limit: 50 });
-      return { ...resp, bookmarks: normalizeEnvelopes(resp.bookmarks) };
+      try {
+        const resp = await client.listBookmarks({ page: 1, limit: 50 });
+        return { ...resp, bookmarks: normalizeEnvelopes(resp.bookmarks) };
+      } catch (e) {
+        debugLog('warn', `Bookmarks load failed: ${e instanceof Error ? e.message : e}`);
+        return { bookmarks: [], total: 0 };
+      }
     },
     [client, signer],
   );
@@ -93,7 +99,7 @@ export default function BookmarksScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={{ color: colors.textSecondary }}>
-              {!signer ? t('wallet_connect') : t('bookmarks_empty')}
+              {!signer ? t('wallet_connect') : error ? `Error: ${error}` : t('bookmarks_empty')}
             </Text>
           </View>
         }

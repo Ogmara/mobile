@@ -71,7 +71,20 @@ export default function CreateChannelScreen() {
         payload,
       );
 
-      await client.createChannel(envelope);
+      // Send via /messages (the node's process_message handles ChannelCreate)
+      // createChannel sends to /channels which returns 405
+      const resp = await fetch(`${(client as any).nodeUrl || 'https://node.ogmara.org'}/api/v1/messages`, {
+        method: 'POST',
+        headers: {
+          ...(await signer.signRequest('POST', '/api/v1/messages')),
+          'content-type': 'application/octet-stream',
+        },
+        body: envelope.buffer.slice(envelope.byteOffset, envelope.byteOffset + envelope.byteLength),
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(`API error (${resp.status}): ${text.slice(0, 200)}`);
+      }
       Alert.alert('Channel created', `#${slug.trim()}`, [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);

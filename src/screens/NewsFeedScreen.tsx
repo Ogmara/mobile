@@ -21,8 +21,10 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
+import { debugLog } from '../lib/debug';
 import { useApi } from '../hooks/useApi';
 import { decodeNewsPost } from '../lib/payloadDecoder';
+import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import type { Envelope } from '@ogmara/sdk';
 import type { NewsStackParamList } from '../navigation/types';
 
@@ -40,7 +42,8 @@ export default function NewsFeedScreen() {
   const { data, loading, refreshing, onRefresh } = useApi(
     async () => {
       if (!client) return { posts: [], total: 0, page: 1 };
-      return client.listNews();
+      const resp = await client.listNews();
+      return { ...resp, posts: normalizeEnvelopes(resp.posts) };
     },
     [client],
   );
@@ -129,9 +132,7 @@ function NewsCard({
           [emoji]: (prev[emoji] ?? 0) + 1,
         }));
       } catch (e) {
-        const msg = e instanceof Error ? e.message : '';
-        if (msg.includes('404')) return; // endpoint not deployed yet
-        Alert.alert('Error', msg);
+        debugLog('warn', `Reaction failed: ${e instanceof Error ? e.message : e}`);
       }
     },
     [client, post.msg_id],
@@ -147,8 +148,8 @@ function NewsCard({
         await client.saveBookmark(post.msg_id);
         setBookmarked(true);
       }
-    } catch {
-      // bookmark failed silently
+    } catch (e) {
+      debugLog('warn', `Bookmark failed: ${e instanceof Error ? e.message : e}`);
     }
   }, [client, post.msg_id, bookmarked]);
 
@@ -157,8 +158,8 @@ function NewsCard({
     try {
       await client.repostNews(post.msg_id, post.author);
       setReposted(true);
-    } catch {
-      // repost failed silently
+    } catch (e) {
+      debugLog('warn', `Repost failed: ${e instanceof Error ? e.message : e}`);
     }
   }, [client, post.msg_id, post.author, reposted]);
 

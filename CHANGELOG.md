@@ -5,6 +5,18 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-03-31
+
+### Fixed
+- "Invalid hex string" error on reactions/bookmarks/reposts — L2 node API
+  returns `msg_id` as a JSON number array `[74,2,122,...]` (serialized
+  `[u8; 32]`), not a hex string. Added `envelopeNormalizer.ts` to convert
+  byte arrays to hex strings when loading envelopes from the API.
+- Media upload now catches "Network request failed" in addition to 404
+  (the endpoint doesn't exist yet, so fetch fails at network level)
+- Reactions, bookmarks, reposts now log errors to debug console instead
+  of silently swallowing them — debug logs screen will show failures
+
 ## [0.8.2] - 2026-03-31
 
 ### Added

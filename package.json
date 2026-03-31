@@ -1,6 +1,6 @@
 {
   "name": "@ogmara/mobile",
-  "version": "0.7.8",
+  "version": "0.8.0",
   "description": "Ogmara mobile app — decentralized chat and news on Klever blockchain",
   "main": "index.ts",
   "scripts": {
@@ -26,6 +26,7 @@
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-device": "~8.0.10",
+    "expo-image-picker": "~17.0.10",
     "expo-local-authentication": "~17.0.8",
     "expo-localization": "~17.0.8",
     "expo-notifications": "~0.32.16",

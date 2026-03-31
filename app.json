@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ogmara",
     "slug": "ogmara",
-    "version": "0.7.8",
+    "version": "0.8.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",

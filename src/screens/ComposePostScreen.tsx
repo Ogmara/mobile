@@ -1,7 +1,7 @@
 /**
- * Compose Post — create a new news post.
+ * Compose Post — create a new news post with optional media attachments.
  *
- * Input for title, content, and optional tags.
+ * Input for title, content, optional tags, and image/video picker.
  * Requires wallet authentication.
  */
 
@@ -16,11 +16,25 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Image,
+  ActivityIndicator,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
+import type { Attachment } from '@ogmara/sdk';
+
+interface PendingAttachment {
+  uri: string;
+  mimeType: string;
+  fileName: string;
+  fileSize: number;
+  /** Set after successful upload */
+  uploaded?: Attachment;
+}
 
 export default function ComposePostScreen() {
   const { t } = useTranslation();
@@ -30,7 +44,73 @@ export default function ComposePostScreen() {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [tags, setTags] = useState('');
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const pickImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      allowsMultipleSelection: true,
+      selectionLimit: 5,
+      quality: 0.8,
+    });
+
+    if (result.canceled || !result.assets) return;
+
+    const newAttachments: PendingAttachment[] = result.assets.map((asset) => ({
+      uri: asset.uri,
+      mimeType: asset.mimeType ?? 'application/octet-stream',
+      fileName: asset.fileName ?? `file-${Date.now()}`,
+      fileSize: asset.fileSize ?? 0,
+    }));
+
+    setAttachments((prev) => [...prev, ...newAttachments].slice(0, 10));
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  /** Sanitize filename: strip path separators and non-printable characters. */
+  const sanitizeFilename = (name: string): string =>
+    name.replace(/[/\\:*?"<>|\x00-\x1f]/g, '_').slice(0, 100);
+
+  const uploadAttachments = async (): Promise<Attachment[]> => {
+    if (!client || attachments.length === 0) return [];
+    setUploading(true);
+
+    try {
+      const uploaded: Attachment[] = [];
+      for (const att of attachments) {
+        if (att.uploaded) {
+          uploaded.push(att.uploaded);
+          continue;
+        }
+        try {
+          const safeName = sanitizeFilename(att.fileName);
+          const response = await fetch(att.uri);
+          const blob = await response.blob();
+          const result = await client.uploadMedia(blob, safeName);
+          const attachment: Attachment = {
+            cid: result.cid,
+            mime_type: att.mimeType,
+            size_bytes: att.fileSize || result.size,
+            filename: safeName,
+            thumbnail_cid: result.thumbnail_cid,
+          };
+          att.uploaded = attachment;
+          uploaded.push(attachment);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Upload failed';
+          Alert.alert('Upload error', `${att.fileName}: ${msg}`);
+        }
+      }
+      return uploaded;
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!title.trim() || !content.trim()) {
@@ -50,7 +130,13 @@ export default function ComposePostScreen() {
         .filter((tag) => tag.length > 0)
         .slice(0, 10);
 
-      await client.postNews(0, title.trim(), content.trim(), tagList);
+      // Upload media first (if any)
+      const uploadedAttachments = await uploadAttachments();
+
+      await client.postNews(title.trim(), content.trim(), {
+        tags: tagList,
+        attachments: uploadedAttachments.length > 0 ? uploadedAttachments : undefined,
+      });
       navigation.goBack();
     } catch (e) {
       Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
@@ -58,6 +144,8 @@ export default function ComposePostScreen() {
       setSubmitting(false);
     }
   };
+
+  const isImage = (mime: string) => mime.startsWith('image/');
 
   return (
     <KeyboardAvoidingView
@@ -84,6 +172,44 @@ export default function ComposePostScreen() {
           multiline
           textAlignVertical="top"
         />
+
+        {/* Attachment previews */}
+        {attachments.length > 0 && (
+          <View style={styles.attachmentList}>
+            {attachments.map((att, idx) => (
+              <View key={idx} style={[styles.attachmentItem, { backgroundColor: colors.bgSecondary }]}>
+                {isImage(att.mimeType) ? (
+                  <Image source={{ uri: att.uri }} style={styles.attachmentThumb} />
+                ) : (
+                  <View style={[styles.attachmentThumb, { justifyContent: 'center', alignItems: 'center' }]}>
+                    <Ionicons name="videocam" size={24} color={colors.textSecondary} />
+                  </View>
+                )}
+                <Text style={[styles.attachmentName, { color: colors.textPrimary }]} numberOfLines={1}>
+                  {att.fileName}
+                </Text>
+                <TouchableOpacity onPress={() => removeAttachment(idx)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close-circle" size={20} color={colors.error} />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Media picker + tags */}
+        <View style={styles.toolRow}>
+          <TouchableOpacity
+            style={[styles.mediaBtn, { backgroundColor: colors.bgSecondary }]}
+            onPress={pickImage}
+          >
+            <Ionicons name="image-outline" size={20} color={colors.accentPrimary} />
+            <Text style={[styles.mediaBtnText, { color: colors.accentPrimary }]}>
+              Add Media
+            </Text>
+          </TouchableOpacity>
+          {uploading && <ActivityIndicator color={colors.accentPrimary} />}
+        </View>
+
         <TextInput
           style={[styles.tagsInput, { color: colors.textPrimary, backgroundColor: colors.bgSecondary }]}
           placeholder="Tags (comma-separated)"
@@ -131,6 +257,31 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     marginTop: spacing.md,
   },
+  toolRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+  mediaBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
+  mediaBtnText: { fontSize: fontSize.sm, fontWeight: '600' },
+  attachmentList: { marginTop: spacing.md, gap: spacing.xs },
+  attachmentItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.xs,
+    borderRadius: radius.md,
+    gap: spacing.sm,
+  },
+  attachmentThumb: { width: 40, height: 40, borderRadius: radius.sm },
+  attachmentName: { flex: 1, fontSize: fontSize.sm },
   submitBtn: {
     margin: spacing.md,
     paddingVertical: spacing.md,

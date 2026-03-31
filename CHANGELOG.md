@@ -5,6 +5,20 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-31
+
+### Added
+- **Media attachments in Compose Post** — pick images/videos from gallery
+  (expo-image-picker), preview thumbnails, upload via SDK, attach to post
+  - Multi-select up to 10 files, remove individual attachments
+  - Automatic upload before post submission
+  - Image thumbnails and video icon previews
+
+### Changed
+- Updated to SDK v0.6.0 — all write endpoints now send proper MessagePack
+  Envelope bytes instead of JSON (fixes "expected struct Envelope" error)
+- `postNews` call updated for new SDK signature (no channelId parameter)
+
 ## [0.7.8] - 2026-03-31
 
 ### Fixed

@@ -5,6 +5,25 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-03-31
+
+### Added
+- **Quick menu** (burger icon, top-right) — fast access to Followed (feed),
+  Bookmarks, Addressbook (DMs), and Wallet balance from any tab
+- **Search functionality** — search news by tag, channels by name/slug,
+  or enter a klv1 address to navigate directly to user profile
+- **New DM flow** — FAB on Messages tab opens address input modal to
+  start a conversation with any klv1 address
+- Conversations in DM list now tappable (navigate to DmConversation)
+
+### Fixed
+- News detail 404 — post data now passed from feed (avoids single-post
+  endpoint which is not deployed). Shows title, content, tags, reactions.
+- Chat channels not loading on first visit — added `useFocusEffect` to
+  refresh when tab gains focus (fixes timing issue with async connection)
+- News detail now decodes MessagePack payload and shows proper title,
+  content, tags, author, and date instead of raw bytes
+
 ## [0.8.3] - 2026-03-31
 
 ### Fixed

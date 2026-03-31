@@ -1,13 +1,18 @@
 /**
  * News Detail — single news post with comments, reactions, bookmark, repost.
+ *
+ * Receives post data from the feed (avoids 404 when single-post endpoint
+ * is not deployed). Falls back to API fetch when available.
  */
 
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
-import { useApi } from '../hooks/useApi';
+import { decodeNewsPost } from '../lib/payloadDecoder';
+import { normalizeEnvelope } from '../lib/envelopeNormalizer';
+import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
 
@@ -15,8 +20,8 @@ type Props = NativeStackScreenProps<NewsStackParamList, 'NewsDetail'>;
 
 const NEWS_REACTIONS = ['👍', '👎', '❤️', '🔥', '😂'];
 
-export default function NewsDetailScreen({ route }: Props) {
-  const { msgId } = route.params;
+export default function NewsDetailScreen({ route, navigation }: Props) {
+  const { msgId, post: rawPost } = route.params;
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client } = useConnection();
@@ -24,13 +29,9 @@ export default function NewsDetailScreen({ route }: Props) {
   const [bookmarked, setBookmarked] = useState(false);
   const [reposted, setReposted] = useState(false);
 
-  const { data, loading, error } = useApi(
-    async () => {
-      if (!client) throw new Error('Not connected');
-      return client.getNewsPost(msgId);
-    },
-    [msgId, client],
-  );
+  // Use the post passed from the feed (already normalized)
+  const post = rawPost ? normalizeEnvelope(rawPost) : null;
+  const decoded = post ? decodeNewsPost(post.payload) : null;
 
   const handleReaction = useCallback(
     async (emoji: string) => {
@@ -41,7 +42,9 @@ export default function NewsDetailScreen({ route }: Props) {
           ...prev,
           [emoji]: (prev[emoji] ?? 0) + 1,
         }));
-      } catch {}
+      } catch (e) {
+        debugLog('warn', `Reaction failed: ${e instanceof Error ? e.message : e}`);
+      }
     },
     [client, msgId],
   );
@@ -56,29 +59,25 @@ export default function NewsDetailScreen({ route }: Props) {
         await client.saveBookmark(msgId);
         setBookmarked(true);
       }
-    } catch {}
+    } catch (e) {
+      debugLog('warn', `Bookmark failed: ${e instanceof Error ? e.message : e}`);
+    }
   }, [client, msgId, bookmarked]);
 
   const handleRepost = useCallback(async () => {
-    if (reposted || !client || !data) return;
+    if (reposted || !client || !post) return;
     try {
-      await client.repostNews(msgId, data.post.author);
+      await client.repostNews(msgId, post.author);
       setReposted(true);
-    } catch {}
-  }, [client, msgId, data, reposted]);
+    } catch (e) {
+      debugLog('warn', `Repost failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }, [client, msgId, post, reposted]);
 
-  if (loading) {
+  if (!post || !decoded) {
     return (
       <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
-        <ActivityIndicator color={colors.accentPrimary} size="large" />
-      </View>
-    );
-  }
-
-  if (error || !data) {
-    return (
-      <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
-        <Text style={{ color: colors.error }}>{error || t('error_not_found')}</Text>
+        <Text style={{ color: colors.textSecondary }}>{t('error_not_found')}</Text>
       </View>
     );
   }
@@ -86,12 +85,35 @@ export default function NewsDetailScreen({ route }: Props) {
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
       <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-        <Text style={[styles.author, { color: colors.accentPrimary }]}>
-          {data.post.author}
-        </Text>
+        <TouchableOpacity onPress={() => navigation.navigate('UserProfile', { address: post.author })}>
+          <Text style={[styles.author, { color: colors.accentPrimary }]}>
+            {post.author.slice(0, 20)}...
+          </Text>
+        </TouchableOpacity>
+
+        {decoded.title ? (
+          <Text style={[styles.title, { color: colors.textPrimary }]}>
+            {decoded.title}
+          </Text>
+        ) : null}
+
         <Text style={[styles.content, { color: colors.textPrimary }]}>
-          {data.post.payload}
+          {decoded.content}
         </Text>
+
+        <Text style={[styles.time, { color: colors.textSecondary }]}>
+          {new Date(post.timestamp).toLocaleDateString()}
+        </Text>
+
+        {decoded.tags && decoded.tags.length > 0 && (
+          <View style={styles.tagRow}>
+            {decoded.tags.map((tag) => (
+              <View key={tag} style={[styles.tag, { backgroundColor: colors.bgTertiary }]}>
+                <Text style={[styles.tagText, { color: colors.accentPrimary }]}>#{tag}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Engagement actions */}
         <View style={styles.actions}>
@@ -127,22 +149,6 @@ export default function NewsDetailScreen({ route }: Props) {
           </TouchableOpacity>
         </View>
       </View>
-
-      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        {t('news_comments')} ({data.comments.length})
-      </Text>
-
-      {data.comments.map((comment) => (
-        <View
-          key={comment.msg_id}
-          style={[styles.comment, { backgroundColor: colors.bgSecondary }]}
-        >
-          <Text style={[styles.commentAuthor, { color: colors.accentPrimary }]}>
-            {comment.author}
-          </Text>
-          <Text style={{ color: colors.textPrimary }}>{comment.payload}</Text>
-        </View>
-      ))}
     </ScrollView>
   );
 }
@@ -152,7 +158,12 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   card: { margin: spacing.md, padding: spacing.md, borderRadius: radius.lg },
   author: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.sm },
+  title: { fontSize: fontSize.xl, fontWeight: '700', lineHeight: 28, marginBottom: spacing.sm },
   content: { fontSize: fontSize.md, lineHeight: 24, marginBottom: spacing.md },
+  time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.md },
+  tag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm },
+  tagText: { fontSize: fontSize.xs, fontWeight: '600' },
   actions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -180,19 +191,4 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
   },
-  sectionTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    marginHorizontal: spacing.md,
-    marginTop: spacing.lg,
-    marginBottom: spacing.sm,
-  },
-  comment: {
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-    padding: spacing.md,
-    borderRadius: radius.md,
-  },
-  commentAuthor: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs },
 });

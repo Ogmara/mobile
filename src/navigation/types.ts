@@ -4,7 +4,7 @@
 
 export type NewsStackParamList = {
   NewsFeed: undefined;
-  NewsDetail: { msgId: string };
+  NewsDetail: { msgId: string; post?: any };
   ComposePost: undefined;
   UserProfile: { address: string };
 };
@@ -25,7 +25,7 @@ export type SearchStackParamList = {
   SearchHome: undefined;
   UserProfile: { address: string };
   ChannelMessages: { channelId: number; channelName: string };
-  NewsDetail: { msgId: string };
+  NewsDetail: { msgId: string; post?: any };
 };
 
 export type MoreStackParamList = {

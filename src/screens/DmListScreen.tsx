@@ -2,10 +2,10 @@
  * DM List — direct message conversations.
  *
  * Lists conversations ordered by last activity. Requires wallet auth.
- * Tapping a conversation navigates to DM message view.
+ * FAB for starting a new DM by entering a klv1 address.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -13,17 +13,28 @@ import {
   RefreshControl,
   StyleSheet,
   TouchableOpacity,
+  Modal,
+  TextInput,
+  Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
 import type { DmConversation } from '@ogmara/sdk';
+import type { DmStackParamList } from '../navigation/types';
+
+type NavProp = NativeStackNavigationProp<DmStackParamList, 'DmList'>;
 
 export default function DmListScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client, signer } = useConnection();
+  const navigation = useNavigation<NavProp>();
+  const [newDmOpen, setNewDmOpen] = useState(false);
+  const [newDmAddress, setNewDmAddress] = useState('');
 
   const { data, refreshing, onRefresh } = useApi(
     async () => {
@@ -35,12 +46,24 @@ export default function DmListScreen() {
 
   const conversations = data?.conversations ?? [];
 
+  const handleStartDm = () => {
+    const addr = newDmAddress.trim();
+    if (!addr.startsWith('klv1') || addr.length < 10) {
+      Alert.alert('Invalid address', 'Enter a valid klv1... address');
+      return;
+    }
+    setNewDmOpen(false);
+    setNewDmAddress('');
+    navigation.navigate('DmConversation', { address: addr });
+  };
+
   const renderConversation = ({ item }: { item: DmConversation }) => (
     <TouchableOpacity
       style={[styles.row, { borderBottomColor: colors.border }]}
       activeOpacity={0.7}
+      onPress={() => navigation.navigate('DmConversation', { address: item.peer })}
     >
-      <View style={[styles.avatar, { backgroundColor: colors.dm }]}>
+      <View style={[styles.avatar, { backgroundColor: colors.accentPrimary }]}>
         <Text style={[styles.avatarText, { color: colors.textInverse }]}>
           {item.peer[4]?.toUpperCase() || '?'}
         </Text>
@@ -63,7 +86,6 @@ export default function DmListScreen() {
     </TouchableOpacity>
   );
 
-  // Not authenticated — prompt to connect wallet
   if (!signer) {
     return (
       <View style={[styles.container, styles.empty, { backgroundColor: colors.bgPrimary }]}>
@@ -91,11 +113,44 @@ export default function DmListScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-              {t('sidebar_dms')}
+              No conversations yet
             </Text>
           </View>
         }
       />
+
+      {/* New DM FAB */}
+      <TouchableOpacity
+        style={[styles.fab, { backgroundColor: colors.accentPrimary }]}
+        onPress={() => setNewDmOpen(true)}
+      >
+        <Text style={[styles.fabText, { color: colors.textInverse }]}>+</Text>
+      </TouchableOpacity>
+
+      {/* New DM modal */}
+      <Modal visible={newDmOpen} transparent animationType="fade" onRequestClose={() => setNewDmOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setNewDmOpen(false)}>
+          <View style={[styles.modalContent, { backgroundColor: colors.bgSecondary }]}>
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>New Message</Text>
+            <TextInput
+              style={[styles.modalInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
+              placeholder="klv1... address"
+              placeholderTextColor={colors.textSecondary}
+              value={newDmAddress}
+              onChangeText={setNewDmAddress}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus
+            />
+            <TouchableOpacity
+              style={[styles.modalBtn, { backgroundColor: colors.accentPrimary }]}
+              onPress={handleStartDm}
+            >
+              <Text style={[styles.modalBtnText, { color: colors.textInverse }]}>Start Conversation</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -132,4 +187,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   unreadText: { fontSize: fontSize.xs, fontWeight: '700' },
+  fab: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: spacing.lg,
+    width: 56,
+    height: 56,
+    borderRadius: radius.full,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+  },
+  fabText: { fontSize: fontSize.xl, fontWeight: '600' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '85%',
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+  },
+  modalTitle: { fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.md },
+  modalInput: {
+    padding: spacing.md,
+    borderRadius: radius.md,
+    fontSize: fontSize.sm,
+    marginBottom: spacing.md,
+  },
+  modalBtn: {
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    alignItems: 'center',
+  },
+  modalBtnText: { fontSize: fontSize.md, fontWeight: '600' },
 });

@@ -5,7 +5,7 @@
  * Tapping a channel navigates to ChannelMessagesScreen.
  */
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
@@ -37,6 +37,13 @@ export default function ChatScreen() {
       return client.listChannels();
     },
     [client],
+  );
+
+  // Refresh when tab gains focus (connection may have established since first render)
+  useFocusEffect(
+    useCallback(() => {
+      if (client) onRefresh();
+    }, [client]),
   );
 
   const channels = data?.channels ?? [];

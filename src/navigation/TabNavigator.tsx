@@ -45,6 +45,7 @@ import DebugScreen from '../screens/DebugScreen';
 import BookmarksScreen from '../screens/BookmarksScreen';
 import AddressbookScreen from '../screens/AddressbookScreen';
 import WalletBalanceScreen from '../screens/WalletBalanceScreen';
+import CreateChannelScreen from '../screens/CreateChannelScreen';
 import UserProfileScreen from '../screens/UserProfileScreen';
 
 const Tab = createBottomTabNavigator();
@@ -68,6 +69,7 @@ function ChatTab() {
   return (
     <ChatStack.Navigator screenOptions={{ headerShown: false }}>
       <ChatStack.Screen name="ChannelList" component={ChatScreen} />
+      <ChatStack.Screen name="CreateChannel" component={CreateChannelScreen} />
       <ChatStack.Screen name="ChannelMessages" component={ChannelMessagesScreen} />
       <ChatStack.Screen name="UserProfile" component={UserProfileScreen} />
     </ChatStack.Navigator>

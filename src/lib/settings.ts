@@ -24,6 +24,9 @@ const KEYS = {
   mutedChannels: 'ogmara.muted_channels',
   mutedUsers: 'ogmara.muted_users',
   displayName: 'ogmara.display_name',
+  bio: 'ogmara.bio',
+  avatarCid: 'ogmara.avatar_cid',
+  avatarLocalUri: 'ogmara.avatar_local_uri',
 } as const;
 
 /** Read a string setting. */

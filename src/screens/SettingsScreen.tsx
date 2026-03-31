@@ -16,7 +16,9 @@ import {
   TextInput,
   Modal,
   Alert,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -24,6 +26,7 @@ import { useTheme, spacing, fontSize, radius, type ThemeMode } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { getStartScreen, setStartScreen, setSetting, getSetting, type StartScreen } from '../lib/settings';
 import { debugLog } from '../lib/debug';
+import { setCachedUser } from '../lib/userCache';
 import { isLockEnabled, hasPinSetup, isBiometricAvailable, isBiometricEnabled, setBiometricEnabled, getBiometricType } from '../lib/appLock';
 import { LANGUAGES, type LanguageCode } from '../i18n/init';
 import type { MoreStackParamList } from '../navigation/types';
@@ -58,10 +61,14 @@ export default function SettingsScreen() {
   // Profile state
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
 
   useEffect(() => {
     getStartScreen().then(setStartScreenState);
+    getSetting('displayName').then((n) => { if (n) setDisplayName(n); });
+    getSetting('bio').then((b) => { if (b) setBio(b); });
+    getSetting('avatarLocalUri').then((u) => { if (u) setAvatarUri(u); });
   }, []);
 
   // Refresh security state every time screen gains focus (e.g., after PinSetup)
@@ -99,9 +106,19 @@ export default function SettingsScreen() {
         display_name: displayName.trim() || undefined,
         bio: bio.trim() || undefined,
       });
-      // Save display name locally for header display
+      // Save display name and bio locally
       if (displayName.trim()) {
         await setSetting('displayName', displayName.trim());
+      }
+      if (bio.trim()) {
+        await setSetting('bio', bio.trim());
+      }
+      // Cache own profile for user display hook
+      if (address) {
+        await setCachedUser(address, {
+          displayName: displayName.trim() || null,
+          bio: bio.trim() || null,
+        });
       }
       setEditingProfile(false);
     } catch (e) {
@@ -135,11 +152,36 @@ export default function SettingsScreen() {
           <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
             {/* Avatar */}
             <View style={styles.profileRow}>
-              <View style={[styles.avatar, { backgroundColor: colors.accentPrimary }]}>
-                <Text style={[styles.avatarText, { color: colors.textInverse }]}>
-                  {(displayName || address)[0]?.toUpperCase() || 'O'}
-                </Text>
-              </View>
+              <TouchableOpacity
+                style={[styles.avatar, { backgroundColor: colors.accentPrimary }]}
+                onPress={editingProfile ? async () => {
+                  const result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ['images'],
+                    allowsEditing: true,
+                    aspect: [1, 1],
+                    quality: 0.7,
+                  });
+                  if (!result.canceled && result.assets[0]) {
+                    setAvatarUri(result.assets[0].uri);
+                    await setSetting('avatarLocalUri', result.assets[0].uri);
+                  }
+                } : undefined}
+                disabled={!editingProfile}
+                activeOpacity={editingProfile ? 0.6 : 1}
+              >
+                {avatarUri ? (
+                  <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
+                ) : (
+                  <Text style={[styles.avatarText, { color: colors.textInverse }]}>
+                    {(displayName || address)[0]?.toUpperCase() || 'O'}
+                  </Text>
+                )}
+                {editingProfile && (
+                  <View style={styles.avatarEditBadge}>
+                    <Text style={{ color: '#fff', fontSize: 10 }}>Edit</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
               <View style={styles.profileInfo}>
                 {editingProfile ? (
                   <TextInput
@@ -385,7 +427,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.10.2</Text>
+          <Text style={{ color: colors.textSecondary }}>0.11.0</Text>
         </View>
         <TouchableOpacity
           style={styles.row}
@@ -438,6 +480,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   avatarText: { fontSize: fontSize.xl, fontWeight: '700' },
+  avatarImage: { width: 56, height: 56, borderRadius: radius.full },
+  avatarEditBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8, paddingHorizontal: 4, paddingVertical: 1 },
   profileInfo: { flex: 1, marginLeft: spacing.md },
   profileName: { fontSize: fontSize.lg, fontWeight: '600' },
   profileAddr: { fontSize: fontSize.xs, marginTop: spacing.xs },

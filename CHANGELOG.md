@@ -5,6 +5,31 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-03-31
+
+### Added
+- **Reply system** — news detail has reply input that sends proper `NewsComment`
+  (msg_type 0x23) envelopes with `post_id` reference to parent post. Reply
+  button added to news feed cards.
+- **User profile improvements** — shows avatar, display name, bio, post count,
+  follower/following stats. Lists user's posted news below profile info.
+  Own profile loads from local settings; edit button navigates to Settings.
+- **Profile picture** — tap avatar in Settings (edit mode) to pick image from
+  gallery. Stored locally as URI (IPFS upload when node supports it).
+- **Channel creation** — FAB on Chat tab opens create channel screen with slug,
+  display name, description, type (public/read-only). Sends ChannelCreate
+  envelope to L2 node. TODO: integrate SC call for on-chain channel_id.
+- **User cache** — local address-to-profile mapping in AsyncStorage. Resolves
+  own display name on news posts. Foundation for showing other users' names
+  when /users/:address endpoint is deployed.
+- **Username on news posts** — own posts show display name with mini avatar
+  instead of truncated wallet address.
+
+### Fixed
+- Keyboard overlapping input in channel messages — changed to `behavior="padding"`
+  with increased offset
+- Channel list shows "0 members" label instead of bare "0"
+
 ## [0.10.2] - 2026-03-31
 
 ### Added

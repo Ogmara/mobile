@@ -25,6 +25,7 @@ import { debugLog } from '../lib/debug';
 import { useApi } from '../hooks/useApi';
 import { decodeNewsPost } from '../lib/payloadDecoder';
 import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
+import { useUserDisplay } from '../hooks/useUserDisplay';
 import type { Envelope } from '@ogmara/sdk';
 import type { NewsStackParamList } from '../navigation/types';
 
@@ -121,6 +122,7 @@ function NewsCard({
   const decoded = decodeNewsPost(post.payload);
   const title = decoded?.title || '';
   const body = decoded?.content || (typeof post.payload === 'string' ? post.payload : '');
+  const { displayName: authorName } = useUserDisplay(post.author);
 
   const handleReaction = useCallback(
     async (emoji: string) => {
@@ -173,9 +175,14 @@ function NewsCard({
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <TouchableOpacity onPress={onAuthorPress}>
+      <TouchableOpacity onPress={onAuthorPress} style={styles.authorRow}>
+        <View style={[styles.miniAvatar, { backgroundColor: colors.accentPrimary }]}>
+          <Text style={{ color: colors.textInverse, fontSize: 10, fontWeight: '700' }}>
+            {(authorName || post.author)[0]?.toUpperCase() || '?'}
+          </Text>
+        </View>
         <Text style={[styles.author, { color: colors.accentPrimary }]}>
-          {post.author.slice(0, 16)}...
+          {authorName || `${post.author.slice(0, 16)}...`}
         </Text>
       </TouchableOpacity>
       {title ? (
@@ -206,6 +213,11 @@ function NewsCard({
             )}
           </TouchableOpacity>
         ))}
+        <TouchableOpacity style={styles.actionBtn} onPress={onPress}>
+          <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }}>
+            💬 Reply
+          </Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.actionBtn, reposted && { opacity: 0.5 }]}
           onPress={handleRepost}
@@ -236,7 +248,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     marginBottom: spacing.md,
   },
-  author: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs },
+  authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.xs },
+  miniAvatar: { width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
+  author: { fontSize: fontSize.sm, fontWeight: '600' },
   title: { fontSize: fontSize.lg, fontWeight: '700', lineHeight: 24, marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },

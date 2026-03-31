@@ -42,7 +42,7 @@ type NavProp = NativeStackNavigationProp<MoreStackParamList, 'Settings'>;
 export default function SettingsScreen() {
   const { t, i18n } = useTranslation();
   const { colors, mode, setMode } = useTheme();
-  const { client, signer, address, status, peers } = useConnection();
+  const { client, signer, address, status, nodeUrl, peers } = useConnection();
   const navigation = useNavigation<NavProp>();
   const [startScreen, setStartScreenState] = useState<StartScreen>('news');
   const [pinEnabled, setPinEnabled] = useState(false);
@@ -356,9 +356,13 @@ export default function SettingsScreen() {
       </Text>
       <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
         <TouchableOpacity style={styles.row} onPress={() => setNodeSelectorOpen(true)}>
-          <Text style={[styles.rowText, { color: colors.textPrimary }]}>
-            {t(`status_${status}`)}
-          </Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+              {status === 'connected'
+                ? `Connected to ${nodeUrl.replace(/^https?:\/\//, '')}`
+                : t(`status_${status}`)}
+            </Text>
+          </View>
           <Text style={{ color: status === 'connected' ? colors.success : colors.warning }}>
             {status === 'connected' ? t('status_peers', { count: peers }) : ''} {'\u25BE'}
           </Text>
@@ -376,7 +380,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.7.7</Text>
+          <Text style={{ color: colors.textSecondary }}>0.7.8</Text>
         </View>
         <TouchableOpacity
           style={styles.row}

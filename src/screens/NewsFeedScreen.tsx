@@ -15,6 +15,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
+  Image,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -122,7 +123,7 @@ function NewsCard({
   const decoded = decodeNewsPost(post.payload);
   const title = decoded?.title || '';
   const body = decoded?.content || (typeof post.payload === 'string' ? post.payload : '');
-  const { displayName: authorName } = useUserDisplay(post.author);
+  const { displayName: authorName, avatarUri: authorAvatar } = useUserDisplay(post.author);
 
   const handleReaction = useCallback(
     async (emoji: string) => {
@@ -176,11 +177,15 @@ function NewsCard({
       activeOpacity={0.7}
     >
       <TouchableOpacity onPress={onAuthorPress} style={styles.authorRow}>
-        <View style={[styles.miniAvatar, { backgroundColor: colors.accentPrimary }]}>
-          <Text style={{ color: colors.textInverse, fontSize: 10, fontWeight: '700' }}>
-            {(authorName || post.author)[0]?.toUpperCase() || '?'}
-          </Text>
-        </View>
+        {authorAvatar ? (
+          <Image source={{ uri: authorAvatar }} style={styles.miniAvatar} />
+        ) : (
+          <View style={[styles.miniAvatar, { backgroundColor: colors.accentPrimary }]}>
+            <Text style={{ color: colors.textInverse, fontSize: 10, fontWeight: '700' }}>
+              {(authorName || post.author)[0]?.toUpperCase() || '?'}
+            </Text>
+          </View>
+        )}
         <Text style={[styles.author, { color: colors.accentPrimary }]}>
           {authorName || `${post.author.slice(0, 16)}...`}
         </Text>
@@ -197,8 +202,8 @@ function NewsCard({
         {new Date(post.timestamp).toLocaleDateString()}
       </Text>
 
-      {/* Engagement actions */}
-      <View style={styles.actions}>
+      {/* Reactions row — right aligned */}
+      <View style={styles.reactionsRow}>
         {NEWS_REACTIONS.map((emoji) => (
           <TouchableOpacity
             key={emoji}
@@ -213,10 +218,12 @@ function NewsCard({
             )}
           </TouchableOpacity>
         ))}
+      </View>
+
+      {/* Actions row — left aligned */}
+      <View style={styles.actionsRow}>
         <TouchableOpacity style={styles.actionBtn} onPress={onPress}>
-          <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }}>
-            💬 Reply
-          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }}>💬 Reply</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.actionBtn, reposted && { opacity: 0.5 }]}
@@ -249,16 +256,21 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.xs },
-  miniAvatar: { width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
+  miniAvatar: { width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   author: { fontSize: fontSize.sm, fontWeight: '600' },
   title: { fontSize: fontSize.lg, fontWeight: '700', lineHeight: 24, marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
-  actions: {
+  reactionsRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(128,128,128,0.2)',
     paddingTop: spacing.sm,

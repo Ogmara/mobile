@@ -1,8 +1,9 @@
 /**
- * NodeSelector — modal/bottom sheet for choosing L2 node with ping display.
+ * NodeSelector — centered modal for choosing L2 node with ping display.
  *
  * Discovers available nodes, measures latency, displays as a list.
  * User taps to select; selection is persisted in settings.
+ * Supports manual URL entry, delete for custom/dead nodes.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -15,6 +16,9 @@ import {
   StyleSheet,
   ActivityIndicator,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
 } from 'react-native';
 import { pingNode } from '@ogmara/sdk';
 import { useTranslation } from 'react-i18next';
@@ -35,6 +39,7 @@ export default function NodeSelector({ visible, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [currentUrl, setCurrentUrl] = useState('');
   const [manualUrl, setManualUrl] = useState('');
+  const [addError, setAddError] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -50,13 +55,56 @@ export default function NodeSelector({ visible, onClose }: Props) {
   }, []);
 
   useEffect(() => {
-    if (visible) refresh();
+    if (visible) {
+      refresh();
+      setAddError('');
+    }
   }, [visible, refresh]);
 
   const handleSelect = async (url: string) => {
     await switchNode(url);
     setCurrentUrl(url);
     onClose();
+  };
+
+  const handleAddManual = async () => {
+    const url = manualUrl.trim().replace(/\/$/, '');
+    if (!url) return;
+    setAddError('');
+
+    try {
+      const ping = await pingNode(url);
+      if (ping < Infinity) {
+        await handleSelect(url);
+        setManualUrl('');
+      } else {
+        setAddError('Node unreachable');
+      }
+    } catch {
+      setAddError('Node unreachable');
+    }
+  };
+
+  const handleDelete = (url: string) => {
+    // Don't allow deleting the currently selected node
+    if (url === currentUrl) {
+      Alert.alert('Cannot delete', 'Switch to another node first.');
+      return;
+    }
+    Alert.alert(
+      'Remove node',
+      url.replace(/^https?:\/\//, ''),
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            setNodes((prev) => prev.filter((n) => n.url !== url));
+          },
+        },
+      ],
+    );
   };
 
   const pingColor = (ping: number) => {
@@ -72,24 +120,39 @@ export default function NodeSelector({ visible, onClose }: Props) {
         { backgroundColor: item.url === currentUrl ? colors.bgTertiary : colors.bgSecondary },
       ]}
       onPress={() => handleSelect(item.url)}
+      onLongPress={() => handleDelete(item.url)}
     >
       <View style={styles.nodeLeft}>
-        <Text style={[styles.nodeUrl, { color: colors.textPrimary }]}>
+        <Text style={[styles.nodeUrl, { color: colors.textPrimary }]} numberOfLines={1}>
           {item.url.replace(/^https?:\/\//, '')}
         </Text>
         {item.anchorStatus && item.anchorStatus.level !== 'none' && (
           <AnchorBadge level={item.anchorStatus.level} />
         )}
       </View>
-      <Text style={[styles.nodePing, { color: pingColor(item.ping) }]}>
-        {item.ping}ms
-      </Text>
+      <View style={styles.nodeRight}>
+        <Text style={[styles.nodePing, { color: pingColor(item.ping) }]}>
+          {item.ping < Infinity ? `${item.ping}ms` : '✕'}
+        </Text>
+        {item.url !== currentUrl && (
+          <TouchableOpacity
+            onPress={() => handleDelete(item.url)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={[styles.deleteBtn, { color: colors.textSecondary }]}>✕</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     </TouchableOpacity>
   );
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.overlay}>
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.overlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
         <View style={[styles.sheet, { backgroundColor: colors.bgPrimary }]}>
           <View style={styles.header}>
             <Text style={[styles.title, { color: colors.textPrimary }]}>
@@ -112,26 +175,23 @@ export default function NodeSelector({ visible, onClose }: Props) {
               placeholder="https://custom-node.example.com"
               placeholderTextColor={colors.textSecondary}
               value={manualUrl}
-              onChangeText={setManualUrl}
+              onChangeText={(text) => { setManualUrl(text); setAddError(''); }}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
+              returnKeyType="go"
+              onSubmitEditing={handleAddManual}
             />
             <TouchableOpacity
               style={[styles.manualBtn, { backgroundColor: colors.accentPrimary }]}
-              onPress={async () => {
-                const url = manualUrl.trim().replace(/\/$/, '');
-                if (!url) return;
-                const ping = await pingNode(url);
-                if (ping < Infinity) {
-                  await handleSelect(url);
-                  setManualUrl('');
-                }
-              }}
+              onPress={handleAddManual}
             >
               <Text style={{ color: colors.textInverse, fontWeight: '700' }}>+</Text>
             </TouchableOpacity>
           </View>
+          {addError ? (
+            <Text style={[styles.errorText, { color: colors.error }]}>{addError}</Text>
+          ) : null}
 
           {loading && nodes.length === 0 ? (
             <ActivityIndicator color={colors.accentPrimary} style={styles.loader} />
@@ -141,10 +201,19 @@ export default function NodeSelector({ visible, onClose }: Props) {
               keyExtractor={(item) => item.url}
               renderItem={renderNode}
               contentContainerStyle={styles.list}
+              keyboardShouldPersistTaps="handled"
+              ListFooterComponent={
+                nodes.length > 0 ? (
+                  <Text style={[styles.hint, { color: colors.textSecondary }]}>
+                    Long-press or tap ✕ to remove a node
+                  </Text>
+                ) : null
+              }
             />
           )}
         </View>
-      </View>
+        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -152,14 +221,16 @@ export default function NodeSelector({ visible, onClose }: Props) {
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    justifyContent: 'flex-end',
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
+  backdrop: {
+    flex: 1,
+  },
   sheet: {
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    maxHeight: '60%',
-    paddingBottom: spacing.xl,
+    borderRadius: radius.lg,
+    marginHorizontal: spacing.md,
+    maxHeight: '65%',
+    paddingBottom: spacing.md,
   },
   header: {
     flexDirection: 'row',
@@ -185,8 +256,14 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     flex: 1,
   },
+  nodeRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   nodeUrl: { fontSize: fontSize.md, flex: 1 },
   nodePing: { fontSize: fontSize.sm, fontWeight: '700' },
+  deleteBtn: { fontSize: fontSize.sm, opacity: 0.6 },
   manualRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -207,5 +284,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderRadius: radius.sm,
+  },
+  errorText: {
+    fontSize: fontSize.xs,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  hint: {
+    fontSize: fontSize.xs,
+    textAlign: 'center',
+    paddingVertical: spacing.md,
   },
 });

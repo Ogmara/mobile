@@ -20,7 +20,7 @@ import {
   Platform,
   Alert,
 } from 'react-native';
-import { pingNode } from '@ogmara/sdk';
+import { pingNode, DEFAULT_NODE_URL } from '@ogmara/sdk';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { getAvailableNodes, getCurrentNodeUrl, switchNode } from '../lib/api';
@@ -47,9 +47,20 @@ export default function NodeSelector({ visible, onClose }: Props) {
       const url = await getCurrentNodeUrl();
       setCurrentUrl(url);
       const discovered = await getAvailableNodes();
+
+      // Ensure the default node is always listed
+      const hasDefault = discovered.some((n) => n.url === DEFAULT_NODE_URL);
+      if (!hasDefault) {
+        const defaultPing = await pingNode(DEFAULT_NODE_URL);
+        discovered.push({ url: DEFAULT_NODE_URL, ping: defaultPing });
+      }
+
+      // Show all nodes (including unreachable) so user sees what's configured
       setNodes(discovered);
     } catch {
-      // Discovery failed
+      // Discovery failed — at least show the default
+      const defaultPing = await pingNode(DEFAULT_NODE_URL).catch(() => Infinity);
+      setNodes([{ url: DEFAULT_NODE_URL, ping: defaultPing }]);
     }
     setLoading(false);
   }, []);
@@ -68,9 +79,12 @@ export default function NodeSelector({ visible, onClose }: Props) {
   };
 
   const handleAddManual = async () => {
-    const url = manualUrl.trim().replace(/\/$/, '');
+    let url = manualUrl.trim().replace(/\/$/, '');
     if (!url) return;
     setAddError('');
+
+    // Strip /api suffix — the SDK appends /api/v1/... automatically
+    url = url.replace(/\/api\/?$/, '');
 
     try {
       const ping = await pingNode(url);
@@ -78,10 +92,10 @@ export default function NodeSelector({ visible, onClose }: Props) {
         await handleSelect(url);
         setManualUrl('');
       } else {
-        setAddError('Node unreachable');
+        setAddError('Not an Ogmara node (no valid /api/v1/health response)');
       }
     } catch {
-      setAddError('Node unreachable');
+      setAddError('Not an Ogmara node (no valid /api/v1/health response)');
     }
   };
 
@@ -108,6 +122,7 @@ export default function NodeSelector({ visible, onClose }: Props) {
   };
 
   const pingColor = (ping: number) => {
+    if (ping === Infinity) return '#6b7280'; // grey for unreachable
     if (ping < 100) return '#22c55e';
     if (ping < 300) return '#eab308';
     return '#ef4444';

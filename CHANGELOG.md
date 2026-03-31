@@ -5,6 +5,23 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - 2026-03-31
+
+### Fixed
+- Node ping false positives — `pingNode` now validates the health response
+  body (must contain `version` field), not just HTTP 200. Prevents any
+  random web server from appearing as a valid node.
+- Default node (`node.ogmara.org`) always shown in NodeSelector even when
+  node discovery fails or returns no results.
+- Manual URL input auto-strips trailing `/api` suffix (SDK appends
+  `/api/v1/...` automatically, so double-path was breaking connections).
+- Unreachable nodes now shown in list (greyed out, sorted to bottom)
+  instead of being silently filtered out.
+
+### Changed
+- Error message for invalid nodes: "Not an Ogmara node (no valid
+  /api/v1/health response)" instead of generic "Node unreachable".
+
 ## [0.7.6] - 2026-03-31
 
 ### Changed

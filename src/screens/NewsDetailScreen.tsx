@@ -87,13 +87,11 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     }
   }, [client, signer, msgId, post, reposted]);
 
-  const postTitle = decoded?.title || 'Post';
-
   const handleReply = useCallback(async () => {
     if (!replyText.trim() || !client || !signer) return;
     setReplySending(true);
     try {
-      await client.postNews(`Re: ${postTitle}`, replyText.trim());
+      await client.postComment(msgId, replyText.trim());
       setReplyText('');
       Alert.alert('Reply sent');
     } catch (e) {
@@ -103,7 +101,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     } finally {
       setReplySending(false);
     }
-  }, [client, signer, replyText, postTitle]);
+  }, [client, signer, replyText, msgId]);
 
   if (!post || !decoded) {
     return (

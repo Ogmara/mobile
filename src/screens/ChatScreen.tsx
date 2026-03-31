@@ -82,6 +82,12 @@ export default function ChatScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
+      <TouchableOpacity
+        style={[styles.fab, { backgroundColor: colors.accentPrimary }]}
+        onPress={() => navigation.navigate('CreateChannel')}
+      >
+        <Text style={[styles.fabText, { color: colors.textInverse }]}>+</Text>
+      </TouchableOpacity>
       <FlatList
         data={channels}
         keyExtractor={(item) => item.channel_id.toString()}
@@ -130,4 +136,6 @@ const styles = StyleSheet.create({
   channelName: { fontSize: fontSize.md, fontWeight: '600' },
   description: { fontSize: fontSize.sm, marginTop: spacing.xs },
   memberCount: { fontSize: fontSize.sm },
+  fab: { position: 'absolute', right: spacing.lg, bottom: spacing.lg, width: 56, height: 56, borderRadius: radius.full, justifyContent: 'center', alignItems: 'center', elevation: 4 },
+  fabText: { fontSize: fontSize.xl, fontWeight: '600' },
 });

@@ -11,6 +11,7 @@ export type NewsStackParamList = {
 
 export type ChatStackParamList = {
   ChannelList: undefined;
+  CreateChannel: undefined;
   ChannelMessages: { channelId: number; channelName: string };
   UserProfile: { address: string };
 };

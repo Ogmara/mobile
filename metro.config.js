@@ -19,6 +19,7 @@ config.resolver.extraNodeModules = {
   '@noble/ed25519': path.resolve(mobileModules, '@noble/ed25519'),
   '@noble/hashes': path.resolve(mobileModules, '@noble/hashes'),
   '@noble/ciphers': path.resolve(mobileModules, '@noble/ciphers'),
+  '@msgpack/msgpack': path.resolve(mobileModules, '@msgpack/msgpack'),
 };
 
 config.resolver.nodeModulesPaths = [

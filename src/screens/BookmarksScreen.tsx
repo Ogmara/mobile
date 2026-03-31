@@ -29,7 +29,7 @@ export default function BookmarksScreen() {
   const { client, signer } = useConnection();
   const navigation = useNavigation<any>();
 
-  const { data, loading, refreshing, onRefresh } = useApi(
+  const { data, refreshing, onRefresh } = useApi(
     async () => {
       if (!client || !signer) return { bookmarks: [], total: 0 };
       const resp = await client.listBookmarks({ page: 1, limit: 50 });
@@ -42,7 +42,7 @@ export default function BookmarksScreen() {
   useFocusEffect(
     useCallback(() => {
       if (client && signer) onRefresh();
-    }, [client, signer]),
+    }, [client, signer, onRefresh]),
   );
 
   const bookmarks = data?.bookmarks ?? [];

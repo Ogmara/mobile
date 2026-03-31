@@ -5,6 +5,27 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-03-31
+
+### Added
+- **Reply input** on news detail screen — text input with "Send Reply" button
+- Repost/bookmark now show success/failure alert feedback
+- Channel header shows #channelName at top of message view
+- Chat messages display as bubbles (own = right/purple, peer = left/grey)
+
+### Fixed
+- "More" tab landing on Bookmarks instead of Settings — added tab press
+  listener to reset MoreStack to Settings when tab is tapped
+- **Channel messages showing raw bytes** — same payload decoding issue as
+  news feed. Messages now properly decoded from MessagePack.
+- **DM messages showing raw bytes** — same fix applied to DmConversation
+- **Keyboard overlapping input** on Android — both channel and DM screens
+  now use `behavior="height"` with proper offset on Android
+- Channel list now shows "0 members" label instead of just "0"
+- WebSocket message handler now decodes msgpack payloads (was trying
+  JSON.parse on binary data)
+- Bookmark/repost errors shown to user instead of failing silently
+
 ## [0.10.1] - 2026-03-31
 
 ### Fixed

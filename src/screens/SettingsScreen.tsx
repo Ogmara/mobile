@@ -385,7 +385,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.10.1</Text>
+          <Text style={{ color: colors.textSecondary }}>0.10.2</Text>
         </View>
         <TouchableOpacity
           style={styles.row}

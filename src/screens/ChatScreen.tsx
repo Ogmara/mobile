@@ -43,7 +43,7 @@ export default function ChatScreen() {
   useFocusEffect(
     useCallback(() => {
       if (client) onRefresh();
-    }, [client]),
+    }, [client, onRefresh]),
   );
 
   const channels = data?.channels ?? [];
@@ -74,7 +74,7 @@ export default function ChatScreen() {
       </View>
       {item.member_count !== undefined && (
         <Text style={[styles.memberCount, { color: colors.textSecondary }]}>
-          {item.member_count}
+          {item.member_count} {item.member_count === 1 ? 'member' : 'members'}
         </Text>
       )}
     </TouchableOpacity>

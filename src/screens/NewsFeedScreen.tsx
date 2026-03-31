@@ -39,7 +39,7 @@ export default function NewsFeedScreen() {
   const { client, status } = useConnection();
   const navigation = useNavigation<NavProp>();
 
-  const { data, loading, refreshing, onRefresh } = useApi(
+  const { data, refreshing, onRefresh } = useApi(
     async () => {
       if (!client) return { posts: [], total: 0, page: 1 };
       const resp = await client.listNews();
@@ -52,7 +52,7 @@ export default function NewsFeedScreen() {
   useFocusEffect(
     useCallback(() => {
       if (client) onRefresh();
-    }, [client]),
+    }, [client, onRefresh]),
   );
 
   const posts = data?.posts ?? [];
@@ -149,7 +149,9 @@ function NewsCard({
         setBookmarked(true);
       }
     } catch (e) {
-      debugLog('warn', `Bookmark failed: ${e instanceof Error ? e.message : e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      debugLog('warn', `Bookmark failed: ${msg}`);
+      Alert.alert('Bookmark failed', msg.slice(0, 150));
     }
   }, [client, post.msg_id, bookmarked]);
 
@@ -159,7 +161,9 @@ function NewsCard({
       await client.repostNews(post.msg_id, post.author);
       setReposted(true);
     } catch (e) {
-      debugLog('warn', `Repost failed: ${e instanceof Error ? e.message : e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      debugLog('warn', `Repost failed: ${msg}`);
+      Alert.alert('Repost failed', msg.slice(0, 150));
     }
   }, [client, post.msg_id, post.author, reposted]);
 

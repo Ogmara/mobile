@@ -219,6 +219,12 @@ export default function TabNavigator({ startScreen }: Props) {
             <Ionicons name="ellipsis-horizontal" size={size} color={color} />
           ),
         }}
+        listeners={({ navigation: tabNav }) => ({
+          tabPress: (e) => {
+            // Reset MoreStack to Settings when tab is pressed
+            tabNav.navigate('MoreTab', { screen: 'Settings' });
+          },
+        })}
       />
     </Tab.Navigator>
     </>

@@ -9,17 +9,17 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { AppState, type AppStateStatus } from 'react-native';
 import { OgmaraClient, WsSubscription, subscribe, type WsEvent } from '@ogmara/sdk';
 import type { WalletSigner } from '@ogmara/sdk';
+import { DEFAULT_NODE_URL } from '@ogmara/sdk';
 import { getSetting, setSetting } from '../lib/settings';
 import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultGetAddress, vaultWipe } from '../lib/vault';
 import { debugLog } from '../lib/debug';
-
-const DEFAULT_NODE_URL = 'http://localhost:41721';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 
 interface ConnectionContextValue {
   client: OgmaraClient | null;
   status: ConnectionStatus;
+  nodeUrl: string;
   signer: WalletSigner | null;
   address: string | null;
   peers: number;
@@ -36,6 +36,7 @@ interface ConnectionContextValue {
 const ConnectionContext = createContext<ConnectionContextValue>({
   client: null,
   status: 'disconnected',
+  nodeUrl: DEFAULT_NODE_URL,
   signer: null,
   address: null,
   peers: 0,
@@ -48,6 +49,7 @@ const ConnectionContext = createContext<ConnectionContextValue>({
 export function ConnectionProvider({ children }: { children: React.ReactNode }) {
   const [client, setClient] = useState<OgmaraClient | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
+  const [nodeUrl, setNodeUrl] = useState<string>(DEFAULT_NODE_URL);
   const [signer, setSignerState] = useState<WalletSigner | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   const [peers, setPeers] = useState(0);
@@ -56,6 +58,9 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const eventHandlersRef = useRef<Set<(event: WsEvent) => void>>(new Set());
   const nodeUrlRef = useRef<string>(DEFAULT_NODE_URL);
   const signerRef = useRef<WalletSigner | null>(null);
+  /** True once health check confirms the node is reachable. WS state
+   *  should not downgrade to 'reconnecting' while this is set. */
+  const healthConfirmedRef = useRef(false);
 
   // Initialize client on mount
   useEffect(() => {
@@ -84,6 +89,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       const savedUrl = await getSetting('nodeUrl').catch(() => null);
       const url = savedUrl || DEFAULT_NODE_URL;
       nodeUrlRef.current = url;
+      setNodeUrl(url);
       debugLog('info', `Connecting to node: ${url}`);
 
       const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
@@ -98,11 +104,13 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       try {
         const health = await newClient.health();
         setPeers(health.peers);
+        healthConfirmedRef.current = true;
         setStatus('connected');
         debugLog('info', `Node connected, ${health.peers} peers`);
         connectWs(url);
       } catch (e) {
         debugLog('warn', 'Node unreachable, starting in offline mode', e);
+        healthConfirmedRef.current = false;
         setStatus('disconnected');
       }
     } catch (e) {
@@ -124,7 +132,12 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
           eventHandlersRef.current.forEach((handler) => handler(event));
         },
         onStateChange: (connected) => {
-          setStatus(connected ? 'connected' : 'reconnecting');
+          if (connected) {
+            setStatus('connected');
+          } else if (!healthConfirmedRef.current) {
+            // Only show 'reconnecting' if the node was never confirmed healthy
+            setStatus('reconnecting');
+          }
         },
       });
       debugLog('info', 'WebSocket subscription started');
@@ -146,6 +159,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   const connectToNode = useCallback(async (url: string) => {
     nodeUrlRef.current = url;
+    setNodeUrl(url);
     await setSetting('nodeUrl', url);
 
     const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
@@ -156,9 +170,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     try {
       const health = await newClient.health();
       setPeers(health.peers);
+      healthConfirmedRef.current = true;
       setStatus('connected');
       connectWs(url);
     } catch {
+      healthConfirmedRef.current = false;
       setStatus('disconnected');
     }
   }, []);
@@ -199,7 +215,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   return (
     <ConnectionContext.Provider
-      value={{ client, status, signer, address, peers, connectToNode, setWallet, generateWallet, onWsEvent }}
+      value={{ client, status, nodeUrl, signer, address, peers, connectToNode, setWallet, generateWallet, onWsEvent }}
     >
       {children}
     </ConnectionContext.Provider>

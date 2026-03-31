@@ -5,6 +5,21 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] - 2026-03-31
+
+### Fixed
+- Default node was hardcoded to `localhost:41721` in ConnectionContext
+  instead of using SDK's `DEFAULT_NODE_URL` (`node.ogmara.org`). This
+  caused permanent "Reconnecting..." status on fresh installs.
+- WebSocket disconnect no longer overrides "connected" status when the
+  health check already confirmed the node is reachable. WS is for
+  real-time events, not the connection status authority.
+
+### Changed
+- Node URL section in Settings now shows "Connected to node.ogmara.org"
+  (with actual URL) instead of generic "Connected" text.
+- Connection context exposes `nodeUrl` for display purposes.
+
 ## [0.7.7] - 2026-03-31
 
 ### Fixed

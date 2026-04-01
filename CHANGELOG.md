@@ -5,6 +5,16 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-04-01
+
+### Added
+- **Device-to-wallet identity mapping** (Phase 7) — ConnectionContext now supports
+  external wallet binding via `registerExternalWallet()`. When K5 provides a wallet
+  signature over the device claim, the device key is registered on the L2 node.
+  Wallet source (`builtin` / `k5-delegation`) and address persisted to AsyncStorage.
+  Registration cached to avoid re-submission. `walletAddress` and `walletSource`
+  exposed in context for UI consumption.
+
 ## [0.12.0] - 2026-03-31
 
 ### Added

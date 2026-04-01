@@ -7,7 +7,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import { OgmaraClient, WsSubscription, subscribe, type WsEvent } from '@ogmara/sdk';
+import { OgmaraClient, WsSubscription, subscribe, buildDeviceClaim, type WsEvent } from '@ogmara/sdk';
 import type { WalletSigner } from '@ogmara/sdk';
 import { DEFAULT_NODE_URL } from '@ogmara/sdk';
 import { getSetting, setSetting } from '../lib/settings';
@@ -16,12 +16,17 @@ import { debugLog } from '../lib/debug';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 
+type WalletSource = 'builtin' | 'k5-delegation' | null;
+
 interface ConnectionContextValue {
   client: OgmaraClient | null;
   status: ConnectionStatus;
   nodeUrl: string;
   signer: WalletSigner | null;
   address: string | null;
+  /** The wallet address (on-chain identity). Same as address for built-in wallets. */
+  walletAddress: string | null;
+  walletSource: WalletSource;
   displayName: string | null;
   peers: number;
   /** Connect to a node URL (persists the choice). */
@@ -30,6 +35,15 @@ interface ConnectionContextValue {
   setWallet: (privateKeyHex: string | null) => Promise<void>;
   /** Generate a new random wallet in the vault. */
   generateWallet: () => Promise<void>;
+  /**
+   * Register a device key under an external wallet (K5).
+   * Requires the wallet signature over the device claim string.
+   */
+  registerExternalWallet: (
+    externalAddress: string,
+    walletSignatureHex: string,
+    timestamp: number,
+  ) => Promise<void>;
   /** Subscribe to a WebSocket event handler. Returns unsubscribe function. */
   onWsEvent: (handler: (event: WsEvent) => void) => () => void;
 }
@@ -40,11 +54,14 @@ const ConnectionContext = createContext<ConnectionContextValue>({
   nodeUrl: DEFAULT_NODE_URL,
   signer: null,
   address: null,
+  walletAddress: null,
+  walletSource: null,
   displayName: null,
   peers: 0,
   connectToNode: async () => {},
   setWallet: async () => {},
   generateWallet: async () => {},
+  registerExternalWallet: async () => {},
   onWsEvent: () => () => {},
 });
 
@@ -54,6 +71,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const [nodeUrl, setNodeUrl] = useState<string>(DEFAULT_NODE_URL);
   const [signer, setSignerState] = useState<WalletSigner | null>(null);
   const [address, setAddress] = useState<string | null>(null);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletSource, setWalletSource] = useState<WalletSource>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [peers, setPeers] = useState(0);
 
@@ -159,6 +178,18 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       setSignerState(s);
       setAddress(addr);
       if (s) c.withSigner(s);
+
+      // Restore wallet source and external address if previously set
+      const savedSource = await getSetting('walletSource');
+      const savedWallet = await getSetting('walletAddress');
+      if (savedSource === 'k5-delegation' && savedWallet) {
+        setWalletSource('k5-delegation');
+        setWalletAddress(savedWallet);
+        if (s) s.walletAddress = savedWallet;
+      } else {
+        setWalletSource('builtin');
+        setWalletAddress(addr);
+      }
     }
   }
 
@@ -197,6 +228,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       signerRef.current = null;
       setSignerState(null);
       setAddress(null);
+      setWalletAddress(null);
+      setWalletSource(null);
+      await setSetting('walletSource', '');
+      await setSetting('walletAddress', '');
+      await setSetting('deviceRegistered', '');
     }
     connectWs(nodeUrlRef.current);
   }, [client]);
@@ -207,8 +243,36 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     signerRef.current = s;
     setSignerState(s);
     setAddress(addr);
+    setWalletAddress(addr);
+    setWalletSource('builtin');
+    await setSetting('walletSource', 'builtin');
+    await setSetting('walletAddress', addr);
     if (client && s) client.withSigner(s);
     connectWs(nodeUrlRef.current);
+  }, [client]);
+
+  const registerExternalWallet = useCallback(async (
+    externalAddress: string,
+    walletSignatureHex: string,
+    timestamp: number,
+  ) => {
+    const s = signerRef.current;
+    if (!s || !client) throw new Error('Signer required');
+
+    // Check cache to avoid re-registration
+    const deviceAddr = vaultGetAddress();
+    const cacheKey = `${externalAddress}:${deviceAddr}`;
+    const cached = await getSetting('deviceRegistered');
+    if (cached !== cacheKey) {
+      await client.registerDevice(walletSignatureHex, externalAddress, timestamp);
+      await setSetting('deviceRegistered', cacheKey);
+    }
+
+    s.walletAddress = externalAddress;
+    setWalletAddress(externalAddress);
+    setWalletSource('k5-delegation');
+    await setSetting('walletSource', 'k5-delegation');
+    await setSetting('walletAddress', externalAddress);
   }, [client]);
 
   const onWsEvent = useCallback((handler: (event: WsEvent) => void) => {
@@ -220,7 +284,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   return (
     <ConnectionContext.Provider
-      value={{ client, status, nodeUrl, signer, address, displayName, peers, connectToNode, setWallet, generateWallet, onWsEvent }}
+      value={{ client, status, nodeUrl, signer, address, walletAddress, walletSource, displayName, peers, connectToNode, setWallet, generateWallet, registerExternalWallet, onWsEvent }}
     >
       {children}
     </ConnectionContext.Provider>

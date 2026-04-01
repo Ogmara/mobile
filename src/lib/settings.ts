@@ -16,6 +16,8 @@ const KEYS = {
   startScreen: 'ogmara.default_start_screen',
   nodeUrl: 'ogmara.node_url',
   walletAddress: 'ogmara.wallet_address',
+  walletSource: 'ogmara.wallet_source',
+  deviceRegistered: 'ogmara.device_registered',
   notificationSound: 'ogmara.notification_sound',
   pushEnabled: 'ogmara.push_enabled',
   compactLayout: 'ogmara.compact_layout',

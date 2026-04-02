@@ -1,6 +1,6 @@
 {
   "name": "@ogmara/mobile",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Ogmara mobile app — decentralized chat and news on Klever blockchain",
   "main": "index.ts",
   "scripts": {

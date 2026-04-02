@@ -28,7 +28,7 @@ type NavProp = NativeStackNavigationProp<ChatStackParamList, 'ChannelList'>;
 export default function ChatScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, status } = useConnection();
+  const { client, status, signer } = useConnection();
   const navigation = useNavigation<NavProp>();
 
   const { data, refreshing, onRefresh } = useApi(
@@ -36,7 +36,7 @@ export default function ChatScreen() {
       if (!client) return { channels: [], total: 0, page: 1 };
       return client.listChannels();
     },
-    [client],
+    [client, signer],
   );
 
   // Refresh when tab gains focus (connection may have established since first render)

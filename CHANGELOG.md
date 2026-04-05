@@ -5,6 +5,194 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-04-05
+
+### Fixed
+- K5 delegation cache key now uses `signer.deviceAddress` (ogd1...) instead of
+  vault address (klv1...), matching the L2 node's device identity format
+
+## [0.19.0] - 2026-04-05
+
+### Added
+- **Settings sync** (`settingsSync.ts`) — Cross-device encrypted settings sync
+  via L2 node. Uses HKDF-SHA256 + AES-256-GCM from `@noble/hashes` and
+  `@noble/ciphers` (Hermes-compatible, no `crypto.subtle` needed). Syncs
+  theme, language, notification sound, compact layout, and font size.
+  Upload/Download buttons in Settings screen.
+- **Enhanced search** — SearchScreen rebuilt with filter tabs (All / Posts /
+  Channels). Uses i18n for all strings including placeholder and empty states.
+  Tab selection filters results client-side after searching.
+- **Media upload in chat** — Attachment button (📎) in channel message input
+  bar. Pick images/videos via `expo-image-picker`, upload to IPFS via
+  `client.uploadMedia()`, attach CID to outgoing messages. Attachment preview
+  chips with remove button above the input bar.
+
+### Changed
+- **SettingsScreen** — New "Settings Sync" section with Upload/Download buttons
+  (visible when wallet is connected). Downloads refresh local settings state.
+- **ChannelMessagesScreen** — Input bar now has 📎 (media) and 😀 (emoji)
+  buttons. Attachments passed to `client.sendMessage()` options. Upload
+  progress indicated by dimmed attachment button.
+- **SearchScreen** — Complete rewrite with filter tab bar, i18n strings,
+  cleaner result rendering.
+
+## [0.18.0] - 2026-04-05
+
+### Added
+- **Emoji picker** — New EmojiPicker component with 7 categories (Smileys,
+  Gestures, Hearts, Objects, Nature, Food, Flags) matching desktop. Slide-up
+  modal with category tabs and tap-to-insert. Emoji button added to chat
+  input bar in ChannelMessagesScreen.
+- **Unread message counts** — ChatScreen now fetches per-channel unread counts
+  via `client.getUnreadCounts()` and displays badges (1-99+) on channel rows.
+  Refreshes on each channel list load.
+- **Appearance settings** — New "Appearance" section in SettingsScreen with:
+  - Font size selector (Small / Medium / Large) with visual "A" size indicators
+  - Compact layout toggle (ON/OFF)
+  - Media auto-load selector (Always / Wi-Fi / Never)
+  All settings persisted to AsyncStorage via existing settings keys.
+
+### Changed
+- **SettingsScreen** — "Security" and "Preferences" section headers now use
+  i18n `t()` calls. New Appearance section between Preferences and Security.
+- **ChatScreen** — Channel rows now show unread badge and use i18n for member
+  count label.
+
+## [0.17.0] - 2026-04-05
+
+### Added
+- **Klever transaction builder** (`kleverTx.ts`) — Full standalone TX building,
+  signing, and broadcasting ported from desktop. Supports: build/sign/broadcast
+  flow via Klever node API, local nonce tracking to prevent TX collisions,
+  2-second rate limiting, smart contract invocation, and user-friendly error
+  parsing. All on-chain operations now work directly from the mobile app.
+- **On-chain user registration** — WalletScreen now has "Register On-Chain"
+  button that calls the Ogmara smart contract's `register` function (~4.4 KLV).
+  Shows confirmation dialog with cost, broadcasts TX, and links to Kleverscan.
+- **KLV tipping** — New TipDialog component for sending KLV tips to message
+  authors. Amount input with validation, optional note, transaction broadcast
+  with Kleverscan link. Wired into ChannelMessagesScreen via MessageBubble's
+  `onTip` callback.
+- **Token transfers** — WalletBalanceScreen now has "Send" buttons on the KLV
+  balance card and each token row. Modal dialog for recipient address and amount
+  input. Broadcasts transfer TX and links to explorer.
+- **Smart contract operations** — All Ogmara SC functions available:
+  `registerUser`, `createChannelOnChain`, `getChannelIdFromTx`, `sendTip`,
+  `sendTransfer`, `delegateDevice`, `revokeDevice`, `voteOnProposal`,
+  `updatePublicKey`. Ready for UI wiring in future phases.
+- **Kleverscan integration** — `getExplorerUrl()` and `getExplorerTxUrl()`
+  generate correct links for testnet/mainnet. Used in tip confirmations,
+  registration success, and transfer receipts.
+- **26 new i18n keys** across all 7 languages for tipping, registration,
+  and transfer UI (182 translations total).
+
+### Changed
+- **WalletScreen** — Added on-chain registration button with ActivityIndicator
+  and confirmation flow. "View Balance" button label now uses i18n.
+- **WalletBalanceScreen** — Added send functionality with modal dialog for each
+  token. Address validation (klv1...) before broadcast.
+
+## [0.16.0] - 2026-04-05
+
+### Added
+- **Follow list screen** — New FollowListScreen with Followers/Following tab
+  switcher. Shows user avatars, display names, and follow/unfollow toggle
+  buttons. Accessible by tapping follower/following counts on any profile.
+- **Notifications screen** — In-app notification center showing mentions,
+  replies, follows, and DMs. Polls every 30 seconds for new notifications.
+  Tapping a notification navigates to the relevant screen. Accessible via
+  the quick menu (bell icon).
+- **Personal feed toggle** — NewsFeedScreen now shows All/Following toggle
+  when wallet is connected. "Following" mode fetches posts only from
+  followed users via `client.getFeed()`.
+- **Real follower/following counts** — UserProfileScreen now fetches actual
+  counts from the API instead of showing hardcoded zeros.
+- **Unfollow support** — Follow button on UserProfileScreen now toggles
+  between Follow/Unfollow with optimistic count updates.
+- **Follow status detection** — UserProfileScreen checks if current user
+  is already following the viewed profile and shows correct initial state.
+
+### Changed
+- **UserProfileScreen** — Stats row (followers/following) now tappable,
+  navigating to FollowListScreen. Follow button supports toggle. Hardcoded
+  "Edit Profile" and "No posts yet" strings replaced with i18n `t()` calls.
+- **QuickMenu** — Items now use i18n labels. "Followed" entry replaced with
+  "Notifications" entry pointing to the new NotificationsScreen.
+- **TabNavigator** — FollowListScreen registered in News, Chat, DM, and
+  More stacks. NotificationsScreen registered in More stack.
+
+## [0.15.0] - 2026-04-05
+
+### Added
+- **News post editing** — ComposePostScreen now accepts edit params via navigation.
+  When `editMsgId` is provided, pre-fills title/content/tags and calls
+  `client.editNews()` instead of `client.postNews()`. Submit button shows "Save"
+  in edit mode. Media attachments disabled during edit (protocol limitation).
+- **News post deletion** — NewsDetailScreen shows edit/delete buttons for own posts.
+  Edit button visible within 30-minute window, delete always available for author.
+  Delete shows confirmation dialog, then calls `client.deleteNews()`.
+- **Channel admin screen** — New ChannelAdminScreen with full moderation controls:
+  edit channel info (name/description), add/remove moderators, kick/ban members,
+  unban users, unpin messages, invite users, and delete channel (owner only).
+  Accessible via ⚙ icon in channel message header.
+- **Private channel creation** — CreateChannelScreen now supports type 2 (Private)
+  channels alongside Public (0) and Read-Public (1). Three-button type selector
+  with hint text for private channels explaining invitation-based access.
+- **Channel admin navigation** — Settings gear icon in channel header navigates to
+  ChannelAdminScreen. Only visible when wallet is connected.
+
+### Changed
+- **CreateChannelScreen** refactored from raw envelope building + fetch to using
+  `client.createChannel()` SDK method. Cleaner, consistent with other screens.
+- **ComposePostScreen** converted from `useNavigation()` to typed screen props
+  (`NativeStackScreenProps`) for proper route param typing.
+- **All hardcoded UI strings** in ComposePost and CreateChannel replaced with
+  i18n `t()` calls. 29 new translation keys added across all 7 languages.
+
+## [0.14.0] - 2026-04-05
+
+### Added
+- **Chat message actions** — Edit (30-min window), delete, reply-to with context
+  bar, and emoji reactions (👍 👎 ❤️ 🔥 😂) on channel messages. Full long-press
+  action sheet with platform-native presentation (ActionSheetIOS / Alert).
+- **DM message actions** — Edit, delete, and emoji reactions on direct messages,
+  matching channel message functionality.
+- **Reaction badges** — Inline reaction count display below messages with tap-to-add
+  and "+" button for adding new reactions.
+- **Reply context UI** — Tappable reply preview bar above message bubbles showing
+  the original author and message preview. Reply composition bar above input with
+  dismiss button.
+- **Edit mode UI** — Warning-colored context bar above input showing original content
+  when editing a message. Send button changes to "Save" label during edit mode.
+- **Message date grouping** — Date separator labels (Today / Yesterday / full date)
+  inserted between message groups from different days.
+- **Author grouping** — Consecutive messages from the same author within a 2-minute
+  window are grouped, hiding the duplicate author name for cleaner display.
+- **Deleted message state** — Deleted messages render as italicized "[This message
+  was deleted]" placeholder instead of being removed from the list.
+- **Edited indicator** — Messages that have been edited show "(edited)" label next
+  to the timestamp.
+- **WebSocket edit/delete handling** — Real-time ChatEdit, ChatDelete,
+  DirectMessageEdit, and DirectMessageDelete events update messages in-place.
+- **Optimistic updates** — Edit, delete, and react operations update the UI
+  instantly before server confirmation.
+- **Mark channel/DM read** — Automatic read marking on channel/DM entry and
+  on receiving new messages while viewing.
+
+### Changed
+- **MessageBubble** rewritten with full action support — now accepts structured
+  props for content, author label, reply context, grouping state, and all action
+  callbacks. Decoding moved to parent screen for consistency.
+- **ChannelMessagesScreen** rebuilt with FlatList section items (date separators +
+  message items), proper message deduplication, optimistic message filtering,
+  and bounded local message array (200 max).
+- **DmConversationScreen** rebuilt with same architecture as ChannelMessagesScreen
+  including date grouping, author grouping, and edit/delete/react support.
+
+### Fixed
+- **Unbounded message arrays** — Both chat and DM screens now cap local messages
+  at 200 entries to prevent memory growth in long sessions.
+
 ## [0.13.1] - 2026-04-02
 
 ### Fixed

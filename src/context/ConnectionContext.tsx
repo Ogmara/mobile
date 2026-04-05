@@ -11,7 +11,7 @@ import { OgmaraClient, WsSubscription, subscribe, buildDeviceClaim, type WsEvent
 import type { WalletSigner } from '@ogmara/sdk';
 import { DEFAULT_NODE_URL } from '@ogmara/sdk';
 import { getSetting, setSetting } from '../lib/settings';
-import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultGetAddress, vaultWipe } from '../lib/vault';
+import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultWipe } from '../lib/vault';
 import { debugLog } from '../lib/debug';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
@@ -132,6 +132,19 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
         setStatus('connected');
         debugLog('info', `Node connected, ${health.peers} peers`);
         connectWs(url);
+
+        // Sync own profile from L2 node if not saved locally
+        const addr = signerRef.current?.walletAddress || signerRef.current?.address;
+        if (addr && !savedName) {
+          newClient.getUserProfile(addr).then((resp: any) => {
+            const name = resp?.user?.display_name;
+            if (name) {
+              setDisplayName(name);
+              setSetting('displayName', name);
+              debugLog('info', `Profile synced: ${name}`);
+            }
+          }).catch(() => {});
+        }
       } catch (e) {
         debugLog('warn', 'Node unreachable, starting in offline mode', e);
         healthConfirmedRef.current = false;
@@ -222,6 +235,10 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       signerRef.current = s;
       setSignerState(s);
       setAddress(addr);
+      setWalletAddress(addr);
+      setWalletSource('builtin');
+      await setSetting('walletSource', 'builtin');
+      await setSetting('walletAddress', addr);
       if (client && s) client.withSigner(s);
     } else {
       await vaultWipe();
@@ -259,8 +276,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     const s = signerRef.current;
     if (!s || !client) throw new Error('Signer required');
 
-    // Check cache to avoid re-registration
-    const deviceAddr = vaultGetAddress();
+    // Check cache to avoid re-registration (use ogd1 device address for consistency)
+    const deviceAddr = s.deviceAddress;
     const cacheKey = `${externalAddress}:${deviceAddr}`;
     const cached = await getSetting('deviceRegistered');
     if (cached !== cacheKey) {

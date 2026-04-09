@@ -5,21 +5,30 @@
 export type NewsStackParamList = {
   NewsFeed: undefined;
   NewsDetail: { msgId: string; post?: any };
-  ComposePost: undefined;
+  ComposePost: {
+    editMsgId?: string;
+    editTitle?: string;
+    editContent?: string;
+    editTags?: string[];
+  } | undefined;
   UserProfile: { address: string };
+  FollowList: { address: string; tab: 'followers' | 'following' };
 };
 
 export type ChatStackParamList = {
   ChannelList: undefined;
   CreateChannel: undefined;
   ChannelMessages: { channelId: number; channelName: string };
+  ChannelAdmin: { channelId: number; channelName: string };
   UserProfile: { address: string };
+  FollowList: { address: string; tab: 'followers' | 'following' };
 };
 
 export type DmStackParamList = {
   DmList: undefined;
   DmConversation: { address: string; displayName?: string };
   UserProfile: { address: string };
+  FollowList: { address: string; tab: 'followers' | 'following' };
 };
 
 export type SearchStackParamList = {
@@ -37,7 +46,9 @@ export type MoreStackParamList = {
   WalletBalance: undefined;
   PinSetup: undefined;
   DebugLogs: undefined;
+  Notifications: undefined;
   UserProfile: { address: string };
+  FollowList: { address: string; tab: 'followers' | 'following' };
 };
 
 export type ChannelAdminParamList = {

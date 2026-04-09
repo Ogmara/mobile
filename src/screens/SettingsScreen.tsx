@@ -31,6 +31,7 @@ import { isLockEnabled, hasPinSetup, isBiometricAvailable, isBiometricEnabled, s
 import { LANGUAGES, type LanguageCode } from '../i18n/init';
 import type { MoreStackParamList } from '../navigation/types';
 import NodeSelector from '../components/NodeSelector';
+import { uploadSettings, downloadSettings } from '../lib/settingsSync';
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
@@ -58,6 +59,10 @@ export default function SettingsScreen() {
   const [startPickerOpen, setStartPickerOpen] = useState(false);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [nodeSelectorOpen, setNodeSelectorOpen] = useState(false);
+  const [fontSizeSetting, setFontSizeSetting] = useState<string>('medium');
+  const [compactLayout, setCompactLayout] = useState(false);
+  const [mediaAutoload, setMediaAutoload] = useState<string>('always');
+  const [syncing, setSyncing] = useState(false);
 
   // Profile state
   const [displayName, setDisplayName] = useState('');
@@ -70,6 +75,9 @@ export default function SettingsScreen() {
     getSetting('displayName').then((n) => { if (n) setDisplayName(n); });
     getSetting('bio').then((b) => { if (b) setBio(b); });
     getSetting('avatarLocalUri').then((u) => { if (u) setAvatarUri(u); });
+    getSetting('fontSize').then((v) => { if (v) setFontSizeSetting(v); });
+    getSetting('compactLayout').then((v) => { if (v === 'true') setCompactLayout(true); });
+    getSetting('mediaAutoload').then((v) => { if (v) setMediaAutoload(v); });
   }, []);
 
   // Refresh security state every time screen gains focus (e.g., after PinSetup)
@@ -349,9 +357,147 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </Modal>
 
+      {/* Appearance */}
+      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+        {t('settings_appearance')}
+      </Text>
+      <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
+        {/* Font Size */}
+        <View style={styles.row}>
+          <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+            {t('settings_font_size')}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+            {(['small', 'medium', 'large'] as const).map((size) => (
+              <TouchableOpacity
+                key={size}
+                style={[
+                  styles.sizeBtn,
+                  { backgroundColor: fontSizeSetting === size ? colors.accentPrimary : colors.bgTertiary },
+                ]}
+                onPress={() => {
+                  setFontSizeSetting(size);
+                  setSetting('fontSize', size);
+                }}
+              >
+                <Text style={{
+                  color: fontSizeSetting === size ? colors.textInverse : colors.textPrimary,
+                  fontSize: size === 'small' ? 11 : size === 'large' ? 15 : 13,
+                  fontWeight: '600',
+                }}>
+                  A
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Compact Layout */}
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() => {
+            const next = !compactLayout;
+            setCompactLayout(next);
+            setSetting('compactLayout', next ? 'true' : 'false');
+          }}
+        >
+          <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+            {t('settings_compact')}
+          </Text>
+          <Text style={{ color: compactLayout ? colors.success : colors.textSecondary }}>
+            {compactLayout ? 'ON' : 'OFF'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Media Auto-load */}
+        <View style={styles.row}>
+          <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+            {t('settings_media_autoload')}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+            {(['always', 'wifi', 'never'] as const).map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[
+                  styles.sizeBtn,
+                  { backgroundColor: mediaAutoload === opt ? colors.accentPrimary : colors.bgTertiary },
+                ]}
+                onPress={() => {
+                  setMediaAutoload(opt);
+                  setSetting('mediaAutoload', opt);
+                }}
+              >
+                <Text style={{
+                  color: mediaAutoload === opt ? colors.textInverse : colors.textPrimary,
+                  fontSize: fontSize.xs,
+                  fontWeight: '600',
+                }}>
+                  {t(`settings_media_${opt}`)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </View>
+
+      {/* Settings Sync */}
+      {signer && (
+        <>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+            {t('settings_sync')}
+          </Text>
+          <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={async () => {
+                setSyncing(true);
+                try {
+                  await uploadSettings();
+                  Alert.alert(t('settings_sync'), t('sync_upload_success'));
+                } catch (e) {
+                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                } finally { setSyncing(false); }
+              }}
+              disabled={syncing}
+            >
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+                {t('sync_upload')}
+              </Text>
+              <Text style={{ color: colors.accentPrimary }}>↑</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={async () => {
+                setSyncing(true);
+                try {
+                  const applied = await downloadSettings();
+                  if (applied) {
+                    // Reload settings into local state
+                    getSetting('fontSize').then((v) => { if (v) setFontSizeSetting(v); });
+                    getSetting('compactLayout').then((v) => { if (v === 'true') setCompactLayout(true); });
+                    getSetting('mediaAutoload').then((v) => { if (v) setMediaAutoload(v); });
+                    Alert.alert(t('settings_sync'), t('sync_download_success'));
+                  } else {
+                    Alert.alert(t('settings_sync'), t('sync_no_data'));
+                  }
+                } catch (e) {
+                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                } finally { setSyncing(false); }
+              }}
+              disabled={syncing}
+            >
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+                {t('sync_download')}
+              </Text>
+              <Text style={{ color: colors.accentPrimary }}>↓</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
       {/* Security — PIN & Biometric */}
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        Security
+        {t('settings_security')}
       </Text>
       <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
         <TouchableOpacity
@@ -467,6 +613,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   rowText: { fontSize: fontSize.md },
+  sizeBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
+    minWidth: 32,
+    alignItems: 'center',
+  },
   // Profile
   profileRow: {
     flexDirection: 'row',

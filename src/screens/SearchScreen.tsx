@@ -1,8 +1,9 @@
 /**
- * Search — find news by tags, channels by name, users by address.
+ * Search — find posts by tag, channels by name/slug, users by address.
  *
- * Searches tag-based news and channels from the L2 node.
+ * Filter tabs: All, Posts, Channels.
  * Typing a klv1 address navigates directly to the user profile.
+ * Uses i18n for all strings.
  */
 
 import React, { useState, useCallback } from 'react';
@@ -32,6 +33,8 @@ type SearchResult =
   | { type: 'post'; data: Envelope }
   | { type: 'channel'; data: Channel };
 
+type FilterTab = 'all' | 'posts' | 'channels';
+
 export default function SearchScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -41,6 +44,7 @@ export default function SearchScreen() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [filter, setFilter] = useState<FilterTab>('all');
 
   const handleSearch = useCallback(async () => {
     const q = query.trim().toLowerCase();
@@ -56,36 +60,47 @@ export default function SearchScreen() {
     setSearched(true);
     const found: SearchResult[] = [];
 
-    try {
-      // Search news by tag
-      const tag = q.startsWith('#') ? q.slice(1) : q;
-      const newsResp = await client.listNews(1, 20, tag);
-      const posts = normalizeEnvelopes(newsResp.posts);
-      for (const p of posts) {
-        found.push({ type: 'post', data: p });
+    // Search news by tag
+    if (filter === 'all' || filter === 'posts') {
+      try {
+        const tag = q.startsWith('#') ? q.slice(1) : q;
+        const newsResp = await client.listNews(1, 20, tag);
+        const posts = normalizeEnvelopes(newsResp.posts);
+        for (const p of posts) {
+          found.push({ type: 'post', data: p });
+        }
+      } catch (e) {
+        debugLog('warn', `News search failed: ${e}`);
       }
-    } catch (e) {
-      debugLog('warn', `News tag search failed: ${e}`);
     }
 
-    try {
-      // Search channels by name/slug match
-      const chResp = await client.listChannels(1, 50);
-      for (const ch of chResp.channels) {
-        if (
-          ch.slug.toLowerCase().includes(q) ||
-          (ch.display_name && ch.display_name.toLowerCase().includes(q))
-        ) {
-          found.push({ type: 'channel', data: ch });
+    // Search channels by name/slug
+    if (filter === 'all' || filter === 'channels') {
+      try {
+        const chResp = await client.listChannels(1, 50);
+        for (const ch of chResp.channels) {
+          if (
+            ch.slug.toLowerCase().includes(q) ||
+            (ch.display_name && ch.display_name.toLowerCase().includes(q))
+          ) {
+            found.push({ type: 'channel', data: ch });
+          }
         }
+      } catch (e) {
+        debugLog('warn', `Channel search failed: ${e}`);
       }
-    } catch (e) {
-      debugLog('warn', `Channel search failed: ${e}`);
     }
 
     setResults(found);
     setLoading(false);
-  }, [query, client, navigation]);
+  }, [query, client, navigation, filter]);
+
+  const filteredResults = results.filter((r) => {
+    if (filter === 'all') return true;
+    if (filter === 'posts') return r.type === 'post';
+    if (filter === 'channels') return r.type === 'channel';
+    return true;
+  });
 
   const renderResult = ({ item }: { item: SearchResult }) => {
     if (item.type === 'channel') {
@@ -102,7 +117,7 @@ export default function SearchScreen() {
             <Text style={[styles.rowTitle, { color: colors.textPrimary }]}>
               {ch.display_name || ch.slug}
             </Text>
-            <Text style={[styles.rowSub, { color: colors.textSecondary }]}>Channel</Text>
+            <Text style={[styles.rowSub, { color: colors.textSecondary }]}>{t('nav_channels')}</Text>
           </View>
         </TouchableOpacity>
       );
@@ -120,7 +135,7 @@ export default function SearchScreen() {
         </View>
         <View style={styles.rowContent}>
           <Text style={[styles.rowTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-            {decoded?.title || 'Post'}
+            {decoded?.title || t('nav_news')}
           </Text>
           <Text style={[styles.rowSub, { color: colors.textSecondary }]} numberOfLines={1}>
             {decoded?.content?.slice(0, 60) || post.author.slice(0, 20)}
@@ -130,12 +145,19 @@ export default function SearchScreen() {
     );
   };
 
+  const tabs: { key: FilterTab; label: string }[] = [
+    { key: 'all', label: t('news_all') },
+    { key: 'posts', label: t('nav_news') },
+    { key: 'channels', label: t('nav_channels') },
+  ];
+
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
+      {/* Search bar */}
       <View style={[styles.searchBar, { backgroundColor: colors.bgTertiary }]}>
         <TextInput
           style={[styles.input, { color: colors.textPrimary }]}
-          placeholder="Search by tag, channel, or klv1 address..."
+          placeholder={t('search_placeholder')}
           placeholderTextColor={colors.textSecondary}
           value={query}
           onChangeText={setQuery}
@@ -147,23 +169,42 @@ export default function SearchScreen() {
         />
       </View>
 
+      {/* Filter tabs */}
+      <View style={[styles.tabBar, { backgroundColor: colors.bgSecondary }]}>
+        {tabs.map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.tab, filter === tab.key && { backgroundColor: colors.accentPrimary }]}
+            onPress={() => setFilter(tab.key)}
+          >
+            <Text style={{
+              color: filter === tab.key ? colors.textInverse : colors.textPrimary,
+              fontWeight: '600',
+              fontSize: fontSize.sm,
+            }}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {loading ? (
         <ActivityIndicator color={colors.accentPrimary} style={{ marginTop: spacing.xl }} />
-      ) : searched && results.length === 0 ? (
+      ) : searched && filteredResults.length === 0 ? (
         <View style={styles.empty}>
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            No results found
+            {t('search_no_results')}
           </Text>
         </View>
       ) : !searched ? (
         <View style={styles.empty}>
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            Search for tags, channels, or enter a klv1 address
+            {t('search_hint')}
           </Text>
         </View>
       ) : (
         <FlatList
-          data={results}
+          data={filteredResults}
           keyExtractor={(item, idx) =>
             item.type === 'channel' ? `ch-${item.data.channel_id}` : `p-${item.data.msg_id}-${idx}`
           }
@@ -182,6 +223,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   input: { height: 44, fontSize: fontSize.md },
+  tabBar: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    borderRadius: radius.md,
+    padding: spacing.xs,
+    gap: spacing.xs,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+  },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: spacing.lg },
   emptyText: { fontSize: fontSize.md, textAlign: 'center' },
   row: {

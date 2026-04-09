@@ -16,6 +16,8 @@ import {
   TextInput,
   Alert,
   Platform,
+  Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
@@ -24,6 +26,8 @@ import type { MoreStackParamList } from '../navigation/types';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { vaultExportKey } from '../lib/vault';
+import { registerUser, getExplorerTxUrl } from '../lib/kleverTx';
+import { debugLog } from '../lib/debug';
 import * as Clipboard from 'expo-clipboard';
 
 const HEX_REGEX = /^[0-9a-fA-F]{64}$/;
@@ -37,6 +41,7 @@ export default function WalletScreen() {
   const [showImport, setShowImport] = useState(false);
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [registering, setRegistering] = useState(false);
   const hideTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clear revealed key and clipboard on unmount (W2 audit fix)
@@ -130,6 +135,41 @@ export default function WalletScreen() {
     );
   };
 
+  const handleRegister = async () => {
+    if (!signer) return;
+    Alert.alert(
+      t('register_title'),
+      t('register_confirm'),
+      [
+        { text: t('cancel'), style: 'cancel' },
+        {
+          text: t('register_proceed'),
+          onPress: async () => {
+            setRegistering(true);
+            try {
+              const txHash = await registerUser(signer.publicKeyHex);
+              const url = await getExplorerTxUrl(txHash);
+              Alert.alert(
+                t('register_success'),
+                t('register_tx_sent'),
+                [
+                  { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
+                  { text: t('done'), style: 'cancel' },
+                ],
+              );
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : '';
+              debugLog('warn', `Registration failed: ${msg}`);
+              Alert.alert(t('register_failed'), msg.slice(0, 200));
+            } finally {
+              setRegistering(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   // Connected wallet view
   if (signer && address) {
     return (
@@ -159,8 +199,23 @@ export default function WalletScreen() {
           onPress={() => navigation.navigate('WalletBalance')}
         >
           <Text style={[styles.btnText, { color: colors.textInverse }]}>
-            View Balance
+            {t('wallet_view_balance')}
           </Text>
+        </TouchableOpacity>
+
+        {/* On-Chain Registration */}
+        <TouchableOpacity
+          style={[styles.btn, { backgroundColor: registering ? colors.textSecondary : colors.accentSecondary }]}
+          onPress={handleRegister}
+          disabled={registering}
+        >
+          {registering ? (
+            <ActivityIndicator size="small" color={colors.textInverse} />
+          ) : (
+            <Text style={[styles.btnText, { color: colors.textInverse }]}>
+              {t('register_button')}
+            </Text>
+          )}
         </TouchableOpacity>
 
         {/* Reveal Private Key */}

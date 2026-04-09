@@ -4,10 +4,11 @@
  * Receives post data from the feed to avoid 404 on missing single-post endpoint.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
+  Image,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -27,21 +28,31 @@ import type { NewsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<NewsStackParamList, 'NewsDetail'>;
 
+/** 30-minute edit window */
+const EDIT_WINDOW_MS = 30 * 60 * 1000;
+
 const NEWS_REACTIONS = ['👍', '👎', '❤️', '🔥', '😂'];
 
 export default function NewsDetailScreen({ route, navigation }: Props) {
   const { msgId, post: rawPost } = route.params;
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, signer } = useConnection();
+  const { client, signer, address: myAddress } = useConnection();
   const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({});
   const [bookmarked, setBookmarked] = useState(false);
   const [reposted, setReposted] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [replySending, setReplySending] = useState(false);
+  const [deleted, setDeleted] = useState(false);
 
   const post = rawPost ? normalizeEnvelope(rawPost) : null;
   const decoded = post ? decodeNewsPost(post.payload) : null;
+
+  const isOwn = post?.author === myAddress;
+  const canEdit = useMemo(() => {
+    if (!isOwn || !post) return false;
+    return (Date.now() - new Date(post.timestamp).getTime()) < EDIT_WINDOW_MS;
+  }, [isOwn, post]);
 
   const handleReaction = useCallback(
     async (emoji: string) => {
@@ -79,11 +90,11 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     try {
       await client.repostNews(msgId, post.author);
       setReposted(true);
-      Alert.alert('Reposted', 'Post shared to your followers');
+      Alert.alert(t('news_reposted'));
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Repost failed: ${msg}`);
-      Alert.alert('Repost failed', msg.slice(0, 100));
+      Alert.alert(t('error_generic'), msg.slice(0, 100));
     }
   }, [client, signer, msgId, post, reposted]);
 
@@ -93,15 +104,57 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     try {
       await client.postComment(msgId, replyText.trim());
       setReplyText('');
-      Alert.alert('Reply sent');
+      Alert.alert(t('news_reply_sent'));
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Reply failed: ${msg}`);
-      Alert.alert('Reply failed', msg.slice(0, 100));
+      Alert.alert(t('error_generic'), msg.slice(0, 100));
     } finally {
       setReplySending(false);
     }
   }, [client, signer, replyText, msgId]);
+
+  const handleEdit = useCallback(() => {
+    if (!decoded || !canEdit) return;
+    navigation.navigate('ComposePost', {
+      editMsgId: msgId,
+      editTitle: decoded.title,
+      editContent: decoded.content,
+      editTags: decoded.tags,
+    });
+  }, [decoded, canEdit, msgId, navigation]);
+
+  const handleDelete = useCallback(async () => {
+    if (!client || !signer || !isOwn) return;
+    Alert.alert(
+      t('chat_delete'),
+      t('confirm_delete'),
+      [
+        { text: t('cancel'), style: 'cancel' },
+        {
+          text: t('chat_delete'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await client.deleteNews(msgId);
+              setDeleted(true);
+            } catch (e) {
+              debugLog('warn', `Delete news failed: ${e instanceof Error ? e.message : ''}`);
+              Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+            }
+          },
+        },
+      ],
+    );
+  }, [client, signer, isOwn, msgId, t]);
+
+  if (deleted) {
+    return (
+      <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
+        <Text style={{ color: colors.textSecondary }}>{t('chat_message_deleted')}</Text>
+      </View>
+    );
+  }
 
   if (!post || !decoded) {
     return (
@@ -129,6 +182,20 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
           ) : null}
 
           <Text style={[styles.content, { color: colors.textPrimary }]}>{decoded.content}</Text>
+
+          {/* Inline image attachments */}
+          {decoded.attachments && decoded.attachments.length > 0 && client && (
+            <View style={styles.attachRow}>
+              {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).map((att, idx) => (
+                <Image
+                  key={idx}
+                  source={{ uri: client.getMediaUrl(att.cid) }}
+                  style={styles.detailImage}
+                  resizeMode="contain"
+                />
+              ))}
+            </View>
+          )}
 
           <Text style={[styles.time, { color: colors.textSecondary }]}>
             {new Date(post.timestamp).toLocaleDateString()}
@@ -175,19 +242,33 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
             </TouchableOpacity>
             <TouchableOpacity style={styles.metaBtn} onPress={handleBookmark}>
               <Text style={{ color: bookmarked ? colors.accentPrimary : colors.textSecondary }}>
-                {bookmarked ? '★ Saved' : '☆ Bookmark'}
+                {bookmarked ? `★ ${t('news_bookmarked')}` : `☆ ${t('news_bookmark')}`}
               </Text>
             </TouchableOpacity>
           </View>
+
+          {/* Owner actions: edit / delete */}
+          {isOwn && (
+            <View style={[styles.metaActions, { marginTop: spacing.xs }]}>
+              {canEdit && (
+                <TouchableOpacity style={styles.metaBtn} onPress={handleEdit}>
+                  <Text style={{ color: colors.accentPrimary }}>✎ {t('chat_edit')}</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.metaBtn} onPress={handleDelete}>
+                <Text style={{ color: colors.error }}>✕ {t('chat_delete')}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         {/* Reply section */}
         {signer && (
           <View style={[styles.replySection, { backgroundColor: colors.bgSecondary }]}>
-            <Text style={[styles.replyTitle, { color: colors.textSecondary }]}>Reply</Text>
+            <Text style={[styles.replyTitle, { color: colors.textSecondary }]}>{t('chat_reply')}</Text>
             <TextInput
               style={[styles.replyInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
-              placeholder="Write a reply..."
+              placeholder={t('news_reply_placeholder')}
               placeholderTextColor={colors.textSecondary}
               value={replyText}
               onChangeText={setReplyText}
@@ -201,7 +282,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
               disabled={replySending || !replyText.trim()}
             >
               <Text style={[styles.replyBtnText, { color: colors.textInverse }]}>
-                {replySending ? 'Sending...' : 'Send Reply'}
+                {replySending ? t('loading') : t('news_send_reply')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -219,6 +300,8 @@ const styles = StyleSheet.create({
   author: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.sm },
   title: { fontSize: fontSize.xl, fontWeight: '700', lineHeight: 28, marginBottom: spacing.sm },
   content: { fontSize: fontSize.md, lineHeight: 24, marginBottom: spacing.md },
+  attachRow: { gap: spacing.sm, marginBottom: spacing.md },
+  detailImage: { width: '100%', height: 200, borderRadius: radius.md },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.md },
   tag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm },

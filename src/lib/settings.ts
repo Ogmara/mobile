@@ -29,6 +29,7 @@ const KEYS = {
   bio: 'ogmara.bio',
   avatarCid: 'ogmara.avatar_cid',
   avatarLocalUri: 'ogmara.avatar_local_uri',
+  mediaAutoload: 'ogmara.media_autoload',
 } as const;
 
 /** Read a string setting. */

@@ -38,16 +38,25 @@ const NEWS_REACTIONS = ['👍', '👎', '❤️', '🔥', '😂'];
 export default function NewsFeedScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, status } = useConnection();
+  const { client, status, signer } = useConnection();
   const navigation = useNavigation<NavProp>();
+  const [feedMode, setFeedMode] = useState<'all' | 'following'>('all');
 
   const { data, refreshing, onRefresh } = useApi(
     async () => {
       if (!client) return { posts: [], total: 0, page: 1 };
+      if (feedMode === 'following' && signer) {
+        try {
+          const resp = await client.getFeed({ page: 1, limit: 50 });
+          return { ...resp, posts: normalizeEnvelopes((resp as any).posts ?? []) };
+        } catch {
+          return { posts: [], total: 0, page: 1 };
+        }
+      }
       const resp = await client.listNews();
       return { ...resp, posts: normalizeEnvelopes(resp.posts) };
     },
-    [client],
+    [client, feedMode, signer],
   );
 
   // Auto-refresh when screen gains focus (e.g., after posting)
@@ -70,6 +79,27 @@ export default function NewsFeedScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
+      {/* Feed mode toggle */}
+      {signer && (
+        <View style={[styles.feedToggle, { backgroundColor: colors.bgSecondary }]}>
+          <TouchableOpacity
+            style={[styles.feedTab, feedMode === 'all' && { backgroundColor: colors.accentPrimary }]}
+            onPress={() => setFeedMode('all')}
+          >
+            <Text style={{ color: feedMode === 'all' ? colors.textInverse : colors.textPrimary, fontWeight: '600', fontSize: fontSize.sm }}>
+              {t('news_all')}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.feedTab, feedMode === 'following' && { backgroundColor: colors.accentPrimary }]}
+            onPress={() => setFeedMode('following')}
+          >
+            <Text style={{ color: feedMode === 'following' ? colors.textInverse : colors.textPrimary, fontWeight: '600', fontSize: fontSize.sm }}>
+              {t('news_following')}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <FlatList
         data={posts}
         keyExtractor={(item) => item.msg_id}
@@ -198,6 +228,19 @@ function NewsCard({
       <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={4}>
         {body}
       </Text>
+      {/* Inline image attachments */}
+      {decoded?.attachments && decoded.attachments.length > 0 && client && (
+        <View style={styles.attachRow}>
+          {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).slice(0, 4).map((att, idx) => (
+            <Image
+              key={idx}
+              source={{ uri: client.getMediaUrl(att.cid) }}
+              style={styles.postImage}
+              resizeMode="contain"
+            />
+          ))}
+        </View>
+      )}
       <Text style={[styles.time, { color: colors.textSecondary }]}>
         {new Date(post.timestamp).toLocaleDateString()}
       </Text>
@@ -246,6 +289,17 @@ function NewsCard({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  feedToggle: {
+    flexDirection: 'row',
+    padding: spacing.xs,
+    gap: spacing.xs,
+  },
+  feedTab: {
+    flex: 1,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.md,
+    alignItems: 'center',
+  },
   list: { padding: spacing.md },
   emptyContainer: { flex: 1 },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 120 },
@@ -260,6 +314,8 @@ const styles = StyleSheet.create({
   author: { fontSize: fontSize.sm, fontWeight: '600' },
   title: { fontSize: fontSize.lg, fontWeight: '700', lineHeight: 24, marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
+  attachRow: { gap: spacing.xs, marginBottom: spacing.sm },
+  postImage: { width: '100%', height: 180, borderRadius: radius.md },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   reactionsRow: {
     flexDirection: 'row',

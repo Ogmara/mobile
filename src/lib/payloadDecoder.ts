@@ -22,6 +22,7 @@ export interface DecodedChatMessage {
   content: string;
   reply_to?: Uint8Array | null;
   mentions?: string[];
+  attachments?: { cid: string; mime_type: string; filename?: string; thumbnail_cid?: string }[];
 }
 
 /**
@@ -89,5 +90,6 @@ export function decodeChatMessage(payload: unknown): DecodedChatMessage | null {
     content: String(decoded.content ?? ''),
     reply_to: decoded.reply_to instanceof Uint8Array ? decoded.reply_to : null,
     mentions: Array.isArray(decoded.mentions) ? decoded.mentions.map(String) : undefined,
+    attachments: Array.isArray(decoded.attachments) ? decoded.attachments : undefined,
   };
 }

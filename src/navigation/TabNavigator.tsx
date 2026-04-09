@@ -46,6 +46,9 @@ import BookmarksScreen from '../screens/BookmarksScreen';
 import AddressbookScreen from '../screens/AddressbookScreen';
 import WalletBalanceScreen from '../screens/WalletBalanceScreen';
 import CreateChannelScreen from '../screens/CreateChannelScreen';
+import ChannelAdminScreen from '../screens/ChannelAdminScreen';
+import FollowListScreen from '../screens/FollowListScreen';
+import NotificationsScreen from '../screens/NotificationsScreen';
 import UserProfileScreen from '../screens/UserProfileScreen';
 
 const Tab = createBottomTabNavigator();
@@ -61,6 +64,7 @@ function NewsTab() {
       <NewsStack.Screen name="NewsDetail" component={NewsDetailScreen} />
       <NewsStack.Screen name="ComposePost" component={ComposePostScreen} />
       <NewsStack.Screen name="UserProfile" component={UserProfileScreen} />
+      <NewsStack.Screen name="FollowList" component={FollowListScreen} />
     </NewsStack.Navigator>
   );
 }
@@ -71,7 +75,9 @@ function ChatTab() {
       <ChatStack.Screen name="ChannelList" component={ChatScreen} />
       <ChatStack.Screen name="CreateChannel" component={CreateChannelScreen} />
       <ChatStack.Screen name="ChannelMessages" component={ChannelMessagesScreen} />
+      <ChatStack.Screen name="ChannelAdmin" component={ChannelAdminScreen} />
       <ChatStack.Screen name="UserProfile" component={UserProfileScreen} />
+      <ChatStack.Screen name="FollowList" component={FollowListScreen} />
     </ChatStack.Navigator>
   );
 }
@@ -82,6 +88,7 @@ function DmTab() {
       <DmStack.Screen name="DmList" component={DmListScreen} />
       <DmStack.Screen name="DmConversation" component={DmConversationScreen} />
       <DmStack.Screen name="UserProfile" component={UserProfileScreen} />
+      <DmStack.Screen name="FollowList" component={FollowListScreen} />
     </DmStack.Navigator>
   );
 }
@@ -96,7 +103,9 @@ function MoreTab() {
       <MoreStack.Screen name="WalletBalance" component={WalletBalanceScreen} />
       <MoreStack.Screen name="PinSetup" component={PinSetupScreen} />
       <MoreStack.Screen name="DebugLogs" component={DebugScreen} />
+      <MoreStack.Screen name="Notifications" component={NotificationsScreen} />
       <MoreStack.Screen name="UserProfile" component={UserProfileScreen} />
+      <MoreStack.Screen name="FollowList" component={FollowListScreen} />
     </MoreStack.Navigator>
   );
 }
@@ -129,10 +138,10 @@ export default function TabNavigator({ startScreen }: Props) {
   const nav = useNavigation<any>();
 
   const menuItems = [
-    { icon: 'people-outline' as const, label: 'Followed', onPress: () => nav.navigate('NewsTab') },
-    { icon: 'bookmarks-outline' as const, label: 'Bookmarks', onPress: () => nav.navigate('MoreTab', { screen: 'Bookmarks' }) },
-    { icon: 'book-outline' as const, label: 'Addressbook', onPress: () => nav.navigate('MoreTab', { screen: 'Addressbook' }) },
-    { icon: 'wallet-outline' as const, label: 'Wallet', onPress: () => nav.navigate('MoreTab', { screen: 'WalletBalance' }) },
+    { icon: 'notifications-outline' as const, label: t('nav_notifications'), onPress: () => nav.navigate('MoreTab', { screen: 'Notifications' }) },
+    { icon: 'bookmarks-outline' as const, label: t('news_bookmark'), onPress: () => nav.navigate('MoreTab', { screen: 'Bookmarks' }) },
+    { icon: 'book-outline' as const, label: t('nav_more'), onPress: () => nav.navigate('MoreTab', { screen: 'Addressbook' }) },
+    { icon: 'wallet-outline' as const, label: t('settings_wallet'), onPress: () => nav.navigate('MoreTab', { screen: 'WalletBalance' }) },
   ];
 
   const headerRight = () => (

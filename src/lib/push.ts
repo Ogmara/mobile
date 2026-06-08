@@ -10,6 +10,7 @@ import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import type { WalletSigner } from '@ogmara/sdk';
 
 /** Push gateway URL (configurable per environment). */
 const DEFAULT_GATEWAY_URL = 'http://localhost:41722';
@@ -76,19 +77,26 @@ export async function getNativeDeviceToken(): Promise<{ token: string; platform:
  */
 export async function registerWithGateway(
   gatewayUrl: string,
-  address: string,
-  authHeaders: Record<string, string>,
+  signer: WalletSigner,
   channels: number[] = [],
 ): Promise<boolean> {
   const tokenInfo = await getNativeDeviceToken();
   if (!tokenInfo) return false;
 
   try {
+    // Host-bound registration claim (audit 2026-06-07): the signature is bound
+    // to the gateway URL + a single-use nonce + the exact token. The signing
+    // address (== body address) must equal the registered address.
+    const { headers, address } = await signer.signPushClaim(
+      'register',
+      gatewayUrl,
+      tokenInfo.token,
+    );
     const resp = await fetch(`${gatewayUrl}/register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...authHeaders,
+        ...headers,
       },
       body: JSON.stringify({
         address,
@@ -107,13 +115,14 @@ export async function registerWithGateway(
 /** Unregister the device from the push gateway. */
 export async function unregisterFromGateway(
   gatewayUrl: string,
-  address: string,
+  signer: WalletSigner,
   token: string,
 ): Promise<boolean> {
   try {
+    const { headers, address } = await signer.signPushClaim('unregister', gatewayUrl, token);
     const resp = await fetch(`${gatewayUrl}/unregister`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({ address, token }),
     });
     return resp.ok;

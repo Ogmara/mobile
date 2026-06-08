@@ -5,6 +5,17 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-06-08
+
+### Security
+
+- **Host-bound auth (audit 2026-06-07, fix-plan B1.3/B1.2).** Adopted sdk-js
+  ≥0.25.0. Media uploads now obtain auth headers via the new public
+  `OgmaraClient.authHeaders()` (host-bound + nonced); `vaultSignRequest` takes a
+  `NodeBinding`. Push-gateway registration now signs a `signPushClaim`
+  (gateway-host + nonce bound) and the register/unregister helpers take a
+  `WalletSigner`. **Requires l2-node ≥0.61.0 and push-gateway ≥0.5.0.**
+
 ## [0.19.2] - 2026-04-06
 
 ### Fixed

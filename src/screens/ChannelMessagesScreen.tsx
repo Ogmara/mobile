@@ -476,7 +476,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         name: filename,
       } as any);
 
-      const headers = await signer.signRequest('POST', '/api/v1/media/upload');
+      const headers = await client.authHeaders('POST', '/api/v1/media/upload');
       const nodeUrl = (client as any).nodeUrl || '';
       const resp = await fetch(`${nodeUrl}/api/v1/media/upload`, {
         method: 'POST',

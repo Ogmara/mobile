@@ -12,7 +12,7 @@
  */
 
 import * as SecureStore from 'expo-secure-store';
-import { WalletSigner } from '@ogmara/sdk';
+import { WalletSigner, type NodeBinding } from '@ogmara/sdk';
 import { encryptWithKey, decryptWithKey } from './appLock';
 
 const VAULT_RAW_KEY = 'ogmara.vault.private_key';
@@ -189,12 +189,18 @@ export async function vaultWipe(): Promise<void> {
   await SecureStore.deleteItemAsync(VAULT_MODE_KEY).catch(() => {});
 }
 
-/** Sign an auth request through the vault. */
+/**
+ * Sign an auth request through the vault. `binding` is the target node's
+ * `{ network, nodeId }` (audit 2026-06-07 host-binding) — obtain it from the
+ * node's `/api/v1/health`; the vault layer stays network-free by taking it as
+ * a parameter. Prefer `OgmaraClient.authHeaders()` for client-routed calls.
+ */
 export async function vaultSignRequest(
   method: string,
   path: string,
+  binding: NodeBinding,
 ): Promise<{ [key: string]: string } | null> {
   if (!cachedSigner) return null;
-  const headers = await cachedSigner.signRequest(method, path);
+  const headers = await cachedSigner.signRequest(method, path, binding);
   return { ...headers };
 }

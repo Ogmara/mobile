@@ -107,7 +107,7 @@ export default function ComposePostScreen({ route, navigation }: Props) {
             name: safeName,
           } as any);
 
-          const headers = signer ? await signer.signRequest('POST', '/api/v1/media/upload') : {};
+          const headers = signer ? await client.authHeaders('POST', '/api/v1/media/upload') : {};
           const nodeUrl = (client as any).nodeUrl || '';
           const uploadResp = await fetch(`${nodeUrl}/api/v1/media/upload`, {
             method: 'POST',

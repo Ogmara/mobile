@@ -10,6 +10,7 @@ import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
+  Image,
   TextInput,
   FlatList,
   StyleSheet,
@@ -24,6 +25,7 @@ import { useConnection } from '../context/ConnectionContext';
 import { decodeNewsPost } from '../lib/payloadDecoder';
 import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import { debugLog } from '../lib/debug';
+import { addJoinedChannel } from '../lib/joinedChannels';
 import type { Envelope, Channel } from '@ogmara/sdk';
 import type { SearchStackParamList } from '../navigation/types';
 
@@ -105,19 +107,34 @@ export default function SearchScreen() {
   const renderResult = ({ item }: { item: SearchResult }) => {
     if (item.type === 'channel') {
       const ch = item.data;
+      const openChannel = async () => {
+        // Tapping a search result joins the channel (adds it to the Chat list) and
+        // opens it. Public channels are readable immediately; the join makes it stick.
+        await addJoinedChannel(ch.channel_id).catch(() => {});
+        navigation.navigate('ChannelMessages', { channelId: ch.channel_id, channelName: ch.display_name || ch.slug });
+      };
       return (
         <TouchableOpacity
           style={[styles.row, { borderBottomColor: colors.border }]}
-          onPress={() => navigation.navigate('ChannelMessages', { channelId: ch.channel_id, channelName: ch.display_name || ch.slug })}
+          onPress={openChannel}
+          activeOpacity={0.7}
         >
-          <View style={[styles.badge, { backgroundColor: colors.accentPrimary }]}>
-            <Text style={[styles.badgeText, { color: colors.textInverse }]}>#</Text>
-          </View>
+          {ch.logo_cid && client ? (
+            <Image source={{ uri: client.getMediaUrl(ch.logo_cid) }} style={styles.badge} />
+          ) : (
+            <View style={[styles.badge, { backgroundColor: colors.accentPrimary }]}>
+              <Text style={[styles.badgeText, { color: colors.textInverse }]}>
+                {(ch.display_name || ch.slug || '#').slice(0, 1).toUpperCase()}
+              </Text>
+            </View>
+          )}
           <View style={styles.rowContent}>
             <Text style={[styles.rowTitle, { color: colors.textPrimary }]}>
               {ch.display_name || ch.slug}
             </Text>
-            <Text style={[styles.rowSub, { color: colors.textSecondary }]}>{t('nav_channels')}</Text>
+            <Text style={[styles.rowSub, { color: colors.textSecondary }]}>
+              {t('nav_channels')}{ch.member_count !== undefined ? ` · ${ch.member_count}` : ''}
+            </Text>
           </View>
         </TouchableOpacity>
       );
@@ -247,9 +264,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   badge: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
+    width: 44,
+    height: 44,
+    borderRadius: radius.full,
     justifyContent: 'center',
     alignItems: 'center',
   },

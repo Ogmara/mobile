@@ -5,6 +5,267 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.2] - 2026-06-15
+
+### Changed
+
+- **Recent Activity labels transactions by type** instead of generic "Sent"/"Received".
+  Stake/Unstake/Delegate/Undelegate/Withdraw/Claim/Contract-call each get their own label,
+  glyph and accent (from the native Klever contract type), so staking actions are no longer
+  confusingly shown as "Sent". `txHistory` now captures the contract type. Localized (7 langs).
+
+## [0.25.1] - 2026-06-15
+
+### Fixed
+
+- **KLV delegation failed with "could not create reward address from provided param."**
+  The Delegate contract used `toAddress` for the validator, but the Klever `/transaction/send`
+  API uses `receiver` for the address field (same convention as Transfer). Switched the
+  Delegate payload to `{ bucketID, receiver }`.
+
+## [0.25.0] - 2026-06-15
+
+### Added
+
+- **Staking, delegation & rewards hub.** Tapping a token in the wallet opens a new
+  `TokenDetailScreen` where users can:
+  - **Stake (freeze)** an asset, and **claim** staking/delegation rewards
+    (`/address/{addr}/allowance` → claimable amount).
+  - For **KLV**: **delegate** a bucket to a validator (picked from `/validator/list`,
+    shown with logo, name, commission, total stake), **undelegate**, **unstake**
+    (unfreeze), and **withdraw** matured funds.
+  - Per-bucket status (staked / delegated to <validator> / unfreezing).
+  - All actions are native Klever contracts via `kleverTx` (Freeze/Unfreeze/Delegate/
+    Undelegate/Withdraw/Claim = types 4/5/6/7/8/9), built+signed+broadcast through the
+    verified `/transaction/send` → decode → sign → broadcast flow. `klever.ts` gained
+    `StakeBucket`/`Validator` types, bucket parsing, `fetchAssetRewards`, `fetchValidators`.
+  - Fully localized across the 7 languages.
+
+> Note: tested against Klever **testnet**. Verify on testnet before mainnet use — the node
+> simulates and rejects malformed contract payloads on `/transaction/send`, so a bad action
+> fails safely (nothing is broadcast).
+
+## [0.24.0] - 2026-06-15
+
+### Changed
+
+- **Explorer links now use Ogmara's own explorer (kleverchain.org)** instead of kleverscan.
+  All deep links use the documented query-param routes: transactions
+  (`/transactions?hash=`), wallet (`/wallet?address=`), staking (`/staking?address=`),
+  reconciliation (`/reconciliation?address=`), contracts (`/contracts?address=`).
+  `&network=testnet` is appended on testnet. New helpers `getExplorerAddressUrl` /
+  `getExplorerStakingUrl` / `getExplorerReconciliationUrl` / `getExplorerContractUrl`.
+
+### Added
+
+- **Staked balances in the wallet hub.** Frozen/staked amounts (KLV freeze + per-KDA
+  staking) are now included so the **total portfolio value sums correctly**: the hero card
+  shows "🔒 incl. \$X staked", and each asset row shows its 🔒 staked amount under the
+  available balance. New Manage actions: **Staking overview** and **View on explorer**
+  (deep-link to kleverchain.org for the connected address). Fully localized (7 languages).
+
+## [0.23.2] - 2026-06-15
+
+### Fixed
+
+- **Root cause of the dark/unscannable QR (and washed-out cards): platform force-dark.**
+  The Android `DayNight` theme had no `forceDarkAllowed` override, so on a dark system
+  (notably MIUI's aggressive force-dark) the OS auto-inverted light surfaces — turning the
+  white QR card gray (unscannable) and desaturating the accent hero card. Added
+  `android:forceDarkAllowed=false` to the app theme (the app ships its own Modern dark
+  theme); white renders true white and accents render at full saturation. Status-bar color
+  updated to the Modern dark `#0E1621`.
+
+### Changed
+
+- **Wallet hero card now uses a top→bottom gradient** (lighter accent → accent → deeper),
+  rendered dependency-free via a pure-JS `Gradient` component (flex colour bands), with a
+  subtle elevation shadow and a pill-style copy-address chip.
+- **Send / Receive / Manage actions** redesigned with filled accent circles and proper
+  Ionicons (arrow-up / qr-code / settings) instead of plain text glyphs.
+
+## [0.23.1] - 2026-06-15
+
+### Fixed
+
+- **Receive QR was dark/smeared and hard to scan.** The QR cells used a fractional pixel
+  size, so adjacent modules overlapped (black bled over white) with no clean quiet zone.
+  `QrCode` now uses integer cell sizes, centers the grid, and renders a proper 4-module
+  white quiet zone — crisp black-on-white, reliably scannable.
+
+## [0.23.0] - 2026-06-15
+
+### Added
+
+- **Redesigned wallet — "Portfolio Hero" hub.** The wallet is now a single modern screen:
+  - Gradient hero card showing **total portfolio value in USD** + KLV balance + tappable
+    (copy) address, with circular **Send / Receive / Manage** actions.
+  - **Assets list** with token logos, balances, **USD value**, and a **7-day sparkline** per
+    token — sourced from the keyless `api.bitcoin.me/tokens` feed (`src/lib/prices.ts`,
+    AsyncStorage-cached). Sparklines render with plain Views (`Sparkline.tsx`, no chart dep).
+  - **Receive screen** with a scannable QR of your address + copy/share (`ReceiveScreen.tsx`,
+    `QrCode.tsx` using the pure-JS `qrcode-generator` — no native module).
+  - **Recent activity**: last on-chain transactions from the Klever API
+    (`src/lib/txHistory.ts`), each linking to the explorer.
+  - **Inline management** behind Manage: on-chain register, export private key (with warning),
+    disconnect — no longer a separate screen. The Settings wallet row now opens this hub when
+    a wallet is connected.
+
+## [0.22.4] - 2026-06-15
+
+### Fixed
+
+- **CRITICAL: wallet failed to load on launch ("no wallet" despite the key being present).**
+  The vault was never changed and the key was never lost (`getVaultDiagnostics` confirmed
+  `rawKey: true` in SecureStore). Root cause: a **duplicate `@noble/ed25519`** got installed
+  in `sdk-js/node_modules` (via an `npm install` in the SDK), and `metro.config`'s
+  `extraNodeModules` only dedupes when no local copy exists. The SDK then loaded an
+  **unpatched** ed25519 instance (missing the Hermes `sha512Async` polyfill), so
+  `WalletSigner.fromHex` → `getPublicKeyAsync` threw and `vaultInit` silently returned null
+  on restore. Fix: `metro.config` now forces `@noble/*` + `@msgpack/msgpack` to a single
+  shared instance via a `resolveRequest` override (no longer dependent on manually deleting
+  the SDK's copy), guaranteeing the polyfill applies to the instance the SDK uses. Reinstall
+  over the top (same signing key) and the existing wallet loads again — no re-import needed.
+
+## [0.22.3] - 2026-06-15
+
+### Fixed
+
+- **Keyboard overlapped the channel composer.** `ChannelMessagesScreen` used
+  `KeyboardAvoidingView behavior="padding"` on Android (broken under edge-to-edge); now
+  uses the same `behavior="height"` + offset as the working DM screen, so the input rises
+  above the keyboard.
+- **Channel/DM delete (and edit/react) failed silently.** These caught the error and only
+  logged it, so a node rejection looked like "nothing happened". They now show an alert,
+  with a clear message when the node requires a **verified wallet** or is busy with
+  **proof-of-work** (`verify_wallet_required` / `pow_busy`), via a shared `chatErrors` mapper.
+- **"Too many pending challenges" (503) when sending in a channel.** Root-caused in the SDK
+  (bumped to **@ogmara/sdk 0.39.0**): a burst of writes each solved its own PoW challenge on
+  slow Hermes. The SDK now dedupes/serializes the solve so a burst collapses to one
+  challenge — sends/edits/deletes go through reliably instead of erroring after a long wait.
+
+## [0.22.2] - 2026-06-15
+
+### Fixed
+
+- **Search results were dead — tapping a channel did nothing.** `SearchTab` was registered
+  as a bare screen, not a stack, so every `navigate()` from search (channel, post, profile)
+  silently failed. Wrapped Search in its own stack navigator (`SearchHome` + `ChannelMessages`
+  + `ChannelJoin` + `NewsDetail` + `UserProfile` + `FollowList`).
+- **Join from search.** Tapping a channel in search now joins it (adds it to the Chat list
+  via `addJoinedChannel`) and opens it.
+
+### Added
+
+- **Channel logos in search results** (`logo_cid` → circular avatar, channel-initial
+  fallback instead of `#`), matching the chat list; member count shown in the subtitle.
+
+## [0.22.1] - 2026-06-15
+
+### Added
+
+- **Channel logos in the chat list.** `ChatScreen` now renders the channel's `logo_cid`
+  (node-enriched IPFS image) as a circular avatar, falling back to the channel's initial
+  instead of a generic `#`. Matches the desktop Modern look.
+
+### Fixed
+
+- **Always connect to the fastest node, not a stale slow one.** After connecting to the
+  saved node (fast cold start), `ConnectionContext` now runs a background best-ping pass
+  (`maybeOptimizeNode`) and silently switches to a meaningfully-faster reachable node
+  (≥120 ms better) — unless the user explicitly pinned one in the picker. Previously a
+  slow node persisted across upgrades was kept forever, making the whole app feel slow.
+  An explicit pick in the node picker now pins the choice (`connectToNode(url, pin=true)`)
+  so the optimizer won't override it.
+
+## [0.22.0] - 2026-06-15
+
+### Changed
+
+- **Decentralized (SC-driven) node discovery — removed the last static seed.** Mobile now
+  bootstraps nodes the same way web/desktop do: from the on-chain Klever KApp registry
+  (`getActiveNodes`/`getNodeMetadata` via `discoverNodesViaSc`), unioned with peers the
+  current node advertises and the user's previously-used nodes — no hardcoded seed.
+  - `src/lib/api.ts`: rewrote `getAvailableNodes()` to that 3-source union (staleness-filtered
+    to a 7-day anchor window, hostname-deduped, reachable-first); added
+    `bootstrapNodeSelection()` (best-ping landing on a fresh install), known-node memory
+    (`getKnownNodes`/`recordKnownNode`/`removeKnownNode`, persisted in `ogmara.known_nodes`),
+    and `discoveryNetwork()`/`rememberNetwork()` (persists the connected node's
+    `/health.network` into `ogmara.klever_network`, default testnet, so the next cold boot
+    queries the right registry).
+  - `src/context/ConnectionContext.tsx`: boot now runs `bootstrapNodeSelection()` when no node
+    is saved, and falls back to SC discovery when a saved node is unreachable; persists the
+    network from `/health`. Default node URL is `''` (the dead `node.ogmara.org`/`DEFAULT_NODE_URL`
+    seed is gone).
+  - `src/components/NodeSelector.tsx`: no longer injects the empty default node; shows the
+    SC-discovered list with a "no nodes found" empty state, and **switches the live connection
+    via `connectToNode`** (previously the picker only updated a setting, so a node change needed
+    an app restart and didn't rebind device keys).
+
+## [0.21.0] - 2026-06-15
+
+### Added
+
+- **End-to-end encryption (E2E P0–P4) — desktop parity, mainnet gate.** Ported the
+  full encryption stack to mobile (built-in wallets):
+  - **P0 device keys** (`src/lib/deviceEnc.ts`): per-install X25519 enc keypair stored in
+    `expo-secure-store` under a separate `ogmara.e2e.*` namespace (the wallet vault's
+    `ogmara.vault.*` keys are never touched); wallet-signed binding published + verified
+    on every login (idempotent, best-effort), stale-key revoke on rotation.
+  - **P1 encrypted DMs** (`src/lib/dmCrypto.ts` + `DmConversationScreen`): per-sender
+    `conv_key`s wrapped to every device of both participants; encrypt-on-send,
+    decrypt-on-render with "waiting for key" / "can't decrypt" states; encrypted edits;
+    late-device cover on incoming DMs; distinct messaging when a recipient hasn't enabled
+    encryption.
+  - **P2 private + P4 public encrypted channels** (`src/lib/channelCrypto.ts` +
+    `ChannelMessagesScreen`): group epoch keys, mod-gated seeding for private / any-member
+    seeding for public, auto-join encrypted public channels, key rotation on
+    `channel_members_changed` (P2d/P4 floor), 🔒 indicators.
+  - **P3 key recovery vault** (`src/lib/keyVault.ts` + Settings → "Encryption & Key
+    Backup"): symmetric content keys sealed under a wallet-derived backup key and synced
+    to the node; restore-before-backup ordering; auto-restore on decrypt-miss; manual
+    back-up / restore / self-check. Wallet private keys are NEVER placed in the vault.
+  - New `src/lib/cryptoEnv.ts` exposes the live signer/client to the React-free crypto
+    libs; `src/lib/e2eDebug.ts` is an on-device trace recorder.
+  - **K5 (external wallet) E2E is intentionally gated off** for now (the delegated device
+    key can't sign wallet-bound claims); DMs fall back with a clear message. Fast-follow.
+- **Cross-node federation** for private channels: new `ChannelJoinScreen` previews a
+  channel from an invite's `?node=` host hint and federates it to the user's home node on
+  join (no node switch); `src/lib/share.ts` builds canonical invite links matching
+  web/desktop; "Share invite link" action in channel admin; `join/:channelId` deep-link
+  route (hash-URL tolerant via `getStateFromPath`).
+
+### Changed
+
+- **Modern design is now the only mobile style.** Color tokens (`src/theme/tokens.ts`)
+  switched to the desktop "Modern" Telegram-blue palette (light + dark); message bubbles
+  use the Modern tail-corner treatment; splash/adaptive-icon and Android notification
+  channel colors realigned. Spacing/typography/radius scales unchanged (project rule).
+- Channel deletion now drops the channel from the local joined set and returns to the
+  channel list immediately after the gossiped `ChannelDelete` succeeds.
+
+### Security
+
+- New E2E key material lives in an isolated `ogmara.e2e.*` SecureStore/AsyncStorage
+  namespace; the tested wallet vault format/keys are untouched (no `VAULT_VERSION` change).
+- **Dependency audit:** no new runtime dependencies were added in this release. Ran
+  `npm audit fix` (non-breaking, lockfile-only) which cleared the **critical** (`shell-quote`)
+  and **high** (`@xmldom/xmldom`) advisories plus 2 moderates (`ws`, `brace-expansion`) —
+  16 → 12 advisories, release APK rebuilt + verified afterward. The remaining **12 moderate**
+  advisories are all in the **Expo SDK 54 build/dev toolchain** (`@expo/*`, `expo`,
+  `expo-asset`/`-constants`/`-notifications`, `postcss`, `uuid`, `xcode`); npm gates every fix
+  behind an `expo` 54→56 **major migration** (RN bump + native-module updates + `android/`
+  regen) which is out of scope here and can't be done by a blind `--force`. **Deferred** to a
+  dedicated Expo-SDK-upgrade pass per the project's "never fix-force blind on an untestable
+  mobile toolchain" rule. Real-world severity is low: all are build-time tooling except the
+  `uuid` bounds check, whose vulnerable `buf` code path the app never calls.
+
+### Known issues
+
+- Pre-existing TypeScript errors (not introduced here) in `src/lib/settingsSync.ts` (stale
+  SDK method names / `getClient()` await) and snake_case-vs-camelCase channel payloads in
+  `ChannelAdminScreen`/`CreateChannelScreen` — flagged for a follow-up SDK-alignment pass.
+
 ## [0.20.0] - 2026-06-08
 
 ### Security

@@ -15,6 +15,14 @@ const KEYS = {
   theme: 'ogmara.theme',
   startScreen: 'ogmara.default_start_screen',
   nodeUrl: 'ogmara.node_url',
+  // Klever network the cold-boot SC node discovery targets. Persisted from the
+  // connected node's /health.network; defaults to testnet during the testnet phase.
+  kleverNetwork: 'ogmara.klever_network',
+  // JSON array of node URLs the user has successfully switched to (picker memory).
+  knownNodes: 'ogmara.known_nodes',
+  // '1' when the user explicitly picked a node in the picker — auto best-ping
+  // optimization then leaves their choice alone.
+  nodePinned: 'ogmara.node_pinned',
   walletAddress: 'ogmara.wallet_address',
   walletSource: 'ogmara.wallet_source',
   deviceRegistered: 'ogmara.device_registered',
@@ -30,6 +38,12 @@ const KEYS = {
   avatarCid: 'ogmara.avatar_cid',
   avatarLocalUri: 'ogmara.avatar_local_uri',
   mediaAutoload: 'ogmara.media_autoload',
+  // E2E encryption (kept in a separate ogmara.e2e.* namespace so wallet-vault
+  // migrations never touch these). deviceId/encKeyBound are public markers; the
+  // device enc *private* key lives in SecureStore, not here.
+  deviceId: 'ogmara.e2e.device_id',
+  encKeyBound: 'ogmara.e2e.enc_key_bound',
+  e2eDebug: 'ogmara.e2e.debug',
 } as const;
 
 /** Read a string setting. */

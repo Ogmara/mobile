@@ -1,0 +1,373 @@
+/**
+ * Encrypted channels (P2 private OECK + P4 public) — mobile port of desktop
+ * `channelCrypto.ts`. A channel has a single random 32-byte `channel_key` per epoch,
+ * delivered to every member device via `ChannelKeyEnvelope` (0x61, channel scope) and
+ * used to XChaCha20-Poly1305-encrypt each message's TEXT (mentions/reply_to/
+ * content_rating stay plaintext, spec §3.3).
+ *
+ * Mirrors `dmCrypto.ts` but the key is a GROUP key (shared by all members, fetched
+ * author-agnostically). Only the creator/mods ESTABLISH an epoch; regular members
+ * fetch + decrypt + cover new joiners. Any member may rotate to the floor (P2d/P4).
+ */
+import {
+  computeChannelScope,
+  wrapConvKey,
+  unwrapConvKey,
+  randomConvKey,
+  decryptDmContent,
+  buildChannelKeyEnvelope,
+  buildEncryptedChannelMessage,
+  KeyScopeKind,
+  type OgmaraClient,
+  type WrappedKey,
+} from '@ogmara/sdk';
+import { decode } from '@msgpack/msgpack';
+import { getSigner, getCryptoClient } from './cryptoEnv';
+import { e2elog, withRetry } from './e2eDebug';
+import {
+  deviceCtx, toHex, fromHex, targetKey, toBytes,
+  notifyKeyringChanged, requestVaultRestore,
+  type DeviceCtx, type Target, type DmDisplay,
+} from './dmCrypto';
+
+export type { DmDisplay } from './dmCrypto';
+
+function getClient(): OgmaraClient {
+  const c = getCryptoClient();
+  if (!c) throw new Error('crypto client unavailable');
+  return c;
+}
+
+/** Channel group-key cache: `${channelScopeHex}:${epoch}` → 32-byte key. */
+const channelKeys = new Map<string, Uint8Array>();
+const ckey = (scopeHex: string, epoch: number) => `${scopeHex}:${epoch}`;
+
+/** Cache a channel epoch key and signal the vault layer to back it up (P3). */
+function cacheChannelKey(k: string, key: Uint8Array): void {
+  channelKeys.set(k, key);
+  notifyKeyringChanged();
+}
+/** Snapshot channel epoch keys for the vault. */
+export function exportChannelKeysForVault(): Record<string, Uint8Array> {
+  const out: Record<string, Uint8Array> = {};
+  for (const [k, v] of channelKeys) out[k] = v;
+  return out;
+}
+/** Merge vault-restored channel keys in; never clobber a key already cached. */
+export function importChannelKeysFromVault(rec: Record<string, Uint8Array>): number {
+  let added = 0;
+  for (const [k, v] of Object.entries(rec)) {
+    if (!channelKeys.has(k) && v instanceof Uint8Array && v.length === 32) {
+      channelKeys.set(k, v);
+      added++;
+    }
+  }
+  return added;
+}
+
+/** Highest cached epoch for a channel scope, or null. */
+function cachedLatest(scopeHex: string): { key: Uint8Array; epoch: number } | null {
+  let best: { key: Uint8Array; epoch: number } | null = null;
+  for (const [k, v] of channelKeys) {
+    if (k.startsWith(`${scopeHex}:`)) {
+      const epoch = Number(k.slice(scopeHex.length + 1));
+      if (!best || epoch > best.epoch) best = { key: v, epoch };
+    }
+  }
+  return best;
+}
+
+/** Per-channel in-flight establishment, so a double-send doesn't fork the key. */
+const establishing = new Map<number, Promise<{ key: Uint8Array; epoch: number }>>();
+/** Which `(target, device)` we've wrapped the key to, per `${scopeHex}:${epoch}`. */
+const wrappedToDevices = new Map<string, Set<string>>();
+const lastCoverMs = new Map<number, number>();
+const COVER_THROTTLE_MS = 10_000;
+
+export function clearChannelKeyCache(): void {
+  for (const v of channelKeys.values()) v.fill(0);
+  channelKeys.clear();
+  establishing.clear();
+  wrappedToDevices.clear();
+  lastCoverMs.clear();
+}
+
+const asBytes = (v: unknown): Uint8Array | null =>
+  v instanceof Uint8Array ? v : Array.isArray(v) ? Uint8Array.from(v as number[]) : null;
+
+/** Fetch every member's device enc keys and dedup to one wrap per (member, device). */
+async function getChannelTargets(channelId: number): Promise<Target[]> {
+  const client = getClient();
+  const PAGE = 200;
+  const members: { address: string }[] = [];
+  for (let page = 1; page <= 50; page++) {
+    const resp = await withRetry(
+      () => client.getChannelMembers(channelId, { page, limit: PAGE }),
+      'fetch channel members',
+    );
+    members.push(...resp.members);
+    if (resp.members.length < PAGE) break;
+    if (page === 50) e2elog('channel targets: member pagination cap hit (>10k)', { channelId });
+  }
+  const raw: Target[] = [];
+  for (const m of members) {
+    let keys: { device_id: string; enc_pub: string; created_at?: number }[] = [];
+    try {
+      keys = (await withRetry(() => client.getEncKeys(m.address), 'fetch enc keys')).keys;
+    } catch {
+      continue; // covered on the next pass
+    }
+    for (const k of keys) {
+      raw.push({ target: m.address, deviceId: k.device_id, encPub: k.enc_pub, createdAt: k.created_at ?? 0 });
+    }
+  }
+  const byDevice = new Map<string, Target>();
+  for (const t of raw) {
+    const prev = byDevice.get(targetKey(t));
+    if (!prev || t.createdAt > prev.createdAt) byDevice.set(targetKey(t), t);
+  }
+  return [...byDevice.values()];
+}
+
+/** Fetch + unwrap MY wrapped channel key for `epoch` (latest if omitted). */
+type FetchResult = { key: Uint8Array; epoch: number } | 'missing' | 'corrupt';
+async function fetchChannelKey(
+  ctx: DeviceCtx, channelId: number, scope: Uint8Array, scopeHex: string, epoch?: number,
+): Promise<FetchResult> {
+  let resp;
+  try {
+    resp = await withRetry(() => getClient().getKeyEnvelope(scopeHex, ctx.deviceId, '', epoch), 'fetch channel key');
+  } catch (e) {
+    e2elog('channel fetchKey: network → missing', { channelId, epoch, err: (e as Error)?.message });
+    return 'missing';
+  }
+  if (!resp.envelope) return 'missing';
+  try {
+    const env = resp.envelope;
+    const wrapped: WrappedKey = { ephPub: fromHex(env.eph_pub), nonce: fromHex(env.nonce), wrapped: fromHex(env.wrapped) };
+    const key = unwrapConvKey(wrapped, ctx.encPriv, scope); // salt = channel scope (matches wrap)
+    const ep = resp.epoch ?? env.epoch;
+    cacheChannelKey(ckey(scopeHex, ep), key);
+    return { key, epoch: ep };
+  } catch (e) {
+    e2elog('channel fetchKey: unwrap FAILED → corrupt', { channelId, epoch, err: (e as Error)?.message });
+    return 'corrupt';
+  }
+}
+
+/** Wrap `key` to each target's device and publish one envelope per device. */
+async function wrapKeyToMembers(
+  ctx: DeviceCtx, channelId: number, scope: Uint8Array, scopeHex: string,
+  key: Uint8Array, epoch: number, targets: Target[],
+): Promise<void> {
+  const client = getClient();
+  const covered = wrappedToDevices.get(ckey(scopeHex, epoch)) ?? new Set<string>();
+  for (const tg of targets) {
+    const wrapped: WrappedKey = wrapConvKey(key, fromHex(tg.encPub), scope);
+    const envelope = await buildChannelKeyEnvelope(ctx.signer!, {
+      keyScope: scope, scopeKind: KeyScopeKind.Channel, epoch,
+      target: tg.target, deviceId: tg.deviceId, channelId, wrapped,
+    });
+    await withRetry(() => client.publishKeyEnvelope(envelope), 'publish channel key');
+    covered.add(targetKey(tg));
+  }
+  wrappedToDevices.set(ckey(scopeHex, epoch), covered);
+}
+
+const bytesEq = (a: Uint8Array, b: Uint8Array): boolean =>
+  a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** Establish epoch `epoch` with FWW read-back-adopt. */
+async function establishChannelKey(
+  ctx: DeviceCtx, channelId: number, scope: Uint8Array, scopeHex: string, epoch: number,
+): Promise<{ key: Uint8Array; epoch: number }> {
+  const targets = await getChannelTargets(channelId);
+  const key = randomConvKey();
+  await wrapKeyToMembers(ctx, channelId, scope, scopeHex, key, epoch, targets);
+  cacheChannelKey(ckey(scopeHex, epoch), key);
+  const confirmed = await fetchChannelKey(ctx, channelId, scope, scopeHex, epoch);
+  if (typeof confirmed !== 'string' && !bytesEq(confirmed.key, key)) {
+    wrappedToDevices.delete(ckey(scopeHex, epoch));
+    e2elog('channel establish: adopted node FWW key, cleared cover set', { channelId, epoch });
+    void coverChannelMembers(channelId);
+    return { key: confirmed.key, epoch };
+  }
+  e2elog('channel establish: published', { channelId, epoch, devices: targets.length });
+  return { key, epoch };
+}
+
+/** Wrap the current channel key to any member device we haven't covered yet (new joiners). */
+export async function coverChannelMembers(channelId: number): Promise<void> {
+  const ctx = await deviceCtx();
+  if (!ctx) return;
+  const now = Date.now();
+  if (now - (lastCoverMs.get(channelId) ?? 0) < COVER_THROTTLE_MS) return;
+  lastCoverMs.set(channelId, now);
+  const scope = computeChannelScope(channelId);
+  const scopeHex = toHex(scope);
+  let entry = cachedLatest(scopeHex);
+  if (!entry) {
+    const fetched = await fetchChannelKey(ctx, channelId, scope, scopeHex);
+    if (typeof fetched === 'string') return; // I don't have the key myself yet
+    entry = fetched;
+  }
+  try {
+    const targets = await getChannelTargets(channelId);
+    const done = wrappedToDevices.get(ckey(scopeHex, entry.epoch)) ?? new Set<string>();
+    const missing = targets.filter((t) => !done.has(targetKey(t)));
+    if (missing.length > 0) {
+      await wrapKeyToMembers(ctx, channelId, scope, scopeHex, entry.key, entry.epoch, missing);
+      e2elog('channel cover: wrapped to new devices', { channelId, count: missing.length });
+    }
+  } catch (e) {
+    lastCoverMs.set(channelId, 0);
+    e2elog('channel cover skipped', { err: (e as Error)?.message });
+  }
+}
+
+/** Best key we hold/can fetch for a scope (cache first, then a node fetch). */
+async function bestChannelKey(
+  ctx: DeviceCtx, channelId: number, scope: Uint8Array, scopeHex: string,
+): Promise<{ key: Uint8Array; epoch: number } | null> {
+  const cached = cachedLatest(scopeHex);
+  if (cached) return cached;
+  const fetched = await fetchChannelKey(ctx, channelId, scope, scopeHex);
+  return typeof fetched === 'string' ? null : fetched;
+}
+
+/** P2d/P4 rotation: establish a fresh epoch ≥ `floor` and wrap to CURRENT members only. */
+export async function rotateChannelKey(channelId: number, floor: number): Promise<void> {
+  if (floor <= 0) return;
+  const ctx = await deviceCtx();
+  if (!ctx) return;
+  const scope = computeChannelScope(channelId);
+  const scopeHex = toHex(scope);
+  const best = await bestChannelKey(ctx, channelId, scope, scopeHex);
+  if (best && best.epoch >= floor) return; // already rotated
+  const targetEpoch = Math.max((best?.epoch ?? 0) + 1, floor);
+  try {
+    let inflight = establishing.get(channelId);
+    if (!inflight) {
+      inflight = establishChannelKey(ctx, channelId, scope, scopeHex, targetEpoch)
+        .finally(() => establishing.delete(channelId));
+      establishing.set(channelId, inflight);
+    }
+    await inflight;
+    e2elog('channel rotate: established epoch', { channelId, targetEpoch });
+  } catch (e) {
+    e2elog('channel rotate failed', { channelId, err: (e as Error)?.message });
+  }
+}
+
+/**
+ * Ensure a channel key for sending. Returns the key, `'waiting'` when none exists yet
+ * and this client may not establish (non-mod must wait for a mod to seed/cover), or
+ * `null` if the device isn't ready. Enforces the rotation floor (P2d).
+ *
+ * @param canEstablish creator/mods only — gates SEEDING the first epoch.
+ * @param floor lowest epoch we may encrypt under (channel's `key_epoch_floor`).
+ */
+export async function ensureChannelKeyForSend(
+  channelId: number, canEstablish: boolean, floor = 0,
+): Promise<{ convKey: Uint8Array; epoch: number } | 'waiting' | null> {
+  const ctx = await deviceCtx();
+  if (!ctx) return null;
+  const scope = computeChannelScope(channelId);
+  const scopeHex = toHex(scope);
+
+  const best = await bestChannelKey(ctx, channelId, scope, scopeHex);
+  if (best && best.epoch >= floor) {
+    void coverChannelMembers(channelId);
+    return { convKey: best.key, epoch: best.epoch };
+  }
+
+  if (best) {
+    await rotateChannelKey(channelId, floor);
+    const after = cachedLatest(scopeHex);
+    if (after && after.epoch >= floor) return { convKey: after.key, epoch: after.epoch };
+    return 'waiting';
+  }
+
+  if (!canEstablish) return 'waiting';
+  const targetEpoch = Math.max(1, floor);
+  let inflight = establishing.get(channelId);
+  if (!inflight) {
+    inflight = establishChannelKey(ctx, channelId, scope, scopeHex, targetEpoch)
+      .finally(() => establishing.delete(channelId));
+    establishing.set(channelId, inflight);
+  }
+  const res = await inflight;
+  return { convKey: res.key, epoch: res.epoch };
+}
+
+/** Build a signed, encrypted ChatMessage for an encrypted channel. */
+export async function buildEncryptedChannelMsg(
+  channelId: number, canEstablish: boolean, text: string,
+  opts?: {
+    replyTo?: string; mentions?: string[];
+    contentRating?: 'general' | 'teen' | 'mature' | 'explicit';
+    attachments?: Array<{ cid: string; mime_type: string; size_bytes: number; filename?: string; thumbnail_cid?: string }>;
+  },
+  floor = 0,
+): Promise<Uint8Array | 'waiting'> {
+  const established = await ensureChannelKeyForSend(channelId, canEstablish, floor);
+  if (established === 'waiting') return 'waiting';
+  if (!established) throw new Error('device not ready for encrypted channels');
+  const signer = getSigner();
+  if (!signer) throw new Error('no signer');
+  return buildEncryptedChannelMessage(signer, {
+    channelId, convKey: established.convKey, epoch: established.epoch,
+    text, replyTo: opts?.replyTo, mentions: opts?.mentions,
+    contentRating: opts?.contentRating, attachments: opts?.attachments,
+  });
+}
+
+interface RawChannelPayload {
+  content?: unknown;
+  enc_content?: unknown;
+  enc_nonce?: unknown;
+  key_epoch?: number;
+}
+
+/** Decrypt a channel message for rendering. v1 plaintext passes through. */
+export async function decryptChannelMessage(
+  payload: number[] | Uint8Array | string, channelId: number,
+): Promise<DmDisplay> {
+  const bytes = toBytes(payload);
+  if (!bytes) return { kind: 'error' };
+  let decoded: RawChannelPayload;
+  try {
+    decoded = decode(bytes) as RawChannelPayload;
+  } catch {
+    return { kind: 'error' };
+  }
+  const enc = asBytes(decoded.enc_content);
+  if (!enc) {
+    // v1 plaintext (or empty/attachment-only) message.
+    return { kind: 'plain', text: typeof decoded.content === 'string' ? decoded.content : '' };
+  }
+  const nonce = asBytes(decoded.enc_nonce);
+  if (!nonce) return { kind: 'error' };
+  const epoch = decoded.key_epoch ?? 1;
+
+  const ctx = await deviceCtx();
+  if (!ctx) return { kind: 'waiting' };
+  const scope = computeChannelScope(channelId);
+  const scopeHex = toHex(scope);
+  let key = channelKeys.get(ckey(scopeHex, epoch));
+  if (!key) {
+    const fetched = await fetchChannelKey(ctx, channelId, scope, scopeHex, epoch);
+    if (fetched === 'missing') {
+      requestVaultRestore();
+      return { kind: 'waiting' };
+    }
+    if (fetched === 'corrupt') return { kind: 'error' };
+    key = fetched.key;
+  }
+  try {
+    const pt = decryptDmContent(key, scope, epoch, enc, nonce);
+    return { kind: 'text', text: pt.text };
+  } catch {
+    return { kind: 'error' };
+  }
+}

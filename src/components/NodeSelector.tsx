@@ -20,10 +20,11 @@ import {
   Platform,
   Alert,
 } from 'react-native';
-import { pingNode, DEFAULT_NODE_URL } from '@ogmara/sdk';
+import { pingNode } from '@ogmara/sdk';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
-import { getAvailableNodes, getCurrentNodeUrl, switchNode } from '../lib/api';
+import { getAvailableNodes, getCurrentNodeUrl } from '../lib/api';
+import { useConnection } from '../context/ConnectionContext';
 import type { NodeWithPing } from '@ogmara/sdk';
 import AnchorBadge from './AnchorBadge';
 
@@ -35,6 +36,7 @@ interface Props {
 export default function NodeSelector({ visible, onClose }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const { connectToNode } = useConnection();
   const [nodes, setNodes] = useState<NodeWithPing[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentUrl, setCurrentUrl] = useState('');
@@ -46,21 +48,12 @@ export default function NodeSelector({ visible, onClose }: Props) {
     try {
       const url = await getCurrentNodeUrl();
       setCurrentUrl(url);
+      // SC-driven discovery (on-chain registry + peers + known nodes). No hardcoded
+      // seed — an empty result just means nothing was reachable; the user can add one.
       const discovered = await getAvailableNodes();
-
-      // Ensure the default node is always listed
-      const hasDefault = discovered.some((n) => n.url === DEFAULT_NODE_URL);
-      if (!hasDefault) {
-        const defaultPing = await pingNode(DEFAULT_NODE_URL);
-        discovered.push({ url: DEFAULT_NODE_URL, ping: defaultPing });
-      }
-
-      // Show all nodes (including unreachable) so user sees what's configured
       setNodes(discovered);
     } catch {
-      // Discovery failed — at least show the default
-      const defaultPing = await pingNode(DEFAULT_NODE_URL).catch(() => Infinity);
-      setNodes([{ url: DEFAULT_NODE_URL, ping: defaultPing }]);
+      setNodes([]);
     }
     setLoading(false);
   }, []);
@@ -73,7 +66,10 @@ export default function NodeSelector({ visible, onClose }: Props) {
   }, [visible, refresh]);
 
   const handleSelect = async (url: string) => {
-    await switchNode(url);
+    // Live switch through the connection manager (recreates the client, re-binds
+    // device keys, persists the node + network). pin=true: an explicit user choice
+    // the auto best-ping optimizer must not override. No app restart needed.
+    await connectToNode(url, true);
     setCurrentUrl(url);
     onClose();
   };
@@ -217,6 +213,11 @@ export default function NodeSelector({ visible, onClose }: Props) {
               renderItem={renderNode}
               contentContainerStyle={styles.list}
               keyboardShouldPersistTaps="handled"
+              ListEmptyComponent={
+                <Text style={[styles.hint, { color: colors.textSecondary }]}>
+                  {t('node_none_found')}
+                </Text>
+              }
               ListFooterComponent={
                 nodes.length > 0 ? (
                   <Text style={[styles.hint, { color: colors.textSecondary }]}>

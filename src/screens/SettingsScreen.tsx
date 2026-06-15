@@ -32,6 +32,9 @@ import { LANGUAGES, type LanguageCode } from '../i18n/init';
 import type { MoreStackParamList } from '../navigation/types';
 import NodeSelector from '../components/NodeSelector';
 import { uploadSettings, downloadSettings } from '../lib/settingsSync';
+import { e2eAvailable } from '../lib/cryptoEnv';
+import { backupNow, tryRestoreKeyVault } from '../lib/keyVault';
+import { e2eSelfCheck } from '../lib/dmCrypto';
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
@@ -495,6 +498,55 @@ export default function SettingsScreen() {
         </>
       )}
 
+      {/* Encryption & Key Backup (E2E P3) — built-in wallets only */}
+      {signer && e2eAvailable() && (
+        <>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+            {t('e2e_section')}
+          </Text>
+          <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={async () => {
+                try {
+                  await backupNow();
+                  Alert.alert(t('e2e_section'), t('e2e_backup_done'));
+                } catch (e) {
+                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                }
+              }}
+            >
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>{t('e2e_backup_now')}</Text>
+              <Text style={{ color: colors.accentPrimary }}>↑</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => {
+                tryRestoreKeyVault();
+                Alert.alert(t('e2e_section'), t('e2e_restore_done'));
+              }}
+            >
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>{t('e2e_restore')}</Text>
+              <Text style={{ color: colors.accentPrimary }}>↓</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={async () => {
+                try {
+                  const report = await e2eSelfCheck();
+                  Alert.alert(t('e2e_self_check'), String(report.bindingVerdict ?? report.error ?? ''));
+                } catch (e) {
+                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                }
+              }}
+            >
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>{t('e2e_self_check')}</Text>
+              <Text style={{ color: colors.textSecondary }}>🔒</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
       {/* Security — PIN & Biometric */}
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
         {t('settings_security')}
@@ -534,7 +586,7 @@ export default function SettingsScreen() {
         {t('settings_wallet')}
       </Text>
       <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-        <TouchableOpacity style={styles.row} onPress={() => navigation.navigate('Wallet')}>
+        <TouchableOpacity style={styles.row} onPress={() => navigation.navigate(address ? 'WalletBalance' : 'Wallet')}>
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {address ? address.slice(0, 16) + '...' : t('wallet_connect')}
           </Text>

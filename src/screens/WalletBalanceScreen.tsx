@@ -1,101 +1,179 @@
 /**
- * Wallet Balance — displays KLV and token balances from the Klever blockchain.
+ * Wallet hub — "Portfolio Hero" layout.
  *
- * Fetches account data from the Klever API (testnet or mainnet based on
- * debug settings). Shows available balance, frozen balance, and all tokens.
+ * Hero card (total fiat + KLV + address copy) → Send / Receive / Manage actions →
+ * asset list (icon + amount + USD value + 7-day sparkline + per-asset send) →
+ * recent transactions. Management (export key, on-chain register, disconnect) is
+ * inline behind the Manage action. Fiat/icons/sparklines from the keyless
+ * bitcoin.me feed; tx history + balances from the Klever API.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View,
-  Text,
-  FlatList,
-  RefreshControl,
-  StyleSheet,
-  ActivityIndicator,
-  TouchableOpacity,
-  TextInput,
-  Alert,
-  Modal,
-  Linking,
+  View, Text, ScrollView, RefreshControl, StyleSheet, ActivityIndicator,
+  TouchableOpacity, TextInput, Alert, Modal, Linking, Image,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
-import {
-  fetchAccountData,
-  formatTokenAmount,
-  type TokenBalance,
-} from '../lib/klever';
-import { sendTransfer, getExplorerTxUrl } from '../lib/kleverTx';
+import { fetchAccountData, formatTokenAmount } from '../lib/klever';
+import { sendTransfer, registerUser, getExplorerTxUrl, getExplorerAddressUrl, getExplorerStakingUrl } from '../lib/kleverTx';
+import { vaultExportKey } from '../lib/vault';
+import { loadPrices, fiatValue, formatUsd, type TokenPrice } from '../lib/prices';
+import { fetchRecentTransactions, type TxSummary } from '../lib/txHistory';
+import Sparkline from '../components/Sparkline';
+import Gradient from '../components/Gradient';
 import { debugLog } from '../lib/debug';
+import type { MoreStackParamList } from '../navigation/types';
+
+interface Asset { assetId: string; name: string; atomic: number; frozen: number; precision: number }
+
+/** Whole-token amount from atomic units. */
+function toWhole(atomic: number, precision: number): number {
+  return precision === 0 ? atomic : atomic / Math.pow(10, precision);
+}
+
+/** Label, glyph and accent for an activity row, by native Klever contract type. */
+function txAppearance(tx: TxSummary, t: (k: string) => string, colors: any): { label: string; glyph: string; color: string } {
+  switch (tx.contractType) {
+    case 4: return { label: t('tx_staked'), glyph: '🔒', color: colors.accentPrimary };
+    case 5: return { label: t('tx_unstaked'), glyph: '🔓', color: colors.warning };
+    case 6: return { label: t('tx_delegated'), glyph: '➜', color: colors.accentPrimary };
+    case 7: return { label: t('tx_undelegated'), glyph: '↩', color: colors.warning };
+    case 8: return { label: t('tx_withdrew'), glyph: '↓', color: colors.success };
+    case 9: return { label: t('tx_claimed'), glyph: '★', color: colors.success };
+    case 63: return { label: t('tx_contract'), glyph: '⚙', color: colors.bgTertiary };
+    default:
+      return tx.direction === 'in'
+        ? { label: t('wallet_received'), glyph: '↓', color: colors.success }
+        : { label: t('wallet_sent'), glyph: '↑', color: colors.dm };
+  }
+}
+
+/** Darken a hex colour by `amount` (0..1) for a gradient end-stop. */
+function darken(hex: string, amount: number): string {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const n = parseInt(h, 16);
+  const f = 1 - amount;
+  const r = Math.round(((n >> 16) & 255) * f);
+  const g = Math.round(((n >> 8) & 255) * f);
+  const b = Math.round((n & 255) * f);
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
 
 export default function WalletBalanceScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { address } = useConnection();
+  const { address, signer, setWallet } = useConnection();
+  const navigation = useNavigation<NativeStackNavigationProp<MoreStackParamList>>();
 
-  const { data, loading, error, refreshing, onRefresh } = useApi(
-    async () => {
-      if (!address) return null;
-      return fetchAccountData(address);
-    },
+  const { data, loading, refreshing, onRefresh } = useApi(
+    async () => (address ? fetchAccountData(address) : null),
     [address],
   );
 
-  const [addressCopied, setAddressCopied] = useState(false);
+  const [prices, setPrices] = useState<Record<string, TokenPrice>>({});
+  const [txs, setTxs] = useState<TxSummary[]>([]);
   const [sendDialog, setSendDialog] = useState<{ assetId: string; precision: number } | null>(null);
   const [sendTo, setSendTo] = useState('');
   const [sendAmount, setSendAmount] = useState('');
   const [sending, setSending] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { loadPrices().then(setPrices).catch(() => {}); }, [data]);
+  useEffect(() => {
+    if (address) fetchRecentTransactions(address, 15).then(setTxs).catch(() => {});
+  }, [address, data]);
 
   const handleSend = useCallback(async () => {
     if (!sendDialog || !sendTo.trim() || !sendAmount.trim()) return;
     const recipient = sendTo.trim();
     if (!recipient.startsWith('klv1') || recipient.length < 40) {
-      Alert.alert(t('error_generic'), 'Invalid Klever address');
-      return;
+      Alert.alert(t('error_generic'), 'Invalid Klever address'); return;
     }
     const amountFloat = parseFloat(sendAmount);
-    if (!amountFloat || amountFloat <= 0) {
-      Alert.alert(t('error_generic'), t('tip_amount_required'));
-      return;
-    }
+    if (!amountFloat || amountFloat <= 0) { Alert.alert(t('error_generic'), t('tip_amount_required')); return; }
     const atomicAmount = Math.round(amountFloat * Math.pow(10, sendDialog.precision));
-
     setSending(true);
     try {
       const txHash = await sendTransfer(recipient, sendDialog.assetId, atomicAmount);
       const url = await getExplorerTxUrl(txHash);
-      Alert.alert(
-        t('transfer_sent'),
-        `${amountFloat} ${sendDialog.assetId}`,
-        [
-          { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
-          { text: t('done'), style: 'cancel' },
-        ],
-      );
-      setSendDialog(null);
-      setSendTo('');
-      setSendAmount('');
-      onRefresh();
+      Alert.alert(t('transfer_sent'), `${amountFloat} ${sendDialog.assetId}`, [
+        { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
+        { text: t('done'), style: 'cancel' },
+      ]);
+      setSendDialog(null); setSendTo(''); setSendAmount(''); onRefresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Transfer failed: ${msg}`);
       Alert.alert(t('transfer_failed'), msg.slice(0, 200));
-    } finally {
-      setSending(false);
-    }
+    } finally { setSending(false); }
   }, [sendDialog, sendTo, sendAmount, onRefresh, t]);
 
-  const handleCopyAddress = async () => {
+  const copyAddress = async () => {
     if (!address) return;
     await Clipboard.setStringAsync(address);
-    setAddressCopied(true);
-    setTimeout(() => setAddressCopied(false), 2000);
+    Alert.alert(t('wallet_copy_address'), t('channel_invite_link_copied'));
   };
+
+  const handleRegister = useCallback(() => {
+    if (!signer) return;
+    Alert.alert(t('register_title'), t('register_confirm'), [
+      { text: t('cancel'), style: 'cancel' },
+      {
+        text: t('register_proceed'),
+        onPress: async () => {
+          setBusy(true);
+          try {
+            const txHash = await registerUser(signer.publicKeyHex);
+            const url = await getExplorerTxUrl(txHash);
+            Alert.alert(t('register_success'), t('register_tx_sent'), [
+              { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
+              { text: t('done'), style: 'cancel' },
+            ]);
+          } catch (e) {
+            Alert.alert(t('register_failed'), e instanceof Error ? e.message.slice(0, 200) : '');
+          } finally { setBusy(false); }
+        },
+      },
+    ]);
+  }, [signer, t]);
+
+  const handleExport = useCallback(() => {
+    Alert.alert(t('wallet_export_key'), t('wallet_export_warning'), [
+      { text: t('cancel'), style: 'cancel' },
+      {
+        text: t('wallet_export_reveal'),
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const key = await vaultExportKey();
+            if (!key) { Alert.alert(t('error_generic'), 'Could not export key.'); return; }
+            Alert.alert(t('wallet_export_key'), key, [
+              { text: t('wallet_copy_address'), onPress: () => Clipboard.setStringAsync(key) },
+              { text: t('done'), style: 'cancel' },
+            ]);
+          } catch {
+            Alert.alert(t('error_generic'), 'Could not export key.');
+          }
+        },
+      },
+    ]);
+  }, [t]);
+
+  const handleDisconnect = useCallback(() => {
+    Alert.alert(t('wallet_disconnect'), t('wallet_disconnect_confirm'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('wallet_disconnect'), style: 'destructive', onPress: () => { setManageOpen(false); setWallet(null); } },
+    ]);
+  }, [setWallet, t]);
 
   if (!address) {
     return (
@@ -104,7 +182,6 @@ export default function WalletBalanceScreen() {
       </View>
     );
   }
-
   if (loading && !data) {
     return (
       <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
@@ -113,213 +190,246 @@ export default function WalletBalanceScreen() {
     );
   }
 
-  const klvBalance = data ? formatTokenAmount(data.balance, 6) : '0';
-  const klvFrozen = data ? formatTokenAmount(data.frozenBalance, 6) : '0';
-  const tokens = data ? Object.values(data.assets).filter((a) => a.assetId !== 'KLV') : [];
+  // Build asset list: KLV first, then other tokens.
+  const assets: Asset[] = [];
+  if (data) {
+    assets.push({ assetId: 'KLV', name: 'Klever', atomic: data.balance, frozen: data.frozenBalance || 0, precision: 6 });
+    for (const a of Object.values(data.assets)) {
+      if (a.assetId !== 'KLV') assets.push({ assetId: a.assetId, name: a.assetName || a.assetId, atomic: a.balance, frozen: a.frozenBalance || 0, precision: a.precision });
+    }
+  }
+  // Total holdings = available + staked (frozen); the hero total includes staked so it sums correctly.
+  const totalUsd = assets.reduce((sum, a) => {
+    const p = prices[a.assetId];
+    return sum + (p ? fiatValue(toWhole(a.atomic + a.frozen, a.precision), p.usd) : 0);
+  }, 0);
+  const totalStakedUsd = assets.reduce((sum, a) => {
+    const p = prices[a.assetId];
+    return sum + (p && a.frozen > 0 ? fiatValue(toWhole(a.frozen, a.precision), p.usd) : 0);
+  }, 0);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
-      {/* KLV main balance card */}
-      <View style={[styles.balanceCard, { backgroundColor: colors.accentPrimary }]}>
-        <Text style={[styles.balanceLabel, { color: colors.textInverse }]}>KLV Balance</Text>
-        <Text style={[styles.balanceAmount, { color: colors.textInverse }]}>{klvBalance}</Text>
-        {data && data.frozenBalance > 0 && (
-          <Text style={[styles.frozenText, { color: colors.textInverse }]}>
-            Frozen: {klvFrozen} KLV
+    <ScrollView
+      style={[styles.container, { backgroundColor: colors.bgPrimary }]}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />}
+    >
+      {/* Hero — top→bottom gradient (lighter accent → accent → deeper) */}
+      <Gradient
+        colors={[colors.accentSecondary, colors.accentPrimary, darken(colors.accentPrimary, 0.32)]}
+        style={styles.hero}
+      >
+        <Text style={[styles.heroLabel, { color: '#FFFFFF' }]}>{t('wallet_total_balance')}</Text>
+        <Text style={[styles.heroFiat, { color: '#FFFFFF' }]}>{formatUsd(totalUsd)}</Text>
+        <Text style={[styles.heroKlv, { color: '#FFFFFF' }]}>
+          {data ? formatTokenAmount(data.balance, 6) : '0'} KLV
+        </Text>
+        {totalStakedUsd > 0 && (
+          <Text style={[styles.heroStaked, { color: '#FFFFFF' }]}>
+            🔒 {t('wallet_incl_staked', { amount: formatUsd(totalStakedUsd) })}
           </Text>
         )}
-        <TouchableOpacity onPress={handleCopyAddress} activeOpacity={0.7}>
-          <Text style={[styles.addressText, { color: colors.textInverse }]} numberOfLines={1}>
-            {addressCopied ? t('tip_sent') : address}
+        <TouchableOpacity onPress={copyAddress} activeOpacity={0.7} style={styles.heroAddrChip}>
+          <Text style={[styles.heroAddr, { color: '#FFFFFF' }]} numberOfLines={1}>
+            {address.slice(0, 12)}…{address.slice(-6)}
           </Text>
+          <Ionicons name="copy-outline" size={13} color="#FFFFFF" style={{ marginLeft: 6 }} />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sendCardBtn, { backgroundColor: 'rgba(255,255,255,0.2)' }]}
-          onPress={() => setSendDialog({ assetId: 'KLV', precision: 6 })}
-        >
-          <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('transfer_send')}</Text>
-        </TouchableOpacity>
+      </Gradient>
+
+      {/* Actions */}
+      <View style={styles.actions}>
+        <Action color={colors} label={t('transfer_send')} icon="arrow-up" onPress={() => setSendDialog({ assetId: 'KLV', precision: 6 })} />
+        <Action color={colors} label={t('wallet_receive')} icon="qr-code" onPress={() => navigation.navigate('Receive')} />
+        <Action color={colors} label={t('wallet_manage')} icon="settings-sharp" onPress={() => setManageOpen(true)} />
       </View>
 
-      {error && (
-        <View style={[styles.errorBanner, { backgroundColor: colors.error }]}>
-          <Text style={{ color: colors.textInverse, fontSize: fontSize.sm }}>
-            {t('error_network')}
-          </Text>
-        </View>
-      )}
-
-      {/* Token list */}
-      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        Tokens
-      </Text>
-      <FlatList
-        data={tokens}
-        keyExtractor={(item) => item.assetId}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.accentPrimary}
-          />
-        }
-        renderItem={({ item }: { item: TokenBalance }) => (
-          <View style={[styles.tokenRow, { borderBottomColor: colors.border }]}>
-            <View style={styles.tokenInfo}>
-              <Text style={[styles.tokenName, { color: colors.textPrimary }]}>
-                {item.assetName || item.assetId}
-              </Text>
-              <Text style={[styles.tokenId, { color: colors.textSecondary }]}>
-                {item.assetId}
-              </Text>
-            </View>
-            <View style={styles.tokenRight}>
-              <Text style={[styles.tokenBalance, { color: colors.textPrimary }]}>
-                {formatTokenAmount(item.balance, item.precision)}
-              </Text>
-              <TouchableOpacity
-                style={[styles.sendRowBtn, { backgroundColor: colors.accentPrimary }]}
-                onPress={() => setSendDialog({ assetId: item.assetId, precision: item.precision })}
-              >
-                <Text style={{ color: colors.textInverse, fontSize: fontSize.xs, fontWeight: '600' }}>{t('transfer_send')}</Text>
+      {/* Assets */}
+      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{t('wallet_assets')}</Text>
+      {assets.map((a) => {
+        const p = prices[a.assetId];
+        const usd = p ? fiatValue(toWhole(a.atomic + a.frozen, a.precision), p.usd) : 0;
+        const sym = a.assetId.split('-')[0];
+        return (
+          <View key={a.assetId} style={[styles.row, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity
+              style={styles.rowTap}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('TokenDetail', { assetId: a.assetId, name: a.name, precision: a.precision })}
+            >
+              {p?.iconUrl ? (
+                <Image source={{ uri: p.iconUrl }} style={styles.icon} />
+              ) : (
+                <View style={[styles.icon, styles.iconFallback, { backgroundColor: colors.accentSecondary }]}>
+                  <Text style={{ color: colors.textInverse, fontWeight: '700' }}>{a.assetId.slice(0, 1)}</Text>
+                </View>
+              )}
+              <View style={styles.rowMid}>
+                <Text style={[styles.assetName, { color: colors.textPrimary }]} numberOfLines={1}>{a.name}</Text>
+                <Text style={[styles.assetSub, { color: colors.textSecondary }]}>
+                  {formatTokenAmount(a.atomic, a.precision)} {sym}
+                </Text>
+                {a.frozen > 0 && (
+                  <Text style={[styles.assetStaked, { color: colors.accentSecondary }]}>
+                    🔒 {formatTokenAmount(a.frozen, a.precision)} {t('wallet_staked')}
+                  </Text>
+                )}
+              </View>
+            </TouchableOpacity>
+            {p?.sparkline?.length ? <Sparkline data={p.sparkline} /> : <View style={{ width: 64 }} />}
+            <View style={styles.rowRight}>
+              <Text style={[styles.assetUsd, { color: colors.textPrimary }]}>{usd > 0 ? formatUsd(usd) : '—'}</Text>
+              <TouchableOpacity onPress={() => setSendDialog({ assetId: a.assetId, precision: a.precision })}>
+                <Text style={[styles.sendLink, { color: colors.accentPrimary }]}>{t('transfer_send')}</Text>
               </TouchableOpacity>
             </View>
           </View>
-        )}
-        ListEmptyComponent={
-          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            {t('wallet_no_tokens')}
-          </Text>
-        }
-      />
+        );
+      })}
 
-      {/* Send Dialog */}
+      {/* Recent transactions */}
+      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{t('wallet_activity')}</Text>
+      {txs.length === 0 ? (
+        <Text style={[styles.empty, { color: colors.textSecondary }]}>{t('wallet_no_activity')}</Text>
+      ) : (
+        txs.map((tx) => {
+          const a = txAppearance(tx, t, colors);
+          return (
+          <TouchableOpacity
+            key={tx.hash}
+            style={[styles.row, { borderBottomColor: colors.border }]}
+            onPress={async () => Linking.openURL(await getExplorerTxUrl(tx.hash))}
+          >
+            <View style={[styles.icon, styles.iconFallback, { backgroundColor: a.color }]}>
+              <Text style={{ color: colors.textInverse, fontWeight: '700' }}>{a.glyph}</Text>
+            </View>
+            <View style={styles.rowMid}>
+              <Text style={[styles.assetName, { color: colors.textPrimary }]}>{a.label}</Text>
+              <Text style={[styles.assetSub, { color: colors.textSecondary }]} numberOfLines={1}>
+                {tx.counterparty ? `${tx.counterparty.slice(0, 14)}…` : tx.kind}
+                {tx.timestamp ? ` · ${new Date(tx.timestamp).toLocaleDateString()}` : ''}
+              </Text>
+            </View>
+            <Text style={{ color: colors.textSecondary, fontSize: fontSize.lg }}>›</Text>
+          </TouchableOpacity>
+          );
+        })
+      )}
+
+      <View style={{ height: spacing.xl }} />
+
+      {/* Send dialog */}
       {sendDialog && (
         <Modal visible transparent animationType="fade" onRequestClose={() => !sending && setSendDialog(null)}>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => !sending && setSendDialog(null)}>
             <View style={[styles.dialog, { backgroundColor: colors.bgSecondary }]} onStartShouldSetResponder={() => true}>
-              <Text style={[styles.dialogTitle, { color: colors.textPrimary }]}>
-                {t('transfer_send')} {sendDialog.assetId}
-              </Text>
+              <Text style={[styles.dialogTitle, { color: colors.textPrimary }]}>{t('transfer_send')} {sendDialog.assetId}</Text>
               <TextInput
                 style={[styles.dialogInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
-                placeholder={t('transfer_recipient')}
-                placeholderTextColor={colors.textSecondary}
-                value={sendTo}
-                onChangeText={setSendTo}
-                autoCapitalize="none"
-                autoCorrect={false}
+                placeholder={t('transfer_recipient')} placeholderTextColor={colors.textSecondary}
+                value={sendTo} onChangeText={setSendTo} autoCapitalize="none" autoCorrect={false}
               />
               <TextInput
                 style={[styles.dialogInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
-                placeholder={t('tip_amount_label')}
-                placeholderTextColor={colors.textSecondary}
-                value={sendAmount}
-                onChangeText={setSendAmount}
-                keyboardType="decimal-pad"
+                placeholder={t('tip_amount_label')} placeholderTextColor={colors.textSecondary}
+                value={sendAmount} onChangeText={setSendAmount} keyboardType="decimal-pad"
               />
               <View style={styles.dialogActions}>
-                <TouchableOpacity
-                  style={[styles.dialogBtn, { borderColor: colors.border, borderWidth: 1 }]}
-                  onPress={() => { setSendDialog(null); setSendTo(''); setSendAmount(''); }}
-                  disabled={sending}
-                >
+                <TouchableOpacity style={[styles.dialogBtn, { borderColor: colors.border, borderWidth: 1 }]} onPress={() => { setSendDialog(null); setSendTo(''); setSendAmount(''); }} disabled={sending}>
                   <Text style={{ color: colors.textPrimary }}>{t('cancel')}</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.dialogBtn, { backgroundColor: sending ? colors.textSecondary : colors.accentPrimary }]}
-                  onPress={handleSend}
-                  disabled={sending || !sendTo.trim() || !sendAmount.trim()}
-                >
-                  {sending ? (
-                    <ActivityIndicator size="small" color={colors.textInverse} />
-                  ) : (
-                    <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('transfer_send')}</Text>
-                  )}
+                <TouchableOpacity style={[styles.dialogBtn, { backgroundColor: sending ? colors.textSecondary : colors.accentPrimary }]} onPress={handleSend} disabled={sending || !sendTo.trim() || !sendAmount.trim()}>
+                  {sending ? <ActivityIndicator size="small" color={colors.textInverse} /> : <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('transfer_send')}</Text>}
                 </TouchableOpacity>
               </View>
             </View>
           </TouchableOpacity>
         </Modal>
       )}
-    </View>
+
+      {/* Manage sheet */}
+      {manageOpen && (
+        <Modal visible transparent animationType="slide" onRequestClose={() => setManageOpen(false)}>
+          <TouchableOpacity style={styles.sheetOverlay} activeOpacity={1} onPress={() => setManageOpen(false)}>
+            <View style={[styles.sheet, { backgroundColor: colors.bgSecondary }]} onStartShouldSetResponder={() => true}>
+              <Text style={[styles.dialogTitle, { color: colors.textPrimary, paddingHorizontal: spacing.lg }]}>{t('wallet_manage')}</Text>
+              <ManageItem color={colors} label={t('wallet_staking_overview')} onPress={async () => { setManageOpen(false); Linking.openURL(await getExplorerStakingUrl(address)); }} />
+              <ManageItem color={colors} label={t('wallet_view_explorer')} onPress={async () => { setManageOpen(false); Linking.openURL(await getExplorerAddressUrl(address)); }} />
+              <ManageItem color={colors} label={t('register_button')} onPress={() => { setManageOpen(false); handleRegister(); }} disabled={busy} />
+              <ManageItem color={colors} label={t('wallet_export_key')} onPress={() => { setManageOpen(false); handleExport(); }} />
+              <ManageItem color={colors} label={t('wallet_disconnect')} danger onPress={handleDisconnect} />
+              <ManageItem color={colors} label={t('cancel')} muted onPress={() => setManageOpen(false)} />
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+    </ScrollView>
+  );
+}
+
+function Action({ color, label, icon, onPress }: { color: any; label: string; icon: React.ComponentProps<typeof Ionicons>['name']; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.action} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.actionCircle, { backgroundColor: color.accentPrimary }]}>
+        <Ionicons name={icon} size={24} color="#FFFFFF" />
+      </View>
+      <Text style={[styles.actionLabel, { color: color.textPrimary }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function ManageItem({ color, label, onPress, danger, muted, disabled }: { color: any; label: string; onPress: () => void; danger?: boolean; muted?: boolean; disabled?: boolean }) {
+  return (
+    <TouchableOpacity style={[styles.manageItem, { borderTopColor: color.border }]} onPress={onPress} disabled={disabled}>
+      <Text style={{ color: danger ? color.error : muted ? color.textSecondary : color.textPrimary, fontSize: fontSize.md, fontWeight: '500', textAlign: 'center' }}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  balanceCard: {
-    margin: spacing.md,
-    padding: spacing.lg,
-    borderRadius: radius.lg,
-    alignItems: 'center',
+  hero: {
+    margin: spacing.md, padding: spacing.lg, borderRadius: radius.lg, alignItems: 'center',
+    overflow: 'hidden', // clip the gradient bands to the rounded corners
+    // subtle elevation so the card lifts off the dark background
+    shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6,
   },
-  balanceLabel: { fontSize: fontSize.sm, fontWeight: '600', opacity: 0.8 },
-  balanceAmount: { fontSize: 36, fontWeight: '700', marginVertical: spacing.sm },
-  frozenText: { fontSize: fontSize.sm, opacity: 0.7 },
-  addressText: { fontSize: fontSize.xs, opacity: 0.6, marginTop: spacing.sm },
-  errorBanner: {
-    marginHorizontal: spacing.md,
-    padding: spacing.sm,
-    borderRadius: radius.md,
-    alignItems: 'center',
+  heroLabel: { fontSize: fontSize.sm, opacity: 0.9, letterSpacing: 0.5 },
+  heroFiat: { fontSize: 40, fontWeight: '800', marginTop: spacing.xs },
+  heroKlv: { fontSize: fontSize.md, opacity: 0.95, marginTop: 2, fontWeight: '600' },
+  heroAddrChip: {
+    flexDirection: 'row', alignItems: 'center', marginTop: spacing.md,
+    backgroundColor: 'rgba(255,255,255,0.18)', paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.full,
   },
-  sectionTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    marginHorizontal: spacing.md,
-    marginTop: spacing.lg,
-    marginBottom: spacing.sm,
+  heroAddr: { fontSize: fontSize.xs },
+  heroStaked: { fontSize: fontSize.xs, opacity: 0.9, marginTop: 4 },
+  assetStaked: { fontSize: fontSize.xs, marginTop: 2 },
+  actions: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: spacing.lg, marginBottom: spacing.md },
+  action: { alignItems: 'center', gap: spacing.xs },
+  actionCircle: {
+    width: 60, height: 60, borderRadius: radius.full, justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 4,
   },
-  tokenRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  tokenInfo: { flex: 1 },
-  tokenName: { fontSize: fontSize.md, fontWeight: '600' },
-  tokenId: { fontSize: fontSize.xs, marginTop: 2 },
-  tokenBalance: { fontSize: fontSize.md, fontWeight: '600' },
-  sendCardBtn: {
-    marginTop: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-  },
-  tokenRight: { alignItems: 'flex-end', gap: spacing.xs },
-  sendRowBtn: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radius.sm,
-  },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: spacing.lg,
-  },
-  dialog: {
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-  },
+  actionLabel: { fontSize: fontSize.xs, fontWeight: '600' },
+  sectionTitle: { fontSize: fontSize.sm, fontWeight: '600', textTransform: 'uppercase', marginHorizontal: spacing.md, marginTop: spacing.md, marginBottom: spacing.xs },
+  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, gap: spacing.sm },
+  rowTap: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: spacing.sm },
+  icon: { width: 40, height: 40, borderRadius: radius.full },
+  iconFallback: { justifyContent: 'center', alignItems: 'center' },
+  rowMid: { flex: 1 },
+  assetName: { fontSize: fontSize.md, fontWeight: '600' },
+  assetSub: { fontSize: fontSize.xs, marginTop: 2 },
+  rowRight: { alignItems: 'flex-end', gap: 2, minWidth: 64 },
+  assetUsd: { fontSize: fontSize.sm, fontWeight: '600' },
+  sendLink: { fontSize: fontSize.xs, fontWeight: '600' },
+  empty: { textAlign: 'center', padding: spacing.lg, fontSize: fontSize.sm },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: spacing.lg },
+  dialog: { borderRadius: radius.lg, padding: spacing.lg },
   dialogTitle: { fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.md },
-  dialogInput: {
-    padding: spacing.md,
-    borderRadius: radius.md,
-    fontSize: fontSize.md,
-    marginBottom: spacing.md,
-  },
+  dialogInput: { padding: spacing.md, borderRadius: radius.md, fontSize: fontSize.md, marginBottom: spacing.md },
   dialogActions: { flexDirection: 'row', gap: spacing.md },
-  dialogBtn: {
-    flex: 1,
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  emptyText: { textAlign: 'center', padding: spacing.xl, fontSize: fontSize.sm },
+  dialogBtn: { flex: 1, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center' },
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sheet: { borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.md, paddingBottom: spacing.xl },
+  manageItem: { paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderTopWidth: StyleSheet.hairlineWidth },
 });

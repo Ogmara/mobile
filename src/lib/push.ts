@@ -171,13 +171,13 @@ export async function setupNotificationChannel(): Promise<void> {
       name: 'Mentions',
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#6c5ce7',
+      lightColor: '#5288C1',
     });
     await Notifications.setNotificationChannelAsync('dms', {
       name: 'Direct Messages',
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#e17055',
+      lightColor: '#6AB2F2',
     });
   }
 }

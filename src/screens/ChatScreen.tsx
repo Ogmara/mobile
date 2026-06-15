@@ -9,6 +9,7 @@ import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
+  Image,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -118,9 +119,18 @@ export default function ChatScreen() {
       }
       activeOpacity={0.7}
     >
-      <View style={[styles.badge, { backgroundColor: colors.accentSecondary }]}>
-        <Text style={[styles.badgeText, { color: colors.textInverse }]}>#</Text>
-      </View>
+      {item.logo_cid && client ? (
+        <Image
+          source={{ uri: client.getMediaUrl(item.logo_cid) }}
+          style={styles.badge}
+        />
+      ) : (
+        <View style={[styles.badge, { backgroundColor: colors.accentSecondary }]}>
+          <Text style={[styles.badgeText, { color: colors.textInverse }]}>
+            {(item.display_name || item.slug || '#').slice(0, 1).toUpperCase()}
+          </Text>
+        </View>
+      )}
       <View style={styles.rowContent}>
         <Text style={[styles.channelName, { color: colors.textPrimary }]}>
           {item.display_name || item.slug}
@@ -193,9 +203,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   badge: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
+    width: 44,
+    height: 44,
+    borderRadius: radius.full,
     justifyContent: 'center',
     alignItems: 'center',
   },

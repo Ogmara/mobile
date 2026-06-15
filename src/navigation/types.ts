@@ -20,6 +20,7 @@ export type ChatStackParamList = {
   CreateChannel: undefined;
   ChannelMessages: { channelId: number; channelName: string };
   ChannelAdmin: { channelId: number; channelName: string };
+  ChannelJoin: { channelId: number; node?: string };
   UserProfile: { address: string };
   FollowList: { address: string; tab: 'followers' | 'following' };
 };
@@ -35,7 +36,9 @@ export type SearchStackParamList = {
   SearchHome: undefined;
   UserProfile: { address: string };
   ChannelMessages: { channelId: number; channelName: string };
+  ChannelJoin: { channelId: number; node?: string };
   NewsDetail: { msgId: string; post?: any };
+  FollowList: { address: string; tab: 'followers' | 'following' };
 };
 
 export type MoreStackParamList = {
@@ -44,6 +47,8 @@ export type MoreStackParamList = {
   Addressbook: undefined;
   Wallet: undefined;
   WalletBalance: undefined;
+  Receive: undefined;
+  TokenDetail: { assetId: string; name: string; precision: number };
   PinSetup: undefined;
   DebugLogs: undefined;
   Notifications: undefined;

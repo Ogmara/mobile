@@ -17,11 +17,14 @@ import {
   ScrollView,
   RefreshControl,
   ActivityIndicator,
+  Share,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
+import { removeJoinedChannel } from '../lib/joinedChannels';
+import { buildChannelInviteUrl } from '../lib/share';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 
@@ -50,7 +53,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
   const { channelId, channelName } = route.params;
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, signer, address: myAddress } = useConnection();
+  const { client, signer, address: myAddress, nodeUrl } = useConnection();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -204,6 +207,19 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
     }
   }, [client, channelId, isMod, fetchAll, t]);
 
+  const handleShareInvite = useCallback(async () => {
+    // Private channels are host-scoped — embed the home node so the recipient can
+    // federate from there. Public channels share a plain link (no host hint needed).
+    const isPrivate = detail?.channel?.channel_type === 2;
+    const url = buildChannelInviteUrl(channelId, isPrivate ? nodeUrl : undefined);
+    if (!url) return;
+    try {
+      await Share.share({ message: url, url });
+    } catch (e) {
+      debugLog('warn', `Share invite failed: ${e instanceof Error ? e.message : ''}`);
+    }
+  }, [channelId, detail, nodeUrl]);
+
   const handleInvite = useCallback(async () => {
     if (!client || !inviteAddress.trim() || !isMod) return;
     if (!isValidAddress(inviteAddress.trim())) {
@@ -229,7 +245,11 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
         onPress: async () => {
           try {
             await client.deleteChannel(channelId);
-            navigation.goBack();
+            // Drop the now-deleted channel from the local joined set so the
+            // channel list reflects the deletion immediately, then return to
+            // the list root rather than the (now-gone) channel screen.
+            await removeJoinedChannel(channelId).catch(() => {});
+            navigation.popToTop();
           } catch (e) {
             Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
           }
@@ -388,6 +408,12 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       {/* ── Invite ── */}
       <View style={[styles.section, { backgroundColor: colors.bgSecondary }]}>
         <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('channel_invite')}</Text>
+        <TouchableOpacity
+          style={[styles.actionBtn, { backgroundColor: colors.accentPrimary, marginBottom: spacing.sm }]}
+          onPress={handleShareInvite}
+        >
+          <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('channel_share_invite')}</Text>
+        </TouchableOpacity>
         <View style={styles.addRow}>
           <TextInput
             style={[styles.addInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}

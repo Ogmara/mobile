@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ogmara",
     "slug": "ogmara",
-    "version": "0.11.1",
+    "version": "0.25.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1a1a2e"
+      "backgroundColor": "#0E1621"
     },
     "ios": {
       "supportsTablet": true,
@@ -24,7 +24,7 @@
       "package": "org.ogmara.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a1a2e"
+        "backgroundColor": "#0E1621"
       },
       "edgeToEdgeEnabled": true
     },

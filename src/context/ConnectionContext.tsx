@@ -9,10 +9,15 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { AppState, type AppStateStatus } from 'react-native';
 import { OgmaraClient, WsSubscription, subscribe, buildDeviceClaim, type WsEvent } from '@ogmara/sdk';
 import type { WalletSigner } from '@ogmara/sdk';
-import { DEFAULT_NODE_URL } from '@ogmara/sdk';
 import { getSetting, setSetting } from '../lib/settings';
+import { bootstrapNodeSelection, rememberNetwork, recordKnownNode, getAvailableNodes } from '../lib/api';
 import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultWipe } from '../lib/vault';
 import { debugLog } from '../lib/debug';
+import { setCryptoEnv, setCryptoClient, clearCryptoEnv } from '../lib/cryptoEnv';
+import { ensureDeviceEncBinding, wipeDeviceEncKey } from '../lib/deviceEnc';
+// Side-effect import: registers the key-vault backup/restore listeners (P3) into the
+// dm/channel crypto caches at app start.
+import '../lib/keyVault';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 
@@ -29,8 +34,9 @@ interface ConnectionContextValue {
   walletSource: WalletSource;
   displayName: string | null;
   peers: number;
-  /** Connect to a node URL (persists the choice). */
-  connectToNode: (url: string) => Promise<void>;
+  /** Connect to a node URL (persists the choice). Pass pin=true for an explicit
+   *  user choice so the auto best-ping optimizer won't override it. */
+  connectToNode: (url: string, pin?: boolean) => Promise<void>;
   /** Store a private key in the vault and activate the wallet. Pass null to wipe. */
   setWallet: (privateKeyHex: string | null) => Promise<void>;
   /** Generate a new random wallet in the vault. */
@@ -51,7 +57,7 @@ interface ConnectionContextValue {
 const ConnectionContext = createContext<ConnectionContextValue>({
   client: null,
   status: 'disconnected',
-  nodeUrl: DEFAULT_NODE_URL,
+  nodeUrl: '',
   signer: null,
   address: null,
   walletAddress: null,
@@ -68,7 +74,7 @@ const ConnectionContext = createContext<ConnectionContextValue>({
 export function ConnectionProvider({ children }: { children: React.ReactNode }) {
   const [client, setClient] = useState<OgmaraClient | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
-  const [nodeUrl, setNodeUrl] = useState<string>(DEFAULT_NODE_URL);
+  const [nodeUrl, setNodeUrl] = useState<string>('');
   const [signer, setSignerState] = useState<WalletSigner | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
@@ -78,7 +84,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   const wsRef = useRef<WsSubscription | null>(null);
   const eventHandlersRef = useRef<Set<(event: WsEvent) => void>>(new Set());
-  const nodeUrlRef = useRef<string>(DEFAULT_NODE_URL);
+  const nodeUrlRef = useRef<string>('');
   const signerRef = useRef<WalletSigner | null>(null);
   /** True once health check confirms the node is reachable. WS state
    *  should not downgrade to 'reconnecting' while this is set. */
@@ -106,17 +112,71 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     return () => sub.remove();
   }, []);
 
+  /** Connect a client, confirm health, persist the node's network, wire WS + profile.
+   *  Returns true on a confirmed-healthy node. */
+  async function confirmAndWire(c: OgmaraClient, url: string, savedName: string | null): Promise<boolean> {
+    try {
+      const health = await c.health();
+      setPeers(health.peers);
+      healthConfirmedRef.current = true;
+      setStatus('connected');
+      // Persist the network the node reports so the next cold-boot SC discovery
+      // targets the right on-chain registry.
+      await rememberNetwork((health as any).network).catch(() => {});
+      debugLog('info', `Node connected, ${health.peers} peers`);
+      connectWs(url);
+
+      const addr = signerRef.current?.walletAddress || signerRef.current?.address;
+      if (addr && !savedName) {
+        c.getUserProfile(addr).then((resp: any) => {
+          const name = resp?.user?.display_name;
+          if (name) { setDisplayName(name); setSetting('displayName', name); }
+        }).catch(() => {});
+      }
+      return true;
+    } catch (e) {
+      debugLog('warn', 'Node health check failed', e);
+      return false;
+    }
+  }
+
+  /** After connecting to a (possibly stale/slow) saved node, discover candidates in
+   *  the background and switch to a meaningfully-faster one — unless the user pinned a
+   *  node explicitly. This is what keeps the app on the FASTEST node without blocking
+   *  cold start on full discovery. Best-effort, runs once per launch. */
+  async function maybeOptimizeNode(currentUrl: string): Promise<void> {
+    try {
+      if ((await getSetting('nodePinned')) === '1') return; // honor explicit choice
+      const nodes = await getAvailableNodes();
+      const reachable = nodes.filter((n) => n.ping !== Infinity);
+      if (reachable.length === 0) return;
+      const best = reachable[0]; // getAvailableNodes sorts ascending by ping
+      const cur = nodes.find((n) => n.url === currentUrl);
+      const curPing = cur?.ping ?? Infinity;
+      // Switch only when clearly faster (≥120ms better) to avoid flapping on noise.
+      if (best.url !== currentUrl && best.ping + 120 < curPing) {
+        debugLog('info', `Auto-switching to faster node ${best.url} (${best.ping}ms vs ${curPing}ms)`);
+        await connectToNode(best.url); // no pin — this is an automatic choice
+      }
+    } catch { /* best-effort */ }
+  }
+
   async function initClient() {
     try {
-      const savedUrl = await getSetting('nodeUrl').catch(() => null);
       const savedName = await getSetting('displayName').catch(() => null);
-      const url = savedUrl || DEFAULT_NODE_URL;
+      let url = (await getSetting('nodeUrl').catch(() => null)) || '';
+
+      // No node yet (fresh install) → discover one from the on-chain SC registry
+      // (no hardcoded seed). Best-effort; may land '' if nothing is reachable.
+      if (!url) {
+        try { url = (await bootstrapNodeSelection()).chosen; } catch { /* offline */ }
+      }
       nodeUrlRef.current = url;
       setNodeUrl(url);
       if (savedName) setDisplayName(savedName);
-      debugLog('info', `Connecting to node: ${url}`);
+      debugLog('info', `Connecting to node: ${url || '(none discovered)'}`);
 
-      const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
+      let newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
       setClient(newClient);
 
       // Restore wallet if saved (non-blocking — wallet errors shouldn't prevent app start)
@@ -124,32 +184,31 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
         debugLog('warn', 'Wallet restore failed', e);
       });
 
-      // Check node health (non-fatal — app works offline)
-      try {
-        const health = await newClient.health();
-        setPeers(health.peers);
-        healthConfirmedRef.current = true;
-        setStatus('connected');
-        debugLog('info', `Node connected, ${health.peers} peers`);
-        connectWs(url);
-
-        // Sync own profile from L2 node if not saved locally
-        const addr = signerRef.current?.walletAddress || signerRef.current?.address;
-        if (addr && !savedName) {
-          newClient.getUserProfile(addr).then((resp: any) => {
-            const name = resp?.user?.display_name;
-            if (name) {
-              setDisplayName(name);
-              setSetting('displayName', name);
-              debugLog('info', `Profile synced: ${name}`);
-            }
-          }).catch(() => {});
-        }
-      } catch (e) {
-        debugLog('warn', 'Node unreachable, starting in offline mode', e);
-        healthConfirmedRef.current = false;
-        setStatus('disconnected');
+      if (await confirmAndWire(newClient, url, savedName)) {
+        // Connected to the saved node fast; now upgrade to the fastest in the
+        // background (no-op if pinned or already fastest).
+        if (url) void maybeOptimizeNode(url);
+        return;
       }
+
+      // Saved node unreachable → try SC discovery to land a live one.
+      try {
+        const res = await bootstrapNodeSelection();
+        if (res.reason === 'best-ping' && res.chosen && res.chosen !== url) {
+          url = res.chosen;
+          nodeUrlRef.current = url;
+          setNodeUrl(url);
+          newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
+          if (signerRef.current) newClient.withSigner(signerRef.current);
+          setClient(newClient);
+          setCryptoClient(newClient);
+          if (await confirmAndWire(newClient, url, savedName)) return;
+        }
+      } catch { /* discovery failed */ }
+
+      debugLog('warn', 'No reachable node — starting in offline mode');
+      healthConfirmedRef.current = false;
+      setStatus('disconnected');
     } catch (e) {
       debugLog('error', 'Client init failed', e);
       setStatus('disconnected');
@@ -195,25 +254,39 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       // Restore wallet source and external address if previously set
       const savedSource = await getSetting('walletSource');
       const savedWallet = await getSetting('walletAddress');
-      if (savedSource === 'k5-delegation' && savedWallet) {
+      const isK5 = savedSource === 'k5-delegation' && !!savedWallet;
+      const wAddr = isK5 ? (savedWallet as string) : addr;
+      const src: WalletSource = isK5 ? 'k5-delegation' : 'builtin';
+      if (isK5) {
         setWalletSource('k5-delegation');
         setWalletAddress(savedWallet);
-        if (s) s.walletAddress = savedWallet;
+        if (s) s.walletAddress = savedWallet as string;
       } else {
         setWalletSource('builtin');
         setWalletAddress(addr);
       }
+      // E2E: expose the live signer/client to the crypto libs and publish this
+      // device's enc-key binding (P0). Best-effort + idempotent; no-op for K5.
+      setCryptoEnv({ signer: s, walletAddress: wAddr, client: c, walletSource: src });
+      void ensureDeviceEncBinding().catch((e) => debugLog('warn', 'enc binding failed', e));
     }
   }
 
-  const connectToNode = useCallback(async (url: string) => {
+  const connectToNode = useCallback(async (url: string, pin?: boolean) => {
     nodeUrlRef.current = url;
     setNodeUrl(url);
     await setSetting('nodeUrl', url);
+    await recordKnownNode(url).catch(() => {}); // picker memory
+    if (pin) await setSetting('nodePinned', '1'); // explicit choice — don't auto-override
 
     const newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
     if (signerRef.current) newClient.withSigner(signerRef.current);
     setClient(newClient);
+    // Point the crypto libs at the freshly-created (signer-bound) client.
+    setCryptoClient(newClient);
+    // Device-enc bindings are per-node — re-publish on the new node so peers can wrap
+    // keys to this device here too. Idempotent + registry-verified (no-op if already bound).
+    if (signerRef.current) void ensureDeviceEncBinding().catch(() => {});
     setStatus('connecting');
 
     try {
@@ -221,6 +294,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       setPeers(health.peers);
       healthConfirmedRef.current = true;
       setStatus('connected');
+      // Persist the network for the next cold-boot SC discovery.
+      await rememberNetwork((health as any).network).catch(() => {});
       connectWs(url);
     } catch {
       healthConfirmedRef.current = false;
@@ -240,8 +315,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       await setSetting('walletSource', 'builtin');
       await setSetting('walletAddress', addr);
       if (client && s) client.withSigner(s);
+      setCryptoEnv({ signer: s, walletAddress: addr, client, walletSource: 'builtin' });
+      void ensureDeviceEncBinding().catch((e) => debugLog('warn', 'enc binding failed', e));
     } else {
       await vaultWipe();
+      await wipeDeviceEncKey().catch(() => {});
       signerRef.current = null;
       setSignerState(null);
       setAddress(null);
@@ -250,6 +328,13 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       await setSetting('walletSource', '');
       await setSetting('walletAddress', '');
       await setSetting('deviceRegistered', '');
+      // Clear all E2E session state so a different account can't read this one's keys.
+      clearCryptoEnv();
+      Promise.all([
+        import('../lib/dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
+        import('../lib/channelCrypto').then(({ clearChannelKeyCache }) => clearChannelKeyCache()),
+        import('../lib/keyVault').then(({ clearKeyVaultSession }) => clearKeyVaultSession()),
+      ]).catch(() => {});
     }
     connectWs(nodeUrlRef.current);
   }, [client]);
@@ -265,6 +350,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     await setSetting('walletSource', 'builtin');
     await setSetting('walletAddress', addr);
     if (client && s) client.withSigner(s);
+    setCryptoEnv({ signer: s, walletAddress: addr, client, walletSource: 'builtin' });
+    void ensureDeviceEncBinding().catch((e) => debugLog('warn', 'enc binding failed', e));
     connectWs(nodeUrlRef.current);
   }, [client]);
 
@@ -290,6 +377,9 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     setWalletSource('k5-delegation');
     await setSetting('walletSource', 'k5-delegation');
     await setSetting('walletAddress', externalAddress);
+    // Expose to crypto libs for completeness. E2E is gated off for K5 (the device key
+    // can't sign wallet-bound claims), so binding/encryption no-op and DMs stay plaintext.
+    setCryptoEnv({ signer: s, walletAddress: externalAddress, client, walletSource: 'k5-delegation' });
   }, [client]);
 
   const onWsEvent = useCallback((handler: (event: WsEvent) => void) => {

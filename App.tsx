@@ -8,6 +8,7 @@
 // Polyfills must be imported FIRST (before any SDK usage)
 import 'react-native-get-random-values';
 import 'fast-text-encoding';
+import './src/lib/base64-polyfill'; // global atob/btoa for Hermes (SC discovery, DM decode)
 
 // Ed25519 SHA-512 polyfill — must be called before any signing operations
 import { patchEd25519 } from './src/lib/ed25519-polyfill';

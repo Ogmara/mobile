@@ -180,12 +180,12 @@ export default function MessageBubble({
         </TouchableOpacity>
       )}
 
-      {/* Message bubble */}
+      {/* Message bubble — Modern style: tighter tail corner on the sending side */}
       <View style={[
         styles.bubble,
-        {
-          backgroundColor: isOwn ? colors.accentPrimary : colors.bgSecondary,
-        },
+        isOwn
+          ? { backgroundColor: colors.accentPrimary, borderBottomRightRadius: radius.sm }
+          : { backgroundColor: colors.bgSecondary, borderBottomLeftRadius: radius.sm },
       ]}>
         {content ? (
           <Text style={{ color: isOwn ? colors.textInverse : colors.textPrimary, lineHeight: 22 }}>

@@ -17,6 +17,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  AppState,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -25,6 +26,15 @@ import { useApi } from '../hooks/useApi';
 import { decodePayload } from '../lib/payloadDecoder';
 import { normalizeEnvelopes, normalizeEnvelope } from '../lib/envelopeNormalizer';
 import { debugLog } from '../lib/debug';
+import { e2eAvailable } from '../lib/cryptoEnv';
+import {
+  buildEncryptedDm,
+  buildEncryptedDmEditEnvelope,
+  decryptDmMessage,
+  coverPeerDevices,
+  type DmDisplay,
+} from '../lib/dmCrypto';
+import { chatErrorKey } from '../lib/chatErrors';
 import MessageBubble, { CHAT_REACTIONS, type ReplyContext } from '../components/MessageBubble';
 import type { Envelope } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -45,6 +55,11 @@ function msgIdToHex(msgId: unknown): string {
     return (msgId as number[]).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
   return String(msgId);
+}
+
+/** Cache key for a decrypted DM — includes the edit timestamp so an edit re-decrypts. */
+function dmCacheId(m: { msg_id: unknown; last_edited_at?: number }): string {
+  return `${msgIdToHex(m.msg_id)}:${m.last_edited_at ?? ''}`;
 }
 
 function getDateLabel(timestamp: string | number, todayLabel: string, yesterdayLabel: string): string {
@@ -80,6 +95,18 @@ export default function DmConversationScreen({ route, navigation }: Props) {
   const [messages, setMessages] = useState<ExtendedEnvelope[]>([]);
   const [editingMsg, setEditingMsg] = useState<{ msgId: string; content: string } | null>(null);
   const inputRef = useRef<TextInput>(null);
+
+  // Async decryption cache: `${msgIdHex}:${last_edited_at}` → display outcome. Decoding
+  // is async (key fetch/unwrap), so it can't happen inline in the render path.
+  const [decoded, setDecoded] = useState<Map<string, DmDisplay>>(new Map());
+  const decodedRef = useRef(decoded);
+  useEffect(() => { decodedRef.current = decoded; }, [decoded]);
+  // Bumped on foreground resume to retry any messages still 'waiting' for a key.
+  const [decodeTick, setDecodeTick] = useState(0);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => { if (s === 'active') setDecodeTick((x) => x + 1); });
+    return () => sub.remove();
+  }, []);
 
   const { data } = useApi(
     async () => {
@@ -175,10 +202,46 @@ export default function DmConversationScreen({ route, navigation }: Props) {
         if (signer) {
           client?.markDmRead(peerAddress).catch(() => {});
         }
+        // A peer device may have joined after my key was established — wrap my key to
+        // any new device so they can decrypt without a reload (no-op if none missing).
+        void coverPeerDevices(peerAddress).catch(() => {});
       }
     });
     return unsub;
   }, [onWsEvent, peerAddress, myAddress, client, signer]);
+
+  // Decrypt messages asynchronously into `decoded`. Re-runs when messages change or on
+  // foreground resume (retries 'waiting' entries once a key/vault restore lands). Skips
+  // already-resolved messages so a new incoming message doesn't re-AEAD the whole list.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const results: Array<[string, DmDisplay]> = [];
+      for (const m of messages) {
+        const id = dmCacheId(m);
+        if (m._optimistic) {
+          results.push([id, { kind: 'plain', text: typeof m.payload === 'string' ? m.payload : '' }]);
+          continue;
+        }
+        const ex = decodedRef.current.get(id);
+        if (ex && ex.kind !== 'waiting') continue; // already resolved
+        const d = await decryptDmMessage(m.payload as never, m.author);
+        if (cancelled) return;
+        results.push([id, d]);
+      }
+      if (cancelled || results.length === 0) return;
+      setDecoded((prev) => {
+        const next = new Map(prev);
+        for (const [id, d] of results) {
+          const ex = next.get(id);
+          if (ex && ex.kind !== 'waiting' && d.kind === 'waiting') continue; // never downgrade
+          next.set(id, d);
+        }
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [messages, decodeTick]);
 
   // Build list items with date separators and author grouping.
   // O(n) optimistic dedup via Set.
@@ -199,16 +262,6 @@ export default function DmConversationScreen({ route, navigation }: Props) {
 
     const sorted = filtered.sort((a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-    // Cache decoded content
-    for (const msg of sorted) {
-      if (msg._decodedContent === undefined) {
-        const decoded = decodePayload(msg.payload);
-        msg._decodedContent = decoded?.content
-          ? String(decoded.content)
-          : typeof msg.payload === 'string' ? msg.payload : '';
-      }
-    }
 
     const items: ListItem[] = [];
     let lastDate = '';
@@ -247,13 +300,20 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     if (!input.trim() || !client || !signer || !myAddress) return;
     const text = input.trim();
 
-    // Edit mode
+    // DMs are end-to-end encrypted; only built-in wallets can sign the key envelopes.
+    if (!e2eAvailable()) {
+      Alert.alert(t('chat_send'), t('e2e_builtin_only'));
+      return;
+    }
+
+    // Edit mode — send an encrypted DirectMessageEdit envelope.
     if (editingMsg) {
       try {
-        await client.editDm(peerAddress, editingMsg.msgId, text);
+        const env = await buildEncryptedDmEditEnvelope(peerAddress, editingMsg.msgId, text);
+        await client.sendDm(peerAddress, env);
         setMessages((prev) => prev.map((m) =>
           msgIdToHex(m.msg_id) === editingMsg.msgId
-            ? { ...m, payload: text, edited: true, last_edited_at: Date.now(), _decodedContent: undefined }
+            ? { ...m, payload: text, edited: true, last_edited_at: Date.now() }
             : m,
         ));
         setEditingMsg(null);
@@ -267,8 +327,9 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     }
 
     try {
-      await client.sendDm(peerAddress, new Uint8Array()); // placeholder — proper DM envelope needed
-      debugLog('info', `DM sent to ${peerAddress.slice(0, 12)}`);
+      const env = await buildEncryptedDm(peerAddress, text);
+      await client.sendDm(peerAddress, env);
+      debugLog('info', `Encrypted DM sent to ${peerAddress.slice(0, 12)}`);
 
       const localMsg: ExtendedEnvelope = {
         version: 1,
@@ -290,14 +351,19 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `DM send failed: ${msg}`);
-      Alert.alert('Send failed', msg.slice(0, 150));
+      if (msg.includes('RECIPIENT_NO_ENC_KEYS')) {
+        Alert.alert(t('chat_send'), t('e2e_recipient_no_keys'));
+      } else {
+        Alert.alert(t('chat_send'), msg.slice(0, 150));
+      }
     }
   }, [input, client, signer, myAddress, peerAddress, editingMsg, t]);
 
   const handleEdit = useCallback((msg: ExtendedEnvelope) => {
     // Ownership guard
     if (msg.author !== myAddress) return;
-    const content = msg._decodedContent || '';
+    const d = decodedRef.current.get(dmCacheId(msg));
+    const content = d && (d.kind === 'text' || d.kind === 'plain') ? d.text : '';
     setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content });
     setInput(content);
     inputRef.current?.focus();
@@ -314,9 +380,12 @@ export default function DmConversationScreen({ route, navigation }: Props) {
           : m,
       ));
     } catch (e) {
-      debugLog('warn', `DM delete failed: ${e instanceof Error ? e.message : ''}`);
+      const errMsg = e instanceof Error ? e.message : '';
+      debugLog('warn', `DM delete failed: ${errMsg}`);
+      const key = chatErrorKey(errMsg);
+      Alert.alert(t('chat_delete'), key ? t(key) : errMsg.slice(0, 150));
     }
-  }, [client, peerAddress, myAddress]);
+  }, [client, peerAddress, myAddress, t]);
 
   const handleReact = useCallback(async (msg: Envelope, emoji: string) => {
     if (!client) return;
@@ -363,7 +432,11 @@ export default function DmConversationScreen({ route, navigation }: Props) {
 
     const { envelope, isGrouped } = item;
     const isOwn = envelope.author === myAddress;
-    const content = envelope._decodedContent || '';
+    const disp = decoded.get(dmCacheId(envelope));
+    const content = !disp ? ''
+      : disp.kind === 'waiting' ? t('e2e_waiting')
+        : disp.kind === 'error' ? t('e2e_cant_decrypt')
+          : disp.text;
     const authorLabel = isOwn ? t('chat_you') : peerLabel;
 
     return (
@@ -379,7 +452,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
         onAuthorPress={handleAuthorPress}
       />
     );
-  }, [myAddress, colors, peerLabel, handleEdit, handleDelete, handleReact, handleAuthorPress, t]);
+  }, [myAddress, colors, peerLabel, decoded, handleEdit, handleDelete, handleReact, handleAuthorPress, t]);
 
   const keyExtractor = useCallback((item: ListItem) => item.key, []);
 

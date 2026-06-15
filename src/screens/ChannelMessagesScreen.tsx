@@ -18,6 +18,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  AppState,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -29,7 +30,16 @@ import { debugLog } from '../lib/debug';
 import MessageBubble, { CHAT_REACTIONS, type ReplyContext } from '../components/MessageBubble';
 import TipDialog from '../components/TipDialog';
 import EmojiPicker from '../components/EmojiPicker';
-import type { Envelope } from '@ogmara/sdk';
+import { e2eAvailable } from '../lib/cryptoEnv';
+import {
+  buildEncryptedChannelMsg,
+  decryptChannelMessage,
+  coverChannelMembers,
+  rotateChannelKey,
+  type DmDisplay,
+} from '../lib/channelCrypto';
+import { chatErrorKey } from '../lib/chatErrors';
+import { CHANNEL_TYPE_PRIVATE, type Envelope } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 
@@ -52,6 +62,11 @@ function msgIdToHex(msgId: unknown): string {
     return (msgId as number[]).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
   return String(msgId);
+}
+
+/** Cache key for a decrypted channel message — includes the edit stamp so edits re-decrypt. */
+function chanCacheId(m: { msg_id: unknown; last_edited_at?: number }): string {
+  return `${msgIdToHex(m.msg_id)}:${m.last_edited_at ?? ''}`;
 }
 
 /** Get a date label for message grouping (i18n-aware) */
@@ -97,6 +112,26 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [profileNames, setProfileNames] = useState<Record<string, string>>({});
   const profileFetchedRef = useRef<Set<string>>(new Set());
 
+  // Channel encryption metadata (drives encrypt-on-send). Decryption is shape-driven
+  // (decryptChannelMessage handles v1 plaintext vs v2), so rendering doesn't need this.
+  const [chanMeta, setChanMeta] = useState<{
+    channelType: number; encryptionEnabled: boolean; keyEpochFloor: number; isMod: boolean;
+  }>({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false });
+  const isPrivate = chanMeta.channelType === CHANNEL_TYPE_PRIVATE;
+  const isEncrypted = chanMeta.encryptionEnabled || isPrivate;
+  const canEstablishKey = isPrivate ? chanMeta.isMod : true; // public: any member may seed
+  const encFloor = isPrivate ? chanMeta.keyEpochFloor : 0;    // public never rotates
+
+  // Async decryption cache (text only). Attachments/reply stay plaintext metadata.
+  const [decoded, setDecoded] = useState<Map<string, DmDisplay>>(new Map());
+  const decodedRef = useRef(decoded);
+  useEffect(() => { decodedRef.current = decoded; }, [decoded]);
+  const [decodeTick, setDecodeTick] = useState(0);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => { if (s === 'active') setDecodeTick((x) => x + 1); });
+    return () => sub.remove();
+  }, []);
+
   const { data } = useApi(
     async () => {
       if (!client) return { messages: [], has_more: false };
@@ -136,9 +171,105 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     }
   }, [client, signer, channelId]);
 
+  // Load channel encryption metadata + my role (gates encrypt-on-send + key seeding).
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [detail, membersResp] = await Promise.all([
+          client.getChannelDetail(channelId).catch(() => null),
+          myAddress
+            ? client.getChannelMembers(channelId, { limit: 200 }).catch(() => ({ members: [] }))
+            : Promise.resolve({ members: [] }),
+        ]);
+        if (cancelled) return;
+        const ch = (detail as any)?.channel;
+        const role = (membersResp.members as any[]).find((m) => m.address === myAddress)?.role;
+        const isMod = role === 'moderator' || ch?.creator === myAddress;
+        setChanMeta({
+          channelType: ch?.channel_type ?? 0,
+          encryptionEnabled: ch?.encryption_enabled === true,
+          keyEpochFloor: ch?.key_epoch_floor ?? 0,
+          isMod,
+        });
+      } catch { /* keep defaults — plaintext path */ }
+    })();
+    return () => { cancelled = true; };
+  }, [client, channelId, myAddress]);
+
+  // P4: reading/posting in an encrypted PUBLIC channel requires membership (the node
+  // only wraps the epoch key to members; anyone may join permissionlessly). Ensure
+  // membership once. Private channels use the normal invite/join flow.
+  const autoJoinedRef = useRef(false);
+  useEffect(() => {
+    if (!client || !signer || !isEncrypted || isPrivate || autoJoinedRef.current) return;
+    autoJoinedRef.current = true;
+    client.joinChannel(channelId).catch(() => { autoJoinedRef.current = false; });
+  }, [client, signer, isEncrypted, isPrivate, channelId]);
+
+  // Decrypt messages asynchronously into `decoded`. decryptChannelMessage is shape-
+  // driven (v1 plaintext passes through), so this runs for every channel. Optimistic
+  // local messages (raw text payload) short-circuit to plain.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const results: Array<[string, DmDisplay]> = [];
+      for (const m of messages) {
+        const id = chanCacheId(m);
+        if (m._optimistic) {
+          results.push([id, { kind: 'plain', text: typeof m.payload === 'string' ? m.payload : '' }]);
+          continue;
+        }
+        const ex = decodedRef.current.get(id);
+        if (ex && ex.kind !== 'waiting') continue;
+        const d = await decryptChannelMessage(m.payload as never, channelId);
+        if (cancelled) return;
+        results.push([id, d]);
+      }
+      if (cancelled || results.length === 0) return;
+      setDecoded((prev) => {
+        const next = new Map(prev);
+        for (const [id, d] of results) {
+          const ex = next.get(id);
+          if (ex && ex.kind !== 'waiting' && d.kind === 'waiting') continue;
+          next.set(id, d);
+        }
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [messages, decodeTick, channelId]);
+
+  // Late channel-key arrival: re-poll while anything is still 'waiting' (bounded to ~36s).
+  // Deliberately NOT depending on `decoded` — that would recreate the interval (and reset
+  // the tick counter) on every decrypt pass, defeating the cap and polling forever. We
+  // read the latest state via decodedRef and bound total attempts with a ref.
+  const repollTicksRef = useRef(0);
+  useEffect(() => {
+    if (!isEncrypted) return;
+    repollTicksRef.current = 0;
+    const iv = setInterval(() => {
+      const anyWaiting = [...decodedRef.current.values()].some((d) => d.kind === 'waiting');
+      if (!anyWaiting || repollTicksRef.current >= 12) { clearInterval(iv); return; }
+      repollTicksRef.current++;
+      void coverChannelMembers(channelId).catch(() => {});
+      setDecodeTick((x) => x + 1);
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [isEncrypted, channelId]);
+
   // Listen for real-time messages on this channel (including edit/delete)
   useEffect(() => {
     const unsub = onWsEvent((event) => {
+      // P2d/P4: membership change → rotate the channel key past the new floor (private)
+      // and re-cover remaining members so a removed member can't read new messages.
+      if (event.type === 'channel_members_changed' && (event as any).channel_id === channelId) {
+        const floor = (event as any).key_epoch_floor ?? 0;
+        if (isEncrypted && isPrivate && floor > 0) void rotateChannelKey(channelId, floor).catch(() => {});
+        else if (isEncrypted) void coverChannelMembers(channelId).catch(() => {});
+        return;
+      }
       if (event.type === 'message' && event.envelope) {
         const env = normalizeEnvelope(event.envelope) as ExtendedEnvelope;
         const decoded = decodeChatMessage(env.payload);
@@ -206,10 +337,12 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         if (signer) {
           client?.markChannelRead(channelId).catch(() => {});
         }
+        // Cover any newly-joined member devices with the channel key (no-op if none).
+        if (isEncrypted) void coverChannelMembers(channelId).catch(() => {});
       }
     });
     return unsub;
-  }, [onWsEvent, channelId, client, signer]);
+  }, [onWsEvent, channelId, client, signer, isEncrypted, isPrivate]);
 
   // Build lookup map for reply context resolution
   const msgById = useMemo(() => {
@@ -318,8 +451,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // Allow sending text, attachments, or both
     if ((!text && pendingAttachments.length === 0) || !client || !signer) return;
 
-    // Route to edit handler when in edit mode
+    // Encrypted channels block plaintext edits via editMessage. Editing an encrypted
+    // message isn't wired yet (the SDK channel-edit envelope is text-only); skip for now.
     if (editingMsg) {
+      if (isEncrypted) {
+        Alert.alert(t('chat_edit'), t('e2e_cant_decrypt'));
+        return;
+      }
       try {
         await client.editMessage(channelId, editingMsg.msgId, text);
         // Optimistic update — clear cached content so it re-decodes
@@ -343,7 +481,25 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       if (replyTo) options.replyTo = replyTo.msgId;
       if (pendingAttachments.length > 0) options.attachments = pendingAttachments;
       const sentAttachments = [...pendingAttachments];
-      const result = await client.sendMessage(channelId, text || '', options);
+      let sentMsgId: string | undefined;
+
+      if (isEncrypted) {
+        // E2E channels need a built-in wallet to sign the key envelopes.
+        if (!e2eAvailable()) {
+          Alert.alert(t('chat_send'), t('e2e_builtin_only'));
+          return;
+        }
+        const built = await buildEncryptedChannelMsg(channelId, canEstablishKey, text || '', options, encFloor);
+        if (built === 'waiting') {
+          Alert.alert(t('chat_send'), t('e2e_channel_waiting'));
+          return;
+        }
+        const r = await client.sendMessageEnvelope(built);
+        sentMsgId = r.msg_id;
+      } else {
+        const r = await client.sendMessage(channelId, text || '', options);
+        sentMsgId = r.msg_id;
+      }
       setInput('');
       setReplyTo(null);
       setPendingAttachments([]);
@@ -352,7 +508,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const optimistic: ExtendedEnvelope = {
         version: 1,
         msg_type: 1,
-        msg_id: result.msg_id || `local-${Date.now()}`,
+        msg_id: sentMsgId || `local-${Date.now()}`,
         author: myAddress || '',
         timestamp: Date.now(),
         lamport_ts: 0,
@@ -370,12 +526,14 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Send failed: ${msg}`);
-      Alert.alert('Send failed', msg.slice(0, 150));
+      const key = chatErrorKey(msg);
+      Alert.alert(t('chat_send'), key ? t(key) : msg.slice(0, 150));
     }
-  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t]);
+  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor]);
 
   const handleReply = useCallback((msg: ExtendedEnvelope) => {
-    const content = msg._decodedContent || '';
+    const d = decodedRef.current.get(chanCacheId(msg));
+    const content = (d && (d.kind === 'text' || d.kind === 'plain') ? d.text : '') || msg._decodedContent || '';
     const preview = content.length > 80 ? content.slice(0, 80) + '...' : content;
     setReplyTo({
       msgId: msgIdToHex(msg.msg_id),
@@ -388,7 +546,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const handleEdit = useCallback((msg: ExtendedEnvelope) => {
     // Ownership guard — only edit own messages
     if (msg.author !== myAddress) return;
-    const content = msg._decodedContent || '';
+    const d = decodedRef.current.get(chanCacheId(msg));
+    const content = (d && (d.kind === 'text' || d.kind === 'plain') ? d.text : '') || msg._decodedContent || '';
     setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content });
     setInput(content);
     setReplyTo(null);
@@ -408,8 +567,10 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : '';
       debugLog('warn', `Delete failed: ${errMsg}`);
+      const key = chatErrorKey(errMsg);
+      Alert.alert(t('chat_delete'), key ? t(key) : errMsg.slice(0, 150));
     }
-  }, [client, channelId, myAddress]);
+  }, [client, channelId, myAddress, t]);
 
   const handleReact = useCallback(async (msg: Envelope, emoji: string) => {
     if (!client) return;
@@ -424,9 +585,12 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         return { ...m, reactions };
       }));
     } catch (e) {
-      debugLog('warn', `React failed: ${e instanceof Error ? e.message : ''}`);
+      const errMsg = e instanceof Error ? e.message : '';
+      debugLog('warn', `React failed: ${errMsg}`);
+      const key = chatErrorKey(errMsg);
+      if (key) Alert.alert(t('chat_react'), t(key));
     }
-  }, [client, channelId]);
+  }, [client, channelId, t]);
 
   const cancelEdit = useCallback(() => {
     setEditingMsg(null);
@@ -526,8 +690,12 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
     const { envelope, isGrouped } = item;
     const isOwn = envelope.author === myAddress;
-    // Use cached decoded content — avoids re-decoding msgpack on every render
-    const content = envelope._decodedContent || '';
+    // Text comes from the async decrypt cache (handles v1 plaintext + v2 encrypted).
+    const disp = decoded.get(chanCacheId(envelope));
+    const content = !disp ? (envelope._decodedContent || '')
+      : disp.kind === 'waiting' ? t('e2e_channel_waiting')
+        : disp.kind === 'error' ? t('e2e_cant_decrypt')
+          : disp.text;
     const authorLabel = profileNames[envelope.author] || envelope.author.slice(0, 12) + '...';
     const replyContext = resolveReply(envelope);
     const nodeUrl = (client as any)?.nodeUrl || '';
@@ -550,19 +718,27 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         onAuthorPress={handleAuthorPress}
       />
     );
-  }, [myAddress, colors, profileNames, client, resolveReply, handleReply, handleEdit, handleDelete, handleReact, handleTip, handleAuthorPress]);
+  }, [myAddress, colors, profileNames, client, decoded, t, resolveReply, handleReply, handleEdit, handleDelete, handleReact, handleTip, handleAuthorPress]);
 
   const keyExtractor = useCallback((item: ListItem) => item.key, []);
 
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: colors.bgPrimary }]}
-      behavior="padding"
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 100}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 60}
     >
       {/* Channel header */}
       <View style={[styles.header, { backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
         <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>#{channelName}</Text>
+        {isEncrypted && (
+          <Text
+            style={{ color: colors.textSecondary, fontSize: fontSize.xs, marginRight: spacing.sm }}
+            numberOfLines={1}
+          >
+            {isPrivate ? t('e2e_encrypted_badge') : t('e2e_public_by_design')}
+          </Text>
+        )}
         {signer && (
           <TouchableOpacity
             onPress={() => navigation.navigate('ChannelAdmin', { channelId, channelName })}

@@ -27,6 +27,7 @@ import type {
   ChatStackParamList,
   DmStackParamList,
   MoreStackParamList,
+  SearchStackParamList,
 } from './types';
 
 // Screens
@@ -45,8 +46,11 @@ import DebugScreen from '../screens/DebugScreen';
 import BookmarksScreen from '../screens/BookmarksScreen';
 import AddressbookScreen from '../screens/AddressbookScreen';
 import WalletBalanceScreen from '../screens/WalletBalanceScreen';
+import ReceiveScreen from '../screens/ReceiveScreen';
+import TokenDetailScreen from '../screens/TokenDetailScreen';
 import CreateChannelScreen from '../screens/CreateChannelScreen';
 import ChannelAdminScreen from '../screens/ChannelAdminScreen';
+import ChannelJoinScreen from '../screens/ChannelJoinScreen';
 import FollowListScreen from '../screens/FollowListScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
 import UserProfileScreen from '../screens/UserProfileScreen';
@@ -56,6 +60,7 @@ const NewsStack = createNativeStackNavigator<NewsStackParamList>();
 const ChatStack = createNativeStackNavigator<ChatStackParamList>();
 const DmStack = createNativeStackNavigator<DmStackParamList>();
 const MoreStack = createNativeStackNavigator<MoreStackParamList>();
+const SearchStack = createNativeStackNavigator<SearchStackParamList>();
 
 function NewsTab() {
   return (
@@ -76,6 +81,7 @@ function ChatTab() {
       <ChatStack.Screen name="CreateChannel" component={CreateChannelScreen} />
       <ChatStack.Screen name="ChannelMessages" component={ChannelMessagesScreen} />
       <ChatStack.Screen name="ChannelAdmin" component={ChannelAdminScreen} />
+      <ChatStack.Screen name="ChannelJoin" component={ChannelJoinScreen} />
       <ChatStack.Screen name="UserProfile" component={UserProfileScreen} />
       <ChatStack.Screen name="FollowList" component={FollowListScreen} />
     </ChatStack.Navigator>
@@ -93,6 +99,19 @@ function DmTab() {
   );
 }
 
+function SearchTab() {
+  return (
+    <SearchStack.Navigator screenOptions={{ headerShown: false }}>
+      <SearchStack.Screen name="SearchHome" component={SearchScreen} />
+      <SearchStack.Screen name="ChannelMessages" component={ChannelMessagesScreen} />
+      <SearchStack.Screen name="ChannelJoin" component={ChannelJoinScreen} />
+      <SearchStack.Screen name="NewsDetail" component={NewsDetailScreen} />
+      <SearchStack.Screen name="UserProfile" component={UserProfileScreen} />
+      <SearchStack.Screen name="FollowList" component={FollowListScreen} />
+    </SearchStack.Navigator>
+  );
+}
+
 function MoreTab() {
   return (
     <MoreStack.Navigator screenOptions={{ headerShown: false }}>
@@ -100,7 +119,9 @@ function MoreTab() {
       <MoreStack.Screen name="Bookmarks" component={BookmarksScreen} options={{ headerShown: true, title: 'Bookmarks' }} />
       <MoreStack.Screen name="Addressbook" component={AddressbookScreen} options={{ headerShown: true, title: 'Addressbook' }} />
       <MoreStack.Screen name="Wallet" component={WalletScreen} />
-      <MoreStack.Screen name="WalletBalance" component={WalletBalanceScreen} />
+      <MoreStack.Screen name="WalletBalance" component={WalletBalanceScreen} options={{ headerShown: true, title: 'Wallet' }} />
+      <MoreStack.Screen name="Receive" component={ReceiveScreen} options={{ headerShown: true, title: 'Receive' }} />
+      <MoreStack.Screen name="TokenDetail" component={TokenDetailScreen} options={{ headerShown: true, title: 'Staking' }} />
       <MoreStack.Screen name="PinSetup" component={PinSetupScreen} />
       <MoreStack.Screen name="DebugLogs" component={DebugScreen} />
       <MoreStack.Screen name="Notifications" component={NotificationsScreen} />
@@ -220,7 +241,7 @@ export default function TabNavigator({ startScreen }: Props) {
       />
       <Tab.Screen
         name="SearchTab"
-        component={SearchScreen}
+        component={SearchTab}
         options={{
           title: t('nav_search'),
           tabBarLabel: t('nav_search'),
@@ -228,6 +249,9 @@ export default function TabNavigator({ startScreen }: Props) {
             <Ionicons name="search-outline" size={size} color={color} />
           ),
         }}
+        listeners={({ navigation: tabNav }) => ({
+          tabPress: () => { tabNav.navigate('SearchTab', { screen: 'SearchHome' }); },
+        })}
       />
       <Tab.Screen
         name="MoreTab"

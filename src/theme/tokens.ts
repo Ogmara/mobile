@@ -1,8 +1,9 @@
 /**
  * Design tokens — shared color palette, spacing, typography.
  *
- * Values match the web frontend (global.css) and spec 06-frontend.md section 3.2.
- * Used by both light and dark themes.
+ * Colors match the desktop app's "Modern" (Telegram-inspired) style — the sole
+ * design language on mobile. Only color values differ between light/dark; the
+ * spacing/typography/radius scales are theme-independent (project rule).
  */
 
 export const spacing = {
@@ -29,38 +30,38 @@ export const radius = {
   full: 9999,
 } as const;
 
-/** Light theme color palette. */
+/** Light theme color palette (desktop Modern light). */
 export const lightColors = {
-  bgPrimary: '#ffffff',
-  bgSecondary: '#f5f5f7',
-  bgTertiary: '#e8e8ed',
-  textPrimary: '#1a1a1a',
-  textSecondary: '#6b6b6b',
-  textInverse: '#ffffff',
-  accentPrimary: '#6c5ce7',
-  accentSecondary: '#a29bfe',
-  border: '#e0e0e0',
-  success: '#00b894',
-  warning: '#fdcb6e',
-  error: '#d63031',
-  dm: '#e17055',
+  bgPrimary: '#FFFFFF',
+  bgSecondary: '#F4F4F5',
+  bgTertiary: '#EBEDF0',
+  textPrimary: '#0F1419',
+  textSecondary: '#707579',
+  textInverse: '#FFFFFF',
+  accentPrimary: '#3390EC',
+  accentSecondary: '#4FB3F6',
+  border: '#E5E8EC',
+  success: '#4DCD5E',
+  warning: '#E8A93C',
+  error: '#E53935',
+  dm: '#3390EC',
 } as const;
 
-/** Dark theme color palette. */
+/** Dark theme color palette (desktop Modern dark — Telegram blue). */
 export const darkColors = {
-  bgPrimary: '#1a1a2e',
-  bgSecondary: '#16213e',
-  bgTertiary: '#0f3460',
-  textPrimary: '#e0e0e0',
-  textSecondary: '#8b8b8b',
-  textInverse: '#1a1a1a',
-  accentPrimary: '#a29bfe',
-  accentSecondary: '#6c5ce7',
-  border: '#2a2a4a',
-  success: '#55efc4',
-  warning: '#ffeaa7',
-  error: '#ff7675',
-  dm: '#fab1a0',
+  bgPrimary: '#0E1621',
+  bgSecondary: '#0E1621',
+  bgTertiary: '#182533',
+  textPrimary: '#FFFFFF',
+  textSecondary: '#708499',
+  textInverse: '#FFFFFF',
+  accentPrimary: '#5288C1',
+  accentSecondary: '#6AB2F2',
+  border: '#1F2C3A',
+  success: '#4DCD5E',
+  warning: '#E8A93C',
+  error: '#E53935',
+  dm: '#6AB2F2',
 } as const;
 
 /** Color tokens interface — shared shape for both light and dark palettes. */

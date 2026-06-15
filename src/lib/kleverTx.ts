@@ -41,18 +41,42 @@ export function setContractAddress(address: string): void {
   }
 }
 
-/** Get the Kleverscan explorer base URL for the current network. */
-export async function getExplorerUrl(): Promise<string> {
-  const network = await getKleverNetwork();
-  return network === 'testnet'
-    ? 'https://testnet.kleverscan.org'
-    : 'https://kleverscan.org';
+/** Ogmara's own Klever block explorer (kleverchain.org). */
+const EXPLORER_BASE = 'https://kleverchain.org';
+
+/** `&network=testnet` on testnet so deep links resolve to the right chain; '' on mainnet. */
+async function explorerNetParam(): Promise<string> {
+  return (await getKleverNetwork()) === 'testnet' ? '&network=testnet' : '';
 }
 
-/** Get the explorer URL for a specific transaction hash. */
+/** Explorer base URL. */
+export async function getExplorerUrl(): Promise<string> {
+  return EXPLORER_BASE;
+}
+
+/** Deep link to inspect a transaction by hash. */
 export async function getExplorerTxUrl(txHash: string): Promise<string> {
-  const base = await getExplorerUrl();
-  return `${base}/transaction/${txHash}`;
+  return `${EXPLORER_BASE}/transactions?hash=${encodeURIComponent(txHash)}${await explorerNetParam()}`;
+}
+
+/** Deep link to an address's wallet/details page. */
+export async function getExplorerAddressUrl(address: string): Promise<string> {
+  return `${EXPLORER_BASE}/wallet?address=${encodeURIComponent(address)}${await explorerNetParam()}`;
+}
+
+/** Deep link to an address's staking overview. */
+export async function getExplorerStakingUrl(address: string): Promise<string> {
+  return `${EXPLORER_BASE}/staking?address=${encodeURIComponent(address)}${await explorerNetParam()}`;
+}
+
+/** Deep link to an address's transaction history & reconciliation. */
+export async function getExplorerReconciliationUrl(address: string): Promise<string> {
+  return `${EXPLORER_BASE}/reconciliation?address=${encodeURIComponent(address)}${await explorerNetParam()}`;
+}
+
+/** Deep link to a smart contract's invocation history. */
+export async function getExplorerContractUrl(scAddress: string): Promise<string> {
+  return `${EXPLORER_BASE}/contracts?address=${encodeURIComponent(scAddress)}${await explorerNetParam()}`;
 }
 
 // --- Helpers ---
@@ -355,6 +379,43 @@ export async function sendTransfer(
     type: 0,
     payload: { receiver: recipient, amount, kda: assetId },
   }]);
+}
+
+// --- Staking / delegation / rewards (native Klever contracts) ---
+// Contract types: Freeze=4, Unfreeze=5, Delegate=6, Undelegate=7, Withdraw=8, Claim=9.
+// The node simulates on /transaction/send and rejects invalid payloads (see
+// feedback_klever_tx_api). Amounts are atomic units; bucket ids are hex strings.
+
+/** Freeze (stake) an amount of an asset → creates a bucket. */
+export async function freezeAsset(assetId: string, amount: number): Promise<string> {
+  return buildSignBroadcast([{ type: 4, payload: { amount, kda: assetId } }]);
+}
+
+/** Unfreeze (unstake) a bucket. Must be undelegated first. Funds become withdrawable after maturity. */
+export async function unfreezeBucket(assetId: string, bucketId: string): Promise<string> {
+  return buildSignBroadcast([{ type: 5, payload: { bucketID: bucketId, kda: assetId } }]);
+}
+
+/** Delegate a (KLV) bucket to a validator owner address.
+ *  NOTE: the Klever API uses `receiver` for the address field (same as Transfer),
+ *  not `toAddress` — passing `toAddress` yields "could not create reward address". */
+export async function delegateBucket(bucketId: string, validatorAddress: string): Promise<string> {
+  return buildSignBroadcast([{ type: 6, payload: { bucketID: bucketId, receiver: validatorAddress } }]);
+}
+
+/** Undelegate a bucket from its validator. */
+export async function undelegateBucket(bucketId: string): Promise<string> {
+  return buildSignBroadcast([{ type: 7, payload: { bucketID: bucketId } }]);
+}
+
+/** Withdraw matured unfrozen funds for an asset. */
+export async function withdrawAsset(assetId: string): Promise<string> {
+  return buildSignBroadcast([{ type: 8, payload: { kda: assetId } }]);
+}
+
+/** Claim staking/delegation rewards for an asset (claimType 0 = staking). */
+export async function claimRewards(assetId: string): Promise<string> {
+  return buildSignBroadcast([{ type: 9, payload: { claimType: 0, id: assetId } }]);
 }
 
 /** Delegate a device key. Cost: ~4.5 KLV. */

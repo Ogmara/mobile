@@ -36,6 +36,20 @@ export async function getKleverApiUrl(): Promise<string> {
   return API_URLS[network];
 }
 
+/** A staking/freeze bucket for an asset. */
+export interface StakeBucket {
+  /** Bucket id (hex) — referenced by unfreeze/delegate/undelegate. */
+  id: string;
+  /** Frozen amount (atomic). */
+  balance: number;
+  /** Validator owner address this bucket is delegated to, or '' if undelegated. */
+  delegation: string;
+  /** Validator display name, if known. */
+  validatorName?: string;
+  /** 4294967295 (max u32) while still staked; a real epoch once unfrozen (withdrawable later). */
+  unstakedEpoch: number;
+}
+
 /** Token balance entry from the Klever API. */
 export interface TokenBalance {
   assetId: string;
@@ -43,6 +57,36 @@ export interface TokenBalance {
   balance: number;
   precision: number;
   frozenBalance?: number;
+  unfrozenBalance?: number;
+  buckets?: StakeBucket[];
+  /** Whether this asset supports staking (account.assets[x].stakingType). */
+  stakingType?: number;
+}
+
+/** Claimable rewards for an asset (from the allowance endpoint). */
+export interface AssetRewards {
+  /** Claimable staking/delegation rewards (atomic). */
+  stakingRewards: number;
+  /** Claimable allowance/KDA-pool rewards (atomic). */
+  allowance: number;
+}
+
+/** A validator available for KLV delegation. */
+export interface Validator {
+  /** Owner address — the delegation target. */
+  address: string;
+  name: string;
+  /** Commission in basis points (10000 = 100%). */
+  commission: number;
+  totalStake: number;
+  canDelegate: boolean;
+  logo?: string;
+}
+
+const STAKE_EPOCH_MAX = 4294967295;
+/** True when a bucket is still actively staked (not yet unfrozen). */
+export function isBucketStaked(b: StakeBucket): boolean {
+  return b.unstakedEpoch >= STAKE_EPOCH_MAX;
 }
 
 /** Account data from the Klever API. */
@@ -82,12 +126,23 @@ export async function fetchAccountData(address: string): Promise<KleverAccount |
     if (account.assets) {
       for (const [assetId, assetData] of Object.entries(account.assets)) {
         const data = assetData as Record<string, unknown>;
+        const rawBuckets = Array.isArray(data.buckets) ? (data.buckets as Record<string, unknown>[]) : [];
+        const buckets: StakeBucket[] = rawBuckets.map((b) => ({
+          id: (b.id as string) || '',
+          balance: (b.balance as number) || 0,
+          delegation: (b.delegation as string) || '',
+          validatorName: (b.validatorName as string) || undefined,
+          unstakedEpoch: (b.unstakedEpoch as number) ?? STAKE_EPOCH_MAX,
+        })).filter((b) => b.id);
         assets[assetId] = {
           assetId,
           assetName: (data.assetName as string) || assetId,
           balance: (data.balance as number) || 0,
           precision: (data.precision as number) || 6,
           frozenBalance: (data.frozenBalance as number) || 0,
+          unfrozenBalance: (data.unfrozenBalance as number) || 0,
+          buckets,
+          stakingType: (data.stakingType as number) || 0,
         };
       }
     }
@@ -101,6 +156,55 @@ export async function fetchAccountData(address: string): Promise<KleverAccount |
     };
   } catch {
     return null;
+  }
+}
+
+/** Fetch claimable rewards for an asset (staking + allowance). Best-effort. */
+export async function fetchAssetRewards(address: string, assetId: string): Promise<AssetRewards> {
+  try {
+    const apiUrl = await getKleverApiUrl();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(`${apiUrl}/v1.0/address/${address}/allowance?asset=${encodeURIComponent(assetId)}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!resp.ok) return { stakingRewards: 0, allowance: 0 };
+    const json = await resp.json();
+    const r = json?.data?.result ?? {};
+    return {
+      stakingRewards: Number(r.stakingRewards) || 0,
+      allowance: Number(r.allowance) || 0,
+    };
+  } catch {
+    return { stakingRewards: 0, allowance: 0 };
+  }
+}
+
+/** Fetch validators available for KLV delegation (delegatable, sorted by stake). Best-effort. */
+export async function fetchValidators(): Promise<Validator[]> {
+  try {
+    const apiUrl = await getKleverApiUrl();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const resp = await fetch(`${apiUrl}/v1.0/validator/list?limit=100`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!resp.ok) return [];
+    const json = await resp.json();
+    const list: Record<string, unknown>[] = json?.data?.validators ?? [];
+    return list
+      .map((v) => ({
+        address: (v.ownerAddress as string) || '',
+        name: (v.name as string) || ((v.ownerAddress as string) || '').slice(0, 14) + '…',
+        commission: Number(v.commission) || 0,
+        totalStake: Number(v.totalStake) || 0,
+        canDelegate: v.canDelegate !== false,
+        logo: (v.logo as string) || undefined,
+      }))
+      .filter((v) => v.address && v.canDelegate)
+      .sort((a, b) => b.totalStake - a.totalStake);
+  } catch {
+    return [];
   }
 }
 

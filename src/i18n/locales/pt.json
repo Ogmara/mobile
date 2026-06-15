@@ -268,5 +268,7 @@
   "tx_undelegated": "Delegação cancelada",
   "tx_withdrew": "Sacado",
   "tx_claimed": "Recompensas resgatadas",
-  "tx_contract": "Chamada de contrato"
+  "tx_contract": "Chamada de contrato",
+  "e2e_decrypting": "🔒 Descriptografando…",
+  "e2e_attachment": "anexo criptografado"
 }

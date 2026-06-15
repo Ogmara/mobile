@@ -268,5 +268,7 @@
   "tx_undelegated": "Delegation aufgehoben",
   "tx_withdrew": "Abgehoben",
   "tx_claimed": "Belohnungen beansprucht",
-  "tx_contract": "Contract-Aufruf"
+  "tx_contract": "Contract-Aufruf",
+  "e2e_decrypting": "🔒 Wird entschlüsselt…",
+  "e2e_attachment": "verschlüsselter Anhang"
 }

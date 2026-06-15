@@ -268,5 +268,7 @@
   "tx_undelegated": "已取消委托",
   "tx_withdrew": "已提取",
   "tx_claimed": "已领取奖励",
-  "tx_contract": "合约调用"
+  "tx_contract": "合约调用",
+  "e2e_decrypting": "🔒 正在解密…",
+  "e2e_attachment": "加密附件"
 }

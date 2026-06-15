@@ -5,6 +5,40 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-06-15
+
+### Added
+
+- **P5 encrypted media (spec 04 §9).** Attachments in encrypted DMs, private channels,
+  and public encrypted channels are now end-to-end encrypted: the file bytes are
+  encrypted with a fresh per-file key BEFORE the IPFS upload, so the node only ever
+  stores opaque ciphertext. The per-file key + nonce ride INSIDE the message ciphertext
+  as a `MediaDescriptor`; only a stripped `{ cid, size }` reaches the wire.
+  - New `src/lib/mediaCrypto.ts`: `encryptAndUploadFile` (read bytes → SDK `encryptFile`
+    → upload the cipher with an `encrypted=1` form field), `loadDecryptedMedia`
+    (fetch ciphertext → SDK `decryptMedia` → `data:` URI, cached by cid), and Hermes-safe
+    base64 codecs.
+  - `MessageBubble` renders encrypted attachments via a new `EncryptedAttachment` view:
+    a placeholder while decrypting, the decrypted image/file on success, and a
+    "🔒 encrypted attachment" fallback on failure.
+  - `ChannelMessagesScreen` and `DmConversationScreen` now encrypt-on-send (passing
+    `media` descriptors to the encrypted builders) and decrypt-on-render. The DM screen
+    gains its first attachment picker. The plaintext upload path is preserved for
+    non-encrypted channels.
+  - `buildEncryptedChannelMsg` / `buildEncryptedDm` accept `media`; the decrypt wrappers
+    (`decryptChannelMessage` / `decryptDmMessage`) surface the content `media[]`.
+  - i18n: `e2e_decrypting` + `e2e_attachment` strings added for all 7 languages.
+
+### Notes
+
+- Files are buffered fully in memory and capped at 50 MB (`MAX_ENCRYPTED_MEDIA_BYTES`);
+  streaming encryption is post-MVP.
+- Upload of the encrypted bytes uses a `Blob` built from the cipher in a multipart
+  `FormData` (no `expo-file-system` dependency was added). Rendering uses `data:` URIs
+  rather than temp files. Both paths are typecheck-clean but **device runtime
+  verification is still pending** (Expo/Metro device build not runnable in this session) —
+  consistent with the existing mobile E2E "device runtime-verify pending" status.
+
 ## [0.25.2] - 2026-06-15
 
 ### Changed

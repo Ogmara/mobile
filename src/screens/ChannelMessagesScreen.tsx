@@ -39,7 +39,8 @@ import {
   type DmDisplay,
 } from '../lib/channelCrypto';
 import { chatErrorKey } from '../lib/chatErrors';
-import { CHANNEL_TYPE_PRIVATE, type Envelope } from '@ogmara/sdk';
+import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
+import { CHANNEL_TYPE_PRIVATE, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 
@@ -90,6 +91,8 @@ type ExtendedEnvelope = Envelope & {
   /** Cached decoded content to avoid re-decoding msgpack on every render */
   _decodedContent?: string;
   _decodedAttachments?: Array<{ cid: string; mime_type: string; filename?: string }>;
+  /** P5: optimistic encrypted-media descriptors for a locally-sent message. */
+  _decodedEncryptedMedia?: MediaDescriptor[];
 };
 
 type ListItem =
@@ -218,7 +221,10 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       for (const m of messages) {
         const id = chanCacheId(m);
         if (m._optimistic) {
-          results.push([id, { kind: 'plain', text: typeof m.payload === 'string' ? m.payload : '' }]);
+          const optText = typeof m.payload === 'string' ? m.payload : '';
+          results.push([id, m._decodedEncryptedMedia
+            ? { kind: 'text', text: optText, media: m._decodedEncryptedMedia }
+            : { kind: 'plain', text: optText }]);
           continue;
         }
         const ex = decodedRef.current.get(id);
@@ -448,8 +454,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    // Allow sending text, attachments, or both
-    if ((!text && pendingAttachments.length === 0) || !client || !signer) return;
+    // Allow sending text, attachments (plaintext or encrypted), or both
+    if ((!text && pendingAttachments.length === 0 && pendingEncryptedMedia.length === 0) || !client || !signer) return;
 
     // Encrypted channels block plaintext edits via editMessage. Editing an encrypted
     // message isn't wired yet (the SDK channel-edit envelope is text-only); skip for now.
@@ -481,6 +487,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       if (replyTo) options.replyTo = replyTo.msgId;
       if (pendingAttachments.length > 0) options.attachments = pendingAttachments;
       const sentAttachments = [...pendingAttachments];
+      const sentEncryptedMedia = [...pendingEncryptedMedia];
       let sentMsgId: string | undefined;
 
       if (isEncrypted) {
@@ -489,6 +496,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           Alert.alert(t('chat_send'), t('e2e_builtin_only'));
           return;
         }
+        // Encrypted attachments ride INSIDE the ciphertext via `media` (not plaintext).
+        if (sentEncryptedMedia.length > 0) options.media = sentEncryptedMedia;
         const built = await buildEncryptedChannelMsg(channelId, canEstablishKey, text || '', options, encFloor);
         if (built === 'waiting') {
           Alert.alert(t('chat_send'), t('e2e_channel_waiting'));
@@ -503,6 +512,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       setInput('');
       setReplyTo(null);
       setPendingAttachments([]);
+      setPendingEncryptedMedia([]);
 
       // Optimistically add the sent message with cached attachments
       const optimistic: ExtendedEnvelope = {
@@ -518,6 +528,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         _optimistic: true,
         _decodedContent: text || '',
         _decodedAttachments: sentAttachments.length > 0 ? sentAttachments : undefined,
+        _decodedEncryptedMedia: sentEncryptedMedia.length > 0 ? sentEncryptedMedia : undefined,
       };
       setMessages((prev) => {
         const next = [optimistic, ...prev];
@@ -529,6 +540,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const key = chatErrorKey(msg);
       Alert.alert(t('chat_send'), key ? t(key) : msg.slice(0, 150));
     }
+    // pendingAttachments / pendingEncryptedMedia are declared after this callback; like
+    // the original send they're read via closure (state setters keep them fresh enough
+    // for the send path) and intentionally omitted from deps to avoid a TDZ reference.
   }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor]);
 
   const handleReply = useCallback((msg: ExtendedEnvelope) => {
@@ -607,6 +621,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [showEmoji, setShowEmoji] = useState(false);
   // Media attachments for current message (must include size_bytes for SDK Attachment type)
   const [pendingAttachments, setPendingAttachments] = useState<Array<{ cid: string; mime_type: string; size_bytes: number; filename: string }>>([]);
+  // P5: encrypted-channel attachments — descriptors hold per-file keys, sent via `media`.
+  const [pendingEncryptedMedia, setPendingEncryptedMedia] = useState<MediaDescriptor[]>([]);
   const [uploading, setUploading] = useState(false);
 
   const handleTip = useCallback((msg: Envelope) => {
@@ -616,14 +632,17 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
   const handlePickMedia = useCallback(async () => {
     if (!client || !signer || uploading) return;
+    // Encrypted channels read the bytes (base64) so we can encrypt BEFORE upload (P5).
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
       allowsMultipleSelection: false,
       quality: 0.8,
+      base64: isEncrypted,
     });
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
-    if (asset.fileSize && asset.fileSize > 50 * 1024 * 1024) {
+    const cap = isEncrypted ? MAX_ENCRYPTED_MEDIA_BYTES : 50 * 1024 * 1024;
+    if (asset.fileSize && asset.fileSize > cap) {
       Alert.alert(t('error_generic'), 'File too large (max 50MB)');
       return;
     }
@@ -632,7 +651,16 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const filename = asset.fileName ?? `file-${Date.now()}`;
       const mimeType = asset.mimeType ?? 'application/octet-stream';
 
-      // React Native FormData needs {uri, type, name} — not a Blob
+      if (isEncrypted) {
+        // Encrypt-before-upload: read bytes → encryptFile → upload opaque cipher.
+        if (!asset.base64) throw new Error('could not read file bytes for encryption');
+        const bytes = base64ToBytes(asset.base64);
+        const descriptor = await encryptAndUploadFile({ bytes, mime: mimeType, name: filename });
+        setPendingEncryptedMedia((prev) => [...prev, descriptor]);
+        return;
+      }
+
+      // Plaintext path (non-encrypted channels): RN FormData needs {uri, type, name}.
       const formData = new FormData();
       formData.append('file', {
         uri: asset.uri,
@@ -663,11 +691,14 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Media upload failed: ${msg}`);
-      Alert.alert(t('error_generic'), msg.includes('404') ? t('news_upload_unavailable') : msg.slice(0, 150));
+      const friendly = msg === 'FILE_TOO_LARGE' ? 'File too large (max 50MB)'
+        : msg.includes('404') ? t('news_upload_unavailable')
+          : msg.slice(0, 150);
+      Alert.alert(t('error_generic'), friendly);
     } finally {
       setUploading(false);
     }
-  }, [client, signer, uploading, t]);
+  }, [client, signer, uploading, isEncrypted, t]);
 
   // ── Render ──
 
@@ -696,6 +727,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       : disp.kind === 'waiting' ? t('e2e_channel_waiting')
         : disp.kind === 'error' ? t('e2e_cant_decrypt')
           : disp.text;
+    // P5 encrypted attachments live INSIDE the decrypted content; plaintext wire
+    // attachments are shown only when the message wasn't encrypted.
+    const encryptedMedia = disp && disp.kind === 'text' ? disp.media : undefined;
     const authorLabel = profileNames[envelope.author] || envelope.author.slice(0, 12) + '...';
     const replyContext = resolveReply(envelope);
     const nodeUrl = (client as any)?.nodeUrl || '';
@@ -706,7 +740,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         content={content}
         isOwn={isOwn}
         authorLabel={authorLabel}
-        attachments={envelope._decodedAttachments}
+        attachments={encryptedMedia && encryptedMedia.length > 0 ? undefined : envelope._decodedAttachments}
+        encryptedMedia={encryptedMedia}
         mediaBaseUrl={nodeUrl ? `${nodeUrl}/api/v1/media/` : undefined}
         replyContext={replyContext}
         isGrouped={isGrouped}
@@ -802,7 +837,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
             </View>
           )}
 
-          {/* Attachment preview */}
+          {/* Attachment preview (plaintext) */}
           {pendingAttachments.length > 0 && (
             <View style={[styles.attachPreview, { borderBottomColor: colors.border }]}>
               {pendingAttachments.map((att, i) => (
@@ -811,6 +846,22 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
                     📎 {att.filename}
                   </Text>
                   <TouchableOpacity onPress={() => setPendingAttachments((p) => p.filter((_, j) => j !== i))}>
+                    <Text style={{ color: colors.error, fontSize: fontSize.sm }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Encrypted attachment preview (P5) */}
+          {pendingEncryptedMedia.length > 0 && (
+            <View style={[styles.attachPreview, { borderBottomColor: colors.border }]}>
+              {pendingEncryptedMedia.map((m, i) => (
+                <View key={i} style={[styles.attachChip, { backgroundColor: colors.bgTertiary }]}>
+                  <Text style={{ color: colors.textPrimary, fontSize: fontSize.xs }} numberOfLines={1}>
+                    🔒 {m.name || m.cid.slice(0, 12)}
+                  </Text>
+                  <TouchableOpacity onPress={() => setPendingEncryptedMedia((p) => p.filter((_, j) => j !== i))}>
                     <Text style={{ color: colors.error, fontSize: fontSize.sm }}>✕</Text>
                   </TouchableOpacity>
                 </View>

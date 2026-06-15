@@ -268,5 +268,7 @@
   "tx_undelegated": "委任解除",
   "tx_withdrew": "引き出し",
   "tx_claimed": "報酬を請求",
-  "tx_contract": "コントラクト呼び出し"
+  "tx_contract": "コントラクト呼び出し",
+  "e2e_decrypting": "🔒 復号しています…",
+  "e2e_attachment": "暗号化された添付ファイル"
 }

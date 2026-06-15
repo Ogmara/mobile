@@ -9,14 +9,14 @@
  * Per spec 06-frontend.md section 6.1.
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   Image,
   StyleSheet,
   TouchableOpacity,
-  ActionSheetIOS,
+  ActivityIndicator,
   Platform,
   Alert,
   Modal,
@@ -24,7 +24,8 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
-import type { Envelope } from '@ogmara/sdk';
+import type { Envelope, MediaDescriptor } from '@ogmara/sdk';
+import { loadDecryptedMedia } from '../lib/mediaCrypto';
 
 /** 30-minute edit window matching desktop */
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
@@ -56,6 +57,8 @@ interface Props {
   isOwn: boolean;
   authorLabel: string;
   attachments?: MessageAttachment[];
+  /** P5 encrypted-media descriptors (carry per-file keys); decrypted on render. */
+  encryptedMedia?: MediaDescriptor[];
   /** Base URL for media (e.g., "https://node.ogmara.org/api/v1/media/") */
   mediaBaseUrl?: string;
   replyContext?: ReplyContext | null;
@@ -70,12 +73,83 @@ interface Props {
   isGrouped?: boolean;
 }
 
+/**
+ * Renders one P5 encrypted attachment: fetches the ciphertext, decrypts it (off the
+ * render path), and shows the plaintext via a `data:` URI. Placeholder while decrypting,
+ * "🔒 encrypted attachment" fallback on failure.
+ */
+function EncryptedAttachment({
+  descriptor,
+  mediaBaseUrl,
+  onOpenImage,
+}: {
+  descriptor: MediaDescriptor;
+  mediaBaseUrl: string;
+  onOpenImage: (uri: string) => void;
+}) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [uri, setUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState('loading');
+    setUri(null);
+    loadDecryptedMedia(descriptor, mediaBaseUrl)
+      .then((res) => {
+        if (cancelled) return;
+        if (res) { setUri(res.uri); setState('ready'); }
+        else setState('error');
+      })
+      .catch(() => { if (!cancelled) setState('error'); });
+    return () => { cancelled = true; };
+  }, [descriptor, mediaBaseUrl]);
+
+  const isImage = descriptor.mime.startsWith('image/');
+
+  if (state === 'loading') {
+    return (
+      <View style={[styles.encPlaceholder, { backgroundColor: colors.bgTertiary }]}>
+        <ActivityIndicator color={colors.textSecondary} />
+        <Text style={{ color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 4 }}>
+          {t('e2e_decrypting')}
+        </Text>
+      </View>
+    );
+  }
+  if (state === 'error' || !uri) {
+    return (
+      <View style={[styles.fileChip, { backgroundColor: colors.bgTertiary }]}>
+        <Text style={{ color: colors.textSecondary, fontSize: fontSize.xs }}>
+          🔒 {t('e2e_attachment')}
+        </Text>
+      </View>
+    );
+  }
+  if (isImage) {
+    return (
+      <TouchableOpacity onPress={() => onOpenImage(uri)} activeOpacity={0.8}>
+        <Image source={{ uri }} style={styles.inlineImage} resizeMode="cover" />
+      </TouchableOpacity>
+    );
+  }
+  return (
+    <View style={[styles.fileChip, { backgroundColor: colors.bgTertiary }]}>
+      <Text style={{ color: colors.textPrimary, fontSize: fontSize.xs }}>
+        🔒 {descriptor.name || descriptor.cid.slice(0, 12)}
+      </Text>
+    </View>
+  );
+}
+
 export default function MessageBubble({
   message,
   content,
   isOwn,
   authorLabel,
   attachments,
+  encryptedMedia,
   mediaBaseUrl,
   replyContext,
   onReply,
@@ -216,6 +290,19 @@ export default function MessageBubble({
                 </View>
               );
             })}
+          </View>
+        )}
+        {/* P5 encrypted attachments — fetched + decrypted before display */}
+        {encryptedMedia && encryptedMedia.length > 0 && mediaBaseUrl && (
+          <View style={styles.attachmentContainer}>
+            {encryptedMedia.map((m, idx) => (
+              <EncryptedAttachment
+                key={`${m.cid}-${idx}`}
+                descriptor={m}
+                mediaBaseUrl={mediaBaseUrl}
+                onOpenImage={setViewerImage}
+              />
+            ))}
           </View>
         )}
       </View>
@@ -368,6 +455,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
     borderRadius: radius.sm,
+  },
+  encPlaceholder: {
+    width: 220,
+    aspectRatio: 4 / 3,
+    borderRadius: radius.md,
+    marginTop: spacing.xs,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   sheetOverlay: {
     flex: 1,

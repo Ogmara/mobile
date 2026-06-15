@@ -268,5 +268,7 @@
   "tx_undelegated": "Делегирование отменено",
   "tx_withdrew": "Выведено",
   "tx_claimed": "Награды получены",
-  "tx_contract": "Вызов контракта"
+  "tx_contract": "Вызов контракта",
+  "e2e_decrypting": "🔒 Расшифровка…",
+  "e2e_attachment": "зашифрованное вложение"
 }

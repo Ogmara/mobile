@@ -20,6 +20,7 @@ import {
   KeyScopeKind,
   type OgmaraClient,
   type WrappedKey,
+  type MediaDescriptor,
 } from '@ogmara/sdk';
 import { decode } from '@msgpack/msgpack';
 import { getSigner, getCryptoClient } from './cryptoEnv';
@@ -300,13 +301,16 @@ export async function ensureChannelKeyForSend(
   return { convKey: res.key, epoch: res.epoch };
 }
 
-/** Build a signed, encrypted ChatMessage for an encrypted channel. */
+/** Build a signed, encrypted ChatMessage for an encrypted channel. When `opts.media`
+ *  is set (P5), each file is encrypted under its own key BEFORE upload and only a
+ *  stripped `{ cid, size }` reaches the wire; per-file keys ride inside the ciphertext. */
 export async function buildEncryptedChannelMsg(
   channelId: number, canEstablish: boolean, text: string,
   opts?: {
     replyTo?: string; mentions?: string[];
     contentRating?: 'general' | 'teen' | 'mature' | 'explicit';
     attachments?: Array<{ cid: string; mime_type: string; size_bytes: number; filename?: string; thumbnail_cid?: string }>;
+    media?: MediaDescriptor[];
   },
   floor = 0,
 ): Promise<Uint8Array | 'waiting'> {
@@ -319,6 +323,7 @@ export async function buildEncryptedChannelMsg(
     channelId, convKey: established.convKey, epoch: established.epoch,
     text, replyTo: opts?.replyTo, mentions: opts?.mentions,
     contentRating: opts?.contentRating, attachments: opts?.attachments,
+    media: opts?.media && opts.media.length > 0 ? opts.media : undefined,
   });
 }
 
@@ -366,7 +371,7 @@ export async function decryptChannelMessage(
   }
   try {
     const pt = decryptDmContent(key, scope, epoch, enc, nonce);
-    return { kind: 'text', text: pt.text };
+    return { kind: 'text', text: pt.text, media: pt.media };
   } catch {
     return { kind: 'error' };
   }

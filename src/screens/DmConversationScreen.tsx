@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import * as ImagePicker from 'expo-image-picker';
 import {
   View,
   Text,
@@ -35,8 +36,9 @@ import {
   type DmDisplay,
 } from '../lib/dmCrypto';
 import { chatErrorKey } from '../lib/chatErrors';
+import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
 import MessageBubble, { CHAT_REACTIONS, type ReplyContext } from '../components/MessageBubble';
-import type { Envelope } from '@ogmara/sdk';
+import type { Envelope, MediaDescriptor } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DmStackParamList } from '../navigation/types';
 
@@ -80,6 +82,8 @@ type ExtendedEnvelope = Envelope & {
   reactions?: Record<string, number>;
   _optimistic?: boolean;
   _decodedContent?: string;
+  /** P5: optimistic encrypted-media descriptors for a locally-sent DM. */
+  _decodedEncryptedMedia?: MediaDescriptor[];
 };
 
 type ListItem =
@@ -94,6 +98,9 @@ export default function DmConversationScreen({ route, navigation }: Props) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ExtendedEnvelope[]>([]);
   const [editingMsg, setEditingMsg] = useState<{ msgId: string; content: string } | null>(null);
+  // P5: encrypted attachments pending send (descriptors hold per-file keys).
+  const [pendingEncryptedMedia, setPendingEncryptedMedia] = useState<MediaDescriptor[]>([]);
+  const [uploading, setUploading] = useState(false);
   const inputRef = useRef<TextInput>(null);
 
   // Async decryption cache: `${msgIdHex}:${last_edited_at}` → display outcome. Decoding
@@ -220,7 +227,10 @@ export default function DmConversationScreen({ route, navigation }: Props) {
       for (const m of messages) {
         const id = dmCacheId(m);
         if (m._optimistic) {
-          results.push([id, { kind: 'plain', text: typeof m.payload === 'string' ? m.payload : '' }]);
+          const optText = typeof m.payload === 'string' ? m.payload : '';
+          results.push([id, m._decodedEncryptedMedia
+            ? { kind: 'text', text: optText, media: m._decodedEncryptedMedia }
+            : { kind: 'plain', text: optText }]);
           continue;
         }
         const ex = decodedRef.current.get(id);
@@ -297,8 +307,8 @@ export default function DmConversationScreen({ route, navigation }: Props) {
   // ── Message Actions ──
 
   const handleSend = useCallback(async () => {
-    if (!input.trim() || !client || !signer || !myAddress) return;
     const text = input.trim();
+    if ((!text && pendingEncryptedMedia.length === 0) || !client || !signer || !myAddress) return;
 
     // DMs are end-to-end encrypted; only built-in wallets can sign the key envelopes.
     if (!e2eAvailable()) {
@@ -327,7 +337,8 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     }
 
     try {
-      const env = await buildEncryptedDm(peerAddress, text);
+      const sentMedia = [...pendingEncryptedMedia];
+      const env = await buildEncryptedDm(peerAddress, text, undefined, sentMedia.length > 0 ? sentMedia : undefined);
       await client.sendDm(peerAddress, env);
       debugLog('info', `Encrypted DM sent to ${peerAddress.slice(0, 12)}`);
 
@@ -342,12 +353,14 @@ export default function DmConversationScreen({ route, navigation }: Props) {
         signature: '',
         relay_path: [],
         _optimistic: true,
+        _decodedEncryptedMedia: sentMedia.length > 0 ? sentMedia : undefined,
       };
       setMessages((prev) => {
         const next = [localMsg, ...prev];
         return next.length > MAX_LOCAL_MESSAGES ? next.slice(0, MAX_LOCAL_MESSAGES) : next;
       });
       setInput('');
+      setPendingEncryptedMedia([]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `DM send failed: ${msg}`);
@@ -357,7 +370,48 @@ export default function DmConversationScreen({ route, navigation }: Props) {
         Alert.alert(t('chat_send'), msg.slice(0, 150));
       }
     }
-  }, [input, client, signer, myAddress, peerAddress, editingMsg, t]);
+  }, [input, client, signer, myAddress, peerAddress, editingMsg, t, pendingEncryptedMedia]);
+
+  const handlePickMedia = useCallback(async () => {
+    if (!client || !signer || uploading) return;
+    // DMs are always encrypted → read bytes (base64) and encrypt BEFORE upload (P5).
+    if (!e2eAvailable()) {
+      Alert.alert(t('chat_send'), t('e2e_builtin_only'));
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      allowsMultipleSelection: false,
+      quality: 0.8,
+      base64: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    if (asset.fileSize && asset.fileSize > MAX_ENCRYPTED_MEDIA_BYTES) {
+      Alert.alert(t('error_generic'), 'File too large (max 50MB)');
+      return;
+    }
+    setUploading(true);
+    try {
+      if (!asset.base64) throw new Error('could not read file bytes for encryption');
+      const bytes = base64ToBytes(asset.base64);
+      const descriptor = await encryptAndUploadFile({
+        bytes,
+        mime: asset.mimeType ?? 'application/octet-stream',
+        name: asset.fileName ?? `file-${Date.now()}`,
+      });
+      setPendingEncryptedMedia((prev) => [...prev, descriptor]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '';
+      debugLog('warn', `DM media upload failed: ${msg}`);
+      const friendly = msg === 'FILE_TOO_LARGE' ? 'File too large (max 50MB)'
+        : msg.includes('404') ? t('news_upload_unavailable')
+          : msg.slice(0, 150);
+      Alert.alert(t('error_generic'), friendly);
+    } finally {
+      setUploading(false);
+    }
+  }, [client, signer, uploading, t]);
 
   const handleEdit = useCallback((msg: ExtendedEnvelope) => {
     // Ownership guard
@@ -437,7 +491,9 @@ export default function DmConversationScreen({ route, navigation }: Props) {
       : disp.kind === 'waiting' ? t('e2e_waiting')
         : disp.kind === 'error' ? t('e2e_cant_decrypt')
           : disp.text;
+    const encryptedMedia = disp && disp.kind === 'text' ? disp.media : undefined;
     const authorLabel = isOwn ? t('chat_you') : peerLabel;
+    const nodeUrl = (client as any)?.nodeUrl || '';
 
     return (
       <MessageBubble
@@ -445,6 +501,8 @@ export default function DmConversationScreen({ route, navigation }: Props) {
         content={content}
         isOwn={isOwn}
         authorLabel={authorLabel}
+        encryptedMedia={encryptedMedia}
+        mediaBaseUrl={nodeUrl ? `${nodeUrl}/api/v1/media/` : undefined}
         isGrouped={isGrouped}
         onEdit={handleEdit}
         onDelete={handleDelete}
@@ -452,7 +510,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
         onAuthorPress={handleAuthorPress}
       />
     );
-  }, [myAddress, colors, peerLabel, decoded, handleEdit, handleDelete, handleReact, handleAuthorPress, t]);
+  }, [myAddress, colors, peerLabel, decoded, client, handleEdit, handleDelete, handleReact, handleAuthorPress, t]);
 
   const keyExtractor = useCallback((item: ListItem) => item.key, []);
 
@@ -499,8 +557,35 @@ export default function DmConversationScreen({ route, navigation }: Props) {
           </View>
         )}
 
+        {/* Encrypted attachment preview (P5) */}
+        {pendingEncryptedMedia.length > 0 && (
+          <View style={[styles.attachPreview, { borderBottomColor: colors.border }]}>
+            {pendingEncryptedMedia.map((m, i) => (
+              <View key={i} style={[styles.attachChip, { backgroundColor: colors.bgTertiary }]}>
+                <Text style={{ color: colors.textPrimary, fontSize: fontSize.xs }} numberOfLines={1}>
+                  🔒 {m.name || m.cid.slice(0, 12)}
+                </Text>
+                <TouchableOpacity onPress={() => setPendingEncryptedMedia((p) => p.filter((_, j) => j !== i))}>
+                  <Text style={{ color: colors.error, fontSize: fontSize.sm }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* Input bar */}
         <View style={styles.inputBar}>
+          {!editingMsg && (
+            <TouchableOpacity
+              style={[styles.attachBtn, { backgroundColor: colors.bgTertiary }]}
+              onPress={handlePickMedia}
+              disabled={uploading}
+            >
+              <Text style={{ color: uploading ? colors.textSecondary : colors.textPrimary, fontSize: fontSize.lg }}>
+                {uploading ? '…' : '📎'}
+              </Text>
+            </TouchableOpacity>
+          )}
           <TextInput
             ref={inputRef}
             style={[styles.input, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
@@ -512,9 +597,9 @@ export default function DmConversationScreen({ route, navigation }: Props) {
             multiline
           />
           <TouchableOpacity
-            style={[styles.sendBtn, { backgroundColor: input.trim() ? colors.accentPrimary : colors.textSecondary }]}
+            style={[styles.sendBtn, { backgroundColor: (input.trim() || pendingEncryptedMedia.length > 0) ? colors.accentPrimary : colors.textSecondary }]}
             onPress={handleSend}
-            disabled={!input.trim()}
+            disabled={!input.trim() && pendingEncryptedMedia.length === 0}
           >
             <Text style={{ color: colors.textInverse, fontWeight: '600' }}>
               {editingMsg ? t('save') : t('chat_send')}
@@ -587,5 +672,30 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
     justifyContent: 'center',
+  },
+  attachBtn: {
+    marginRight: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attachPreview: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  attachChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
+    maxWidth: 180,
   },
 });

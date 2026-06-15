@@ -204,6 +204,8 @@
   "e2e_recipient_no_keys": "This user hasn't enabled encryption yet, so an encrypted message can't be delivered.",
   "e2e_builtin_only": "Encrypted messaging requires a built-in wallet. External (K5) wallet support is coming soon.",
   "e2e_channel_waiting": "Waiting for the channel key…",
+  "e2e_decrypting": "🔒 Decrypting…",
+  "e2e_attachment": "encrypted attachment",
   "e2e_section": "Encryption & Key Backup",
   "e2e_backup_now": "Back up message keys",
   "e2e_restore": "Restore message keys",

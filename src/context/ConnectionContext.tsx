@@ -334,6 +334,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
         import('../lib/dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
         import('../lib/channelCrypto').then(({ clearChannelKeyCache }) => clearChannelKeyCache()),
         import('../lib/keyVault').then(({ clearKeyVaultSession }) => clearKeyVaultSession()),
+        // P5: drop any decrypted media plaintext cached this session.
+        import('../lib/mediaCrypto').then(({ clearMediaCache }) => clearMediaCache()),
       ]).catch(() => {});
     }
     connectWs(nodeUrlRef.current);

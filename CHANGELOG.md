@@ -5,6 +5,30 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.1] - 2026-07-26
+
+### Fixed
+
+- **Private-channel "waiting for the channel key" could stick forever after a cross-node
+  join.** Same fix as web 0.61.2 / desktop 1.46.2: `ChannelMessagesScreen`'s late-key-arrival
+  poll gave up after ~36s (12 ticks × 3s) with no way to resume short of leaving and
+  reopening the channel. Live testnet diagnosis (darkw0rld + freeweb) confirmed the node-side
+  federation stack delivers the key correctly, but the full cross-node round trip can take
+  longer than that. Extended the give-up budget and renewed it on the existing
+  `channel_members_changed` WS event, which the screen already handles.
+
+### Security
+
+- **Dependency scan (`npm audit`) — 19 advisories found (1 critical, 6 high, 11 moderate, 1
+  low), all in the Expo/React Native/Metro dev-and-build toolchain (`tar`, `undici`, `uuid`
+  transitively via `xcode`/`@expo/config-plugins`, `ws`), none in runtime app code shipped to
+  the device. A plain `npm audit fix` (no `--force`) was tried and made things WORSE — it
+  reshuffled the lockfile, raised the count to 29, and pulled in `react-native@0.86.0`
+  transitively, a breaking bump. Reverted immediately. Per the project's mobile dependency
+  policy, this toolchain can't be build-verified in this session (no Expo/Metro dev server or
+  device available), so no fix was force-applied. **Deferred to a session where the mobile
+  build can be tested end-to-end** — flagging explicitly rather than leaving unmentioned.
+
 ## [0.26.0] - 2026-06-15
 
 ### Added
@@ -38,6 +62,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than temp files. Both paths are typecheck-clean but **device runtime
   verification is still pending** (Expo/Metro device build not runnable in this session) —
   consistent with the existing mobile E2E "device runtime-verify pending" status.
+
+## [0.26.0] - 2026-06-15
+
+### Changed
+
+- **Wallet hero + actions redesign ("Minimal premium").** The hero card is now a subtle
+  dark gradient with a thin accent top-glow and a hairline border (no more flat blue block);
+  Send / Receive / Manage are airy **outline "ghost" pills** with accent icons instead of
+  filled circles.
+
+### Added
+
+- **24h portfolio change %** — value-weighted ▲/▼ indicator next to the balance (from
+  bitcoin.me 24h data).
+- **Currency switcher** — `USD ▾` chip opens a picker (USD/EUR/BRL/GBP/JPY/CNY); fiat values
+  convert via keyless CoinGecko forex rates (`loadForex`/`formatFiat`), persisted in settings.
+- **Tap balance to hide** — tap the balance to blur all amounts (`••••`) for shoulder-surfing
+  privacy; an eye icon shows the state.
+
+(Localized across all 7 languages. The token-detail/staking screen still displays USD.)
+
+## [0.25.3] - 2026-06-15
+
+### Fixed
+
+- **Non-KLV token precision was wrong.** `fetchAccountData` defaulted precision to `6`
+  (`|| 6`), which both mis-defaulted absent values AND turned a real precision of `0`
+  (e.g. FLIPPY) into `6` — mis-scaling balances by 10⁶. Now uses the API precision verbatim,
+  defaulting to `0` only when truly absent (per the "always check precision via API" rule).
+- **Non-KLV token logos were missing.** The Klever account endpoint carries no logo and
+  bitcoin.me only lists traded tokens. Added `fetchAssetMeta` (`/v1.0/assets/{id}` → logo +
+  authoritative precision), used as the logo source for tokens lacking a bitcoin.me icon
+  (wallet hub + staking hub).
+
+### Changed
+
+- **Recent Activity icons** drop the colored circle backgrounds — the type symbol is shown
+  on its own in the type's accent color, for a cleaner look.
 
 ## [0.25.2] - 2026-06-15
 

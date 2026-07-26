@@ -247,17 +247,20 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     return () => { cancelled = true; };
   }, [messages, decodeTick, channelId]);
 
-  // Late channel-key arrival: re-poll while anything is still 'waiting' (bounded to ~36s).
-  // Deliberately NOT depending on `decoded` — that would recreate the interval (and reset
-  // the tick counter) on every decrypt pass, defeating the cap and polling forever. We
-  // read the latest state via decodedRef and bound total attempts with a ref.
+  // Late channel-key arrival: re-poll while anything is still 'waiting' (bounded; renewed
+  // by the `channel_members_changed` WS handler below since a cross-node cold topic-mesh +
+  // host-notify-mod + gossip-back round trip observed in testnet bake-in can run well past
+  // a naive ~30s cutoff). Deliberately NOT depending on `decoded` — that would recreate the
+  // interval (and reset the tick counter) on every decrypt pass, defeating the cap and
+  // polling forever. We read the latest state via decodedRef and bound total attempts with
+  // a ref.
   const repollTicksRef = useRef(0);
   useEffect(() => {
     if (!isEncrypted) return;
     repollTicksRef.current = 0;
     const iv = setInterval(() => {
       const anyWaiting = [...decodedRef.current.values()].some((d) => d.kind === 'waiting');
-      if (!anyWaiting || repollTicksRef.current >= 12) { clearInterval(iv); return; }
+      if (!anyWaiting || repollTicksRef.current >= 100) { clearInterval(iv); return; }
       repollTicksRef.current++;
       void coverChannelMembers(channelId).catch(() => {});
       setDecodeTick((x) => x + 1);
@@ -274,6 +277,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         const floor = (event as any).key_epoch_floor ?? 0;
         if (isEncrypted && isPrivate && floor > 0) void rotateChannelKey(channelId, floor).catch(() => {});
         else if (isEncrypted) void coverChannelMembers(channelId).catch(() => {});
+        // Renew the late-key-arrival poll's give-up budget: a membership change is
+        // exactly the signal that a key cover may be in flight for a waiting message.
+        repollTicksRef.current = 0;
         return;
       }
       if (event.type === 'message' && event.envelope) {

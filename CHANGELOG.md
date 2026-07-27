@@ -5,6 +5,18 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-07-27
+
+### Added
+
+- **React to channel deletion while viewing it.** New `channel_deleted` WS handler in
+  `ChannelMessagesScreen` (bundled SDK 0.41.0) drops a deleted channel from the local
+  joined-channels list and navigates back if the user has it open. Narrower than web/desktop:
+  mobile has no app-wide persistent WS listener (unlike their always-mounted `Sidebar`), so a
+  deletion that arrives while the user is elsewhere won't remove it from the channel list until
+  they happen to reopen it — the same pre-existing limitation kick/ban already has here. A full
+  fix needs a navigation ref + a global listener; tracked as a follow-up, not done in this pass.
+
 ## [0.26.1] - 2026-07-26
 
 ### Fixed

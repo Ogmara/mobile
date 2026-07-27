@@ -5,6 +5,127 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-07-27
+
+### Added
+
+- **Delete a DM conversation** — matching the web/desktop feature shipped in
+  this same release. Long-press a conversation in the DM list for a "Delete
+  conversation" action (via the same `QuickMenu`/`ConfirmModal` components
+  built for channel leave/delete). Per-user "hide from my list" only — DMs
+  are two-wallet, so the peer's copy is untouched, and the conversation
+  reappears automatically if they message again. New `src/lib/dmHide.ts`
+  (AsyncStorage port of web/desktop's `dm-hide.ts`), wired into the existing
+  encrypted `SettingsSync` blob exactly like `channelOrg` — no new server
+  endpoint, SDK method, or protocol message type needed.
+
+### Fixed
+
+- **DM unread badge never cleared until app restart.** `DmListScreen.tsx`
+  had no `useFocusEffect` refetch (unlike `ChatScreen.tsx`'s working
+  channel-list pattern), so returning from a conversation you'd just read
+  (which does correctly mark it read server-side) never refreshed the
+  list's stale local `unread_count`. Added the same `useFocusEffect` →
+  `onRefresh()` pattern already proven on the channel list.
+
+## [0.28.1] - 2026-07-27
+
+### Fixed
+
+- **Confirm dialogs (leave/kick/ban/delete channel, delete group) now use a
+  themed modal instead of the bare native OS `Alert.alert`**, which ignored
+  the app's dark theme and accent colors entirely. New
+  `src/components/ConfirmModal.tsx` (styled like the existing `PromptModal`)
+  replaces the confirm-with-buttons usage of `Alert.alert` in
+  `ChatScreen.tsx` and `ChannelAdminScreen.tsx`. Plain one-button
+  notifications (save success, invite sent, error messages) are unchanged —
+  only actual "are you sure?" confirmations were converted.
+
+## [0.28.0] - 2026-07-27
+
+### Added
+
+- **Leave a channel** (any member) and **organize joined channels into groups
+  with custom ordering** — closing a long-standing gap with web/desktop.
+  Long-press a channel row for a context menu: move to group, move up/down
+  within its group, leave (self-service, any member), delete (owner only,
+  reusing the existing `deleteChannel` flow). A toolbar above the channel
+  list adds "+ Group" and "Sort A–Z"; each group header gets a "..." menu
+  (rename, move up/down, delete group). The non-mod "no access" dead end on
+  the channel-settings (gear icon) screen now shows a "Leave channel" action
+  instead of a blank message.
+  - New `src/lib/channelOrg.ts`: port of web/desktop's `channel-org.ts` data
+    model (groups + per-channel group/order placement), so the structure
+    round-trips byte-for-byte with the existing cross-device sync. Backed by
+    an in-memory cache hydrated once from AsyncStorage (mirroring the
+    `prices.ts` memory-cache pattern), since AsyncStorage is async unlike
+    web's synchronous `localStorage`.
+  - `src/lib/settingsSync.ts`: `channelOrg` now rides the existing encrypted
+    SettingsSync blob (LWW merge + auto-join channels placed by another
+    device), matching web/desktop exactly.
+  - New `src/components/PromptModal.tsx` (cross-platform name/rename dialog
+    — `Alert.prompt` is iOS-only) and a bottom-anchored `anchor` variant of
+    `QuickMenu` for the new per-row/per-group context menus.
+  - `client.leaveChannel()` (message type `ChannelLeave`, already supported
+    server-side and by the bundled SDK) is now actually called from mobile
+    for the first time.
+
+### Fixed
+
+- **Settings sync was completely broken on mobile** — `settingsSync.ts`'s
+  `uploadSettings()`/`downloadSettings()` called `getClient()` (which
+  returns a `Promise`) without `await`, so every sync attempt silently threw
+  and was swallowed by `SettingsScreen`'s try/catch. This affected the
+  pre-existing theme/lang/notificationSound/compactLayout/fontSize sync too,
+  not just the new `channelOrg` feature added in this release. Also fixed
+  `encryptSettings()`'s return type (`number[]` → `Uint8Array`), which the
+  Promise bug had been masking — the SDK's `syncSettings()` requires
+  `Uint8Array` for `encrypted_settings`/`nonce`.
+- Guarded against a cross-device data-loss race: `channelOrg`'s in-memory
+  cache is now explicitly hydrated (`ensureChannelOrgLoaded()`) before every
+  settings-sync upload/download, not just on first `ChatScreen` mount — the
+  app's default start screen is News, so a user could otherwise open
+  Settings and sync before Chat ever loaded the real on-disk state,
+  uploading an empty org or letting a remote copy wrongly "win" an LWW
+  comparison against the untouched default.
+
+## [0.27.2] - 2026-07-27
+
+### Security
+
+- Ran `npm audit` before build; applied the non-breaking `npm audit fix` (patch/minor bumps only,
+  e.g. expo 54.0.35→54.0.36, plus internal `@expo/*`/babel/metro-config/ws/tar/js-yaml/
+  brace-expansion patches) and re-verified the release build succeeds. 29 advisories remain, all
+  gated behind a major bump (Expo SDK 57 or React Native 0.86.0) and all in build/dev tooling
+  (Metro codegen, dev-middleware, babel-jest, prebuild config-plugins) — none shipped to the
+  device. Deferred: needs its own dedicated, testable upgrade session, not a blind `--force`.
+
+### Added
+
+- **Multi-currency wallet display.** New "Display currency" setting (USD, EUR, BRL, GBP, JPY, CNY)
+  drives fiat formatting across the wallet screens. Rates are USD→currency via a keyless CoinGecko
+  lookup (`tether` as a USD proxy, cached 1h in `AsyncStorage`, stale-tolerant with in-flight
+  dedup), added to `src/lib/prices.ts` (`loadForex`, `formatFiat`). `formatUsd` is now a thin
+  wrapper over `formatFiat(..., 'usd', 1)` for backwards compat.
+- **Per-asset logos on the token detail screen** (`TokenDetailScreen.tsx`), falling back to the
+  Klever assets API (`fetchAssetMeta` in `src/lib/klever.ts`) when the bitcoin.me price feed
+  (`price.iconUrl`) doesn't carry a given token (it only lists traded tokens).
+
+### Fixed
+
+- **Asset precision from the account/assets APIs could silently become `NaN`** if either endpoint
+  ever returned a non-numeric `precision` field, mangling the decimal point in displayed balances
+  instead of falling back safely. `src/lib/klever.ts` now guards both `Number(...)` casts with
+  `Number.isFinite`, defaulting to `0` on a bad value like the existing null-handling.
+- **Wallet screen no longer shows a stray "Settings" header above a large empty gap.**
+  `WalletBalanceScreen` (and the other `MoreStack` screens with their own native header —
+  Bookmarks, Addressbook, Receive, TokenDetail) were nested under the "More" bottom tab, whose
+  outer `Tab.Navigator` header always displayed the fixed `MoreTab` title ("Settings") regardless
+  of which nested screen was focused, stacking on top of the screen's own back-arrow header.
+  `TabNavigator.tsx` now computes `headerShown` for `MoreTab` from the focused nested route
+  (`getFocusedRouteNameFromRoute`), hiding the outer header whenever one of those sub-screens is
+  active so each renders as a clean standalone screen with only its own header.
+
 ## [0.27.1] - 2026-07-27
 
 ### Fixed

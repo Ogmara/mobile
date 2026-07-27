@@ -1,8 +1,11 @@
 /**
  * Chat — channel list with navigation into message views.
  *
- * Fetches channels from the SDK, displays them in a list.
- * Tapping a channel navigates to ChannelMessagesScreen.
+ * Fetches channels from the SDK, displays them grouped/ordered per the
+ * user's channel organization (groups + custom order, synced cross-device
+ * via SettingsSync — see lib/channelOrg.ts). Tapping a channel navigates to
+ * ChannelMessagesScreen; long-pressing a row opens a context menu (move to
+ * group, reorder, leave, delete).
  */
 
 import React, { useCallback, useState, useEffect, useMemo } from 'react';
@@ -10,30 +13,47 @@ import {
   View,
   Text,
   Image,
-  FlatList,
+  SectionList,
   RefreshControl,
   StyleSheet,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
-import { loadJoinedChannels, addJoinedChannel, isJoinedStorageInitialized } from '../lib/joinedChannels';
+import { loadJoinedChannels, addJoinedChannel, removeJoinedChannel, isJoinedStorageInitialized } from '../lib/joinedChannels';
+import {
+  ensureChannelOrgLoaded, ensureCollapsedStateLoaded, getChannelOrg, resolveChannelLayout,
+  createGroup, renameGroup, deleteGroup, moveGroup, moveChannel, assignChannel, clearPlacement,
+  resetToAlphabetical, isGroupCollapsed, toggleGroupCollapsed, DEFAULT_CHANNEL_SLUG,
+  type ChannelOrg,
+} from '../lib/channelOrg';
+import QuickMenu from '../components/QuickMenu';
+import PromptModal from '../components/PromptModal';
+import ConfirmModal from '../components/ConfirmModal';
 import type { Channel } from '@ogmara/sdk';
 import type { ChatStackParamList } from '../navigation/types';
 
-/** Default channel slug shown to all users. */
-const DEFAULT_CHANNEL_SLUG = 'ogmara';
-
 type NavProp = NativeStackNavigationProp<ChatStackParamList, 'ChannelList'>;
+
+interface MenuItem {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+  danger?: boolean;
+}
+
+type Section = { key: string; groupId: string | null; title: string; data: Channel[] };
 
 export default function ChatScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, status, signer } = useConnection();
+  const { client, status, signer, address: myAddress } = useConnection();
   const navigation = useNavigation<NavProp>();
 
   const { data, refreshing, onRefresh } = useApi(
@@ -108,6 +128,191 @@ export default function ChatScreen() {
     }).catch(() => {});
   }, [client, signer, data]);
 
+  // --- Channel organization (groups + custom order, synced cross-device) ---
+  const [org, setOrg] = useState<ChannelOrg>(getChannelOrg());
+  const [collapseTick, setCollapseTick] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      await ensureChannelOrgLoaded();
+      await ensureCollapsedStateLoaded();
+      setOrg(getChannelOrg());
+      setCollapseTick((v) => v + 1);
+    })();
+  }, []);
+
+  const refreshOrg = useCallback(() => {
+    setOrg(getChannelOrg());
+    setCollapseTick((v) => v + 1);
+  }, []);
+
+  const layout = useMemo(() => resolveChannelLayout(channels, org), [channels, org]);
+
+  const sections = useMemo<Section[]>(() => {
+    const list: Section[] = layout.groups.map((rg) => ({
+      key: `g-${rg.group.id}`,
+      groupId: rg.group.id,
+      title: rg.group.name,
+      data: isGroupCollapsed(rg.group.id) ? [] : rg.channels,
+    }));
+    if (layout.ungrouped.length > 0) {
+      list.push({
+        key: 'ungrouped',
+        groupId: null,
+        // No header at all when there are no groups yet — matches the plain,
+        // un-customized list every user starts with.
+        title: layout.groups.length > 0 ? t('sidebar_ungrouped') : '',
+        data: layout.ungrouped,
+      });
+    }
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- collapseTick forces recompute of collapsed sections
+  }, [layout, collapseTick, t]);
+
+  const getBucketOrder = useCallback((channelId: number): number[] => {
+    for (const rg of layout.groups) {
+      if (rg.channels.some((c) => c.channel_id === channelId)) return rg.channels.map((c) => c.channel_id);
+    }
+    if (layout.ungrouped.some((c) => c.channel_id === channelId)) return layout.ungrouped.map((c) => c.channel_id);
+    return [];
+  }, [layout]);
+
+  // --- Themed confirm dialog (replaces native Alert.alert for confirmations) ---
+  const [confirmState, setConfirmState] = useState<{
+    title: string; message: string; confirmLabel: string; danger?: boolean; onConfirm: () => void;
+  } | null>(null);
+
+  // --- Leave / delete ---
+
+  const handleLeaveChannel = useCallback((ch: Channel) => {
+    setConfirmState({
+      title: t('channel_leave'),
+      message: t('channel_leave_confirm'),
+      confirmLabel: t('channel_leave'),
+      danger: true,
+      onConfirm: async () => {
+        if (!client) return;
+        try {
+          await client.leaveChannel(ch.channel_id);
+          await removeJoinedChannel(ch.channel_id);
+          clearPlacement(ch.channel_id);
+          refreshOrg();
+          onRefresh();
+        } catch (e) {
+          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+        }
+      },
+    });
+  }, [client, t, refreshOrg, onRefresh]);
+
+  const handleDeleteChannel = useCallback((ch: Channel) => {
+    setConfirmState({
+      title: t('channel_delete'),
+      message: t('channel_delete_confirm'),
+      confirmLabel: t('chat_delete'),
+      danger: true,
+      onConfirm: async () => {
+        if (!client) return;
+        try {
+          await client.deleteChannel(ch.channel_id);
+          await removeJoinedChannel(ch.channel_id);
+          clearPlacement(ch.channel_id);
+          refreshOrg();
+          onRefresh();
+        } catch (e) {
+          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+        }
+      },
+    });
+  }, [client, t, refreshOrg, onRefresh]);
+
+  // --- Row long-press context menu (main + "move to group" submenu) ---
+  const [channelMenuChannel, setChannelMenuChannel] = useState<Channel | null>(null);
+  const [channelMenuVisible, setChannelMenuVisible] = useState(false);
+  const [channelMenuMode, setChannelMenuMode] = useState<'main' | 'moveToGroup'>('main');
+
+  const openChannelMenu = useCallback((ch: Channel) => {
+    setChannelMenuChannel(ch);
+    setChannelMenuMode('main');
+    setChannelMenuVisible(true);
+  }, []);
+
+  const channelMenuItems = useMemo<MenuItem[]>(() => {
+    const ch = channelMenuChannel;
+    if (!ch) return [];
+    if (channelMenuMode === 'moveToGroup') {
+      const items: MenuItem[] = [
+        { icon: 'apps-outline', label: t('sidebar_ungrouped'), onPress: () => { assignChannel(ch.channel_id, null); refreshOrg(); } },
+      ];
+      for (const g of org.groups) {
+        items.push({ icon: 'folder-outline', label: g.name, onPress: () => { assignChannel(ch.channel_id, g.id); refreshOrg(); } });
+      }
+      items.push({
+        icon: 'add-outline',
+        label: t('sidebar_new_group'),
+        onPress: () => {
+          const id = createGroup(t('sidebar_new_group_default'));
+          if (id) {
+            assignChannel(ch.channel_id, id);
+            refreshOrg();
+            setRenamePrompt({ groupId: id, initial: t('sidebar_new_group_default') });
+          }
+        },
+      });
+      return items;
+    }
+    const bucket = getBucketOrder(ch.channel_id);
+    const idx = bucket.indexOf(ch.channel_id);
+    const items: MenuItem[] = [
+      { icon: 'folder-outline', label: t('sidebar_move_to_group'), onPress: () => { setChannelMenuMode('moveToGroup'); setChannelMenuVisible(true); } },
+    ];
+    if (idx > 0) {
+      items.push({ icon: 'arrow-up-outline', label: t('sidebar_move_up'), onPress: () => { moveChannel(ch.channel_id, bucket, 'up'); refreshOrg(); } });
+    }
+    if (idx >= 0 && idx < bucket.length - 1) {
+      items.push({ icon: 'arrow-down-outline', label: t('sidebar_move_down'), onPress: () => { moveChannel(ch.channel_id, bucket, 'down'); refreshOrg(); } });
+    }
+    items.push({ icon: 'exit-outline', label: t('channel_leave'), danger: true, onPress: () => handleLeaveChannel(ch) });
+    if (ch.creator === myAddress) {
+      items.push({ icon: 'trash-outline', label: t('channel_delete'), danger: true, onPress: () => handleDeleteChannel(ch) });
+    }
+    return items;
+  }, [channelMenuChannel, channelMenuMode, org, myAddress, getBucketOrder, refreshOrg, handleLeaveChannel, handleDeleteChannel, t]);
+
+  // --- Group "..." menu (rename / move up-down / delete) ---
+  const [groupMenuGroup, setGroupMenuGroup] = useState<{ id: string; name: string } | null>(null);
+  const [groupMenuVisible, setGroupMenuVisible] = useState(false);
+  const [renamePrompt, setRenamePrompt] = useState<{ groupId: string; initial: string } | null>(null);
+  const [createGroupPrompt, setCreateGroupPrompt] = useState(false);
+
+  const groupMenuItems = useMemo<MenuItem[]>(() => {
+    const g = groupMenuGroup;
+    if (!g) return [];
+    const idx = org.groups.findIndex((x) => x.id === g.id);
+    const items: MenuItem[] = [
+      { icon: 'pencil-outline', label: t('sidebar_rename_group'), onPress: () => setRenamePrompt({ groupId: g.id, initial: g.name }) },
+    ];
+    if (idx > 0) items.push({ icon: 'arrow-up-outline', label: t('sidebar_move_up'), onPress: () => { moveGroup(g.id, 'up'); refreshOrg(); } });
+    if (idx >= 0 && idx < org.groups.length - 1) {
+      items.push({ icon: 'arrow-down-outline', label: t('sidebar_move_down'), onPress: () => { moveGroup(g.id, 'down'); refreshOrg(); } });
+    }
+    items.push({
+      icon: 'trash-outline',
+      label: t('channel_delete'),
+      danger: true,
+      onPress: () => {
+        setConfirmState({
+          title: t('sidebar_group_options'),
+          message: t('sidebar_delete_group_confirm'),
+          confirmLabel: t('chat_delete'),
+          danger: true,
+          onConfirm: () => { deleteGroup(g.id); refreshOrg(); },
+        });
+      },
+    });
+    return items;
+  }, [groupMenuGroup, org, refreshOrg, t]);
+
   const renderChannel = ({ item }: { item: Channel }) => (
     <TouchableOpacity
       style={[styles.row, { borderBottomColor: colors.border }]}
@@ -117,6 +322,7 @@ export default function ChatScreen() {
           channelName: item.display_name || item.slug,
         })
       }
+      onLongPress={() => openChannelMenu(item)}
       activeOpacity={0.7}
     >
       {item.logo_cid && client ? (
@@ -158,6 +364,50 @@ export default function ChatScreen() {
     </TouchableOpacity>
   );
 
+  const renderSectionHeader = ({ section }: { section: Section }) => {
+    if (!section.title) return null;
+    const collapsed = section.groupId ? isGroupCollapsed(section.groupId) : false;
+    return (
+      <View style={[styles.sectionHeader, { backgroundColor: colors.bgPrimary, borderBottomColor: colors.border }]}>
+        <TouchableOpacity
+          style={styles.sectionHeaderLeft}
+          onPress={() => { if (section.groupId) { toggleGroupCollapsed(section.groupId); refreshOrg(); } }}
+          disabled={!section.groupId}
+          activeOpacity={0.7}
+        >
+          {section.groupId && (
+            <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-down'} size={16} color={colors.textSecondary} />
+          )}
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{section.title}</Text>
+        </TouchableOpacity>
+        {section.groupId && (
+          <TouchableOpacity
+            onPress={() => { setGroupMenuGroup({ id: section.groupId!, name: section.title }); setGroupMenuVisible(true); }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="ellipsis-horizontal" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
+
+  const defaultChannelHeader = (
+    <>
+      {layout.defaultChannel && renderChannel({ item: layout.defaultChannel })}
+      {org.groups.length > 0 || channels.length > 1 ? (
+        <View style={[styles.toolbar, { borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={() => setCreateGroupPrompt(true)}>
+            <Text style={[styles.toolbarBtn, { color: colors.accentPrimary }]}>+ {t('sidebar_new_group')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { resetToAlphabetical(); refreshOrg(); }}>
+            <Text style={[styles.toolbarBtn, { color: colors.accentPrimary }]}>{t('sidebar_sort_az')}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+    </>
+  );
+
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
       <TouchableOpacity
@@ -166,10 +416,13 @@ export default function ChatScreen() {
       >
         <Text style={[styles.fabText, { color: colors.textInverse }]}>+</Text>
       </TouchableOpacity>
-      <FlatList
-        data={channels}
+      <SectionList
+        sections={sections}
         keyExtractor={(item) => item.channel_id.toString()}
         renderItem={renderChannel}
+        renderSectionHeader={renderSectionHeader}
+        ListHeaderComponent={defaultChannelHeader}
+        stickySectionHeadersEnabled={false}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -185,6 +438,44 @@ export default function ChatScreen() {
             </Text>
           </View>
         }
+      />
+
+      <QuickMenu
+        visible={channelMenuVisible}
+        onClose={() => setChannelMenuVisible(false)}
+        items={channelMenuItems}
+        anchor="bottom"
+      />
+      <QuickMenu
+        visible={groupMenuVisible}
+        onClose={() => setGroupMenuVisible(false)}
+        items={groupMenuItems}
+        anchor="bottom"
+      />
+      <PromptModal
+        visible={!!renamePrompt}
+        title={t('sidebar_group_options')}
+        initialValue={renamePrompt?.initial ?? ''}
+        maxLength={32}
+        onSubmit={(name) => { if (renamePrompt) renameGroup(renamePrompt.groupId, name); refreshOrg(); }}
+        onClose={() => setRenamePrompt(null)}
+      />
+      <PromptModal
+        visible={createGroupPrompt}
+        title={t('sidebar_new_group')}
+        initialValue={t('sidebar_new_group_default')}
+        maxLength={32}
+        onSubmit={(name) => { createGroup(name); refreshOrg(); }}
+        onClose={() => setCreateGroupPrompt(false)}
+      />
+      <ConfirmModal
+        visible={!!confirmState}
+        title={confirmState?.title ?? ''}
+        message={confirmState?.message ?? ''}
+        confirmLabel={confirmState?.confirmLabel ?? ''}
+        danger={confirmState?.danger}
+        onConfirm={() => confirmState?.onConfirm()}
+        onClose={() => setConfirmState(null)}
       />
     </View>
   );
@@ -225,4 +516,22 @@ const styles = StyleSheet.create({
   memberCount: { fontSize: fontSize.sm },
   fab: { position: 'absolute', right: spacing.lg, bottom: spacing.lg, width: 56, height: 56, borderRadius: radius.full, justifyContent: 'center', alignItems: 'center', elevation: 4 },
   fabText: { fontSize: fontSize.xl, fontWeight: '600' },
+  toolbar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  toolbarBtn: { fontSize: fontSize.sm, fontWeight: '600' },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  sectionHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flex: 1 },
+  sectionTitle: { fontSize: fontSize.sm, fontWeight: '700', textTransform: 'uppercase' },
 });

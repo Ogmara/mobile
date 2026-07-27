@@ -16,7 +16,7 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
 import {
-  fetchAccountData, fetchAssetRewards, fetchValidators, formatTokenAmount, isBucketStaked,
+  fetchAccountData, fetchAssetRewards, fetchValidators, fetchAssetMeta, formatTokenAmount, isBucketStaked,
   type StakeBucket, type Validator,
 } from '../lib/klever';
 import {
@@ -52,13 +52,17 @@ export default function TokenDetailScreen({ route }: Props) {
   );
 
   const [price, setPrice] = useState<TokenPrice | null>(null);
+  const [logo, setLogo] = useState<string>('');
   const [validators, setValidators] = useState<Validator[]>([]);
   const [stakeInput, setStakeInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [pickFor, setPickFor] = useState<string | null>(null); // bucketId awaiting validator pick
 
   useEffect(() => { loadPrices().then((p) => setPrice(p[assetId] ?? null)).catch(() => {}); }, [assetId]);
+  useEffect(() => { fetchAssetMeta(assetId).then((m) => { if (m?.logo) setLogo(m.logo); }).catch(() => {}); }, [assetId]);
   useEffect(() => { if (isKlv) fetchValidators().then(setValidators).catch(() => {}); }, [isKlv]);
+
+  const iconUrl = price?.iconUrl || logo;
 
   const asset = data?.acct?.assets?.[assetId];
   const available = isKlv ? (data?.acct?.balance ?? 0) : (asset?.balance ?? 0);
@@ -116,8 +120,8 @@ export default function TokenDetailScreen({ route }: Props) {
     >
       {/* Header */}
       <View style={styles.header}>
-        {price?.iconUrl ? (
-          <Image source={{ uri: price.iconUrl }} style={styles.icon} />
+        {iconUrl ? (
+          <Image source={{ uri: iconUrl }} style={styles.icon} />
         ) : (
           <View style={[styles.icon, styles.iconFallback, { backgroundColor: colors.accentSecondary }]}>
             <Text style={{ color: '#fff', fontWeight: '700', fontSize: 20 }}>{assetId.slice(0, 1)}</Text>

@@ -104,15 +104,64 @@ export function fiatValue(wholeAmount: number, usdPrice: number): number {
 
 /** Format a USD value for display. */
 export function formatUsd(value: number): string {
-  if (!Number.isFinite(value)) value = 0;
+  return formatFiat(value, 'usd', 1);
+}
+
+// --- Forex (USD → other currency), keyless via CoinGecko (tether ≈ USD peg) ---
+
+export const SUPPORTED_CURRENCIES = ['usd', 'eur', 'brl', 'gbp', 'jpy', 'cny'] as const;
+export type Currency = (typeof SUPPORTED_CURRENCIES)[number];
+
+const FOREX_URL =
+  'https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd,eur,brl,gbp,jpy,cny';
+const FOREX_KEY = 'ogmara.forex.rates';
+const FOREX_TTL_MS = 60 * 60 * 1000;
+const CURRENCY_FRACTION: Record<string, number> = { usd: 2, eur: 2, brl: 2, gbp: 2, jpy: 0, cny: 2 };
+
+let memForex: { ts: number; rates: Record<string, number> } | null = null;
+let forexInFlight: Promise<Record<string, number>> | null = null;
+
+/** Load USD→currency rates ({usd:1, eur:0.9, …}). Cache-first, stale-tolerant. */
+export async function loadForex(): Promise<Record<string, number>> {
+  if (!memForex) {
+    try { const raw = await AsyncStorage.getItem(FOREX_KEY); if (raw) memForex = JSON.parse(raw); } catch { /* */ }
+  }
+  if (memForex && Date.now() - memForex.ts < FOREX_TTL_MS) return memForex.rates;
+  if (forexInFlight) return forexInFlight;
+  forexInFlight = (async () => {
+    try {
+      const resp = await fetchWithTimeout(FOREX_URL);
+      const tether = (await resp.json())?.tether ?? {};
+      const rates: Record<string, number> = { usd: 1 };
+      for (const c of SUPPORTED_CURRENCIES) {
+        const v = tether[c];
+        if (c !== 'usd' && typeof v === 'number' && v > 0) rates[c] = v;
+      }
+      memForex = { ts: Date.now(), rates };
+      AsyncStorage.setItem(FOREX_KEY, JSON.stringify(memForex)).catch(() => {});
+      return rates;
+    } catch {
+      return memForex?.rates ?? { usd: 1 };
+    } finally {
+      forexInFlight = null;
+    }
+  })();
+  return forexInFlight;
+}
+
+/** Format a USD value in the given currency using a USD→currency rate. */
+export function formatFiat(usdValue: number, currency: string, rate: number): string {
+  let v = Number.isFinite(usdValue) ? usdValue * (Number.isFinite(rate) && rate > 0 ? rate : 1) : 0;
+  const code = (currency || 'usd').toLowerCase();
+  const frac = CURRENCY_FRACTION[code] ?? 2;
   try {
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: value > 0 && value < 0.01 ? 6 : 2,
-    }).format(value);
+      currency: code.toUpperCase(),
+      minimumFractionDigits: frac,
+      maximumFractionDigits: v > 0 && v < 0.01 ? Math.max(frac, 6) : frac,
+    }).format(v);
   } catch {
-    return `$${value.toFixed(2)}`;
+    return `${v.toFixed(frac)} ${code.toUpperCase()}`;
   }
 }

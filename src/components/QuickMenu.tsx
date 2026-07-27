@@ -20,21 +20,30 @@ interface MenuItem {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
+  danger?: boolean;
 }
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   items: MenuItem[];
+  /** 'top-right' (default) anchors under a header button; 'bottom' renders as
+   *  a bottom action sheet, for per-row long-press context menus. */
+  anchor?: 'top-right' | 'bottom';
 }
 
-export default function QuickMenu({ visible, onClose, items }: Props) {
+export default function QuickMenu({ visible, onClose, items, anchor = 'top-right' }: Props) {
   const { colors } = useTheme();
+  const bottom = anchor === 'bottom';
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose}>
-        <View style={[styles.menu, { backgroundColor: colors.bgSecondary }]}>
+      <TouchableOpacity
+        style={[styles.overlay, bottom && styles.overlayBottom]}
+        activeOpacity={1}
+        onPress={onClose}
+      >
+        <View style={[styles.menu, bottom && styles.menuBottom, { backgroundColor: colors.bgSecondary }]}>
           {items.map((item, idx) => (
             <TouchableOpacity
               key={idx}
@@ -42,8 +51,8 @@ export default function QuickMenu({ visible, onClose, items }: Props) {
               onPress={() => { onClose(); item.onPress(); }}
               activeOpacity={0.7}
             >
-              <Ionicons name={item.icon} size={20} color={colors.accentPrimary} />
-              <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>{item.label}</Text>
+              <Ionicons name={item.icon} size={20} color={item.danger ? colors.error : colors.accentPrimary} />
+              <Text style={[styles.menuLabel, { color: item.danger ? colors.error : colors.textPrimary }]}>{item.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -61,6 +70,14 @@ const styles = StyleSheet.create({
     paddingTop: 56,
     paddingRight: spacing.md,
   },
+  overlayBottom: {
+    justifyContent: 'flex-end',
+    alignItems: 'stretch',
+    paddingTop: 0,
+    paddingRight: 0,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.lg,
+  },
   menu: {
     borderRadius: radius.lg,
     minWidth: 200,
@@ -69,6 +86,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
+  },
+  menuBottom: {
+    minWidth: undefined,
+    borderRadius: radius.lg,
   },
   menuItem: {
     flexDirection: 'row',

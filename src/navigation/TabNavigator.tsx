@@ -15,7 +15,7 @@ import React, { useState, useCallback } from 'react';
 import { TouchableOpacity, Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, fontSize, spacing } from '../theme';
@@ -130,6 +130,18 @@ function MoreTab() {
     </MoreStack.Navigator>
   );
 }
+
+// MoreStack screens that render their own native-stack header (back arrow +
+// title). The outer Tab.Navigator header must be hidden while one of these
+// is focused, otherwise it stacks on top and leaves a "Settings" header
+// above a screen that isn't Settings.
+const MORE_STACK_SCREENS_WITH_OWN_HEADER = [
+  'Bookmarks',
+  'Addressbook',
+  'WalletBalance',
+  'Receive',
+  'TokenDetail',
+];
 
 /** Map start screen setting to tab route name. */
 function startScreenToRoute(startScreen: StartScreen): string {
@@ -256,13 +268,16 @@ export default function TabNavigator({ startScreen }: Props) {
       <Tab.Screen
         name="MoreTab"
         component={MoreTab}
-        options={{
+        options={({ route }) => ({
           title: t('nav_settings'),
           tabBarLabel: t('nav_more'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="ellipsis-horizontal" size={size} color={color} />
           ),
-        }}
+          headerShown: !MORE_STACK_SCREENS_WITH_OWN_HEADER.includes(
+            getFocusedRouteNameFromRoute(route) ?? 'Settings'
+          ),
+        })}
         listeners={({ navigation: tabNav }) => ({
           tabPress: (e) => {
             // Reset MoreStack to Settings when tab is pressed

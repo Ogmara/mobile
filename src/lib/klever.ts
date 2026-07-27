@@ -138,7 +138,10 @@ export async function fetchAccountData(address: string): Promise<KleverAccount |
           assetId,
           assetName: (data.assetName as string) || assetId,
           balance: (data.balance as number) || 0,
-          precision: (data.precision as number) || 6,
+          // Use the API's precision verbatim. NEVER default to 6: many KDAs use 0
+          // (e.g. FLIPPY), and `|| 6` would both wrongly default AND turn a real 0
+          // into 6, mis-scaling balances by 10^6. Absent → 0 (per project rule).
+          precision: data.precision == null ? 0 : (Number.isFinite(Number(data.precision)) ? Number(data.precision) : 0),
           frozenBalance: (data.frozenBalance as number) || 0,
           unfrozenBalance: (data.unfrozenBalance as number) || 0,
           buckets,
@@ -155,6 +158,47 @@ export async function fetchAccountData(address: string): Promise<KleverAccount |
       nonce: account.nonce || 0,
     };
   } catch {
+    return null;
+  }
+}
+
+/** Asset metadata (logo + authoritative precision/ticker) from the Klever assets API. */
+export interface AssetMeta {
+  assetId: string;
+  ticker: string;
+  name: string;
+  precision: number;
+  /** Logo image URL, or '' if none. */
+  logo: string;
+}
+
+const assetMetaCache: Record<string, AssetMeta | null> = {};
+
+/** Fetch asset metadata (logo, precision, ticker) from `/v1.0/assets/{id}`. Cached;
+ *  best-effort (returns null on failure). The Klever account endpoint carries no logo,
+ *  and bitcoin.me only lists traded tokens, so this is the authoritative source for both
+ *  a token's logo and its precision. */
+export async function fetchAssetMeta(assetId: string): Promise<AssetMeta | null> {
+  if (assetId in assetMetaCache) return assetMetaCache[assetId];
+  try {
+    const apiUrl = await getKleverApiUrl();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(`${apiUrl}/v1.0/assets/${encodeURIComponent(assetId)}`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!resp.ok) { assetMetaCache[assetId] = null; return null; }
+    const a = (await resp.json())?.data?.asset ?? {};
+    const meta: AssetMeta = {
+      assetId,
+      ticker: (a.ticker as string) || assetId.split('-')[0],
+      name: (a.name as string) || assetId,
+      precision: a.precision == null ? 0 : (Number.isFinite(Number(a.precision)) ? Number(a.precision) : 0),
+      logo: (a.logo as string) || '',
+    };
+    assetMetaCache[assetId] = meta;
+    return meta;
+  } catch {
+    assetMetaCache[assetId] = null;
     return null;
   }
 }

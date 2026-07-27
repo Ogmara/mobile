@@ -21,11 +21,12 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
-import { fetchAccountData, formatTokenAmount } from '../lib/klever';
+import { fetchAccountData, formatTokenAmount, fetchAssetMeta } from '../lib/klever';
 import { sendTransfer, registerUser, getExplorerTxUrl, getExplorerAddressUrl, getExplorerStakingUrl } from '../lib/kleverTx';
 import { vaultExportKey } from '../lib/vault';
-import { loadPrices, fiatValue, formatUsd, type TokenPrice } from '../lib/prices';
+import { loadPrices, loadForex, fiatValue, formatFiat, SUPPORTED_CURRENCIES, type Currency, type TokenPrice } from '../lib/prices';
 import { fetchRecentTransactions, type TxSummary } from '../lib/txHistory';
+import { getSetting, setSetting } from '../lib/settings';
 import Sparkline from '../components/Sparkline';
 import Gradient from '../components/Gradient';
 import { debugLog } from '../lib/debug';
@@ -86,11 +87,32 @@ export default function WalletBalanceScreen() {
   const [sending, setSending] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [logos, setLogos] = useState<Record<string, string>>({}); // assetId → Klever logo URL
+  const [currency, setCurrency] = useState<Currency>('usd');
+  const [forex, setForex] = useState<Record<string, number>>({ usd: 1 });
+  const [currencyPicker, setCurrencyPicker] = useState(false);
+  const [hidden, setHidden] = useState(false); // tap balance to hide amounts
+
+  useEffect(() => {
+    getSetting('currency').then((c) => { if (c && SUPPORTED_CURRENCIES.includes(c as Currency)) setCurrency(c as Currency); }).catch(() => {});
+    loadForex().then(setForex).catch(() => {});
+  }, []);
+  const pickCurrency = (c: Currency) => { setCurrency(c); setCurrencyPicker(false); setSetting('currency', c).catch(() => {}); };
+  /** Format a USD value in the chosen currency, or ••• when hidden. */
+  const money = (usd: number) => (hidden ? '••••' : formatFiat(usd, currency, forex[currency] ?? 1));
 
   useEffect(() => { loadPrices().then(setPrices).catch(() => {}); }, [data]);
   useEffect(() => {
     if (address) fetchRecentTransactions(address, 15).then(setTxs).catch(() => {});
   }, [address, data]);
+  // Fetch Klever asset logos for non-KLV tokens (bitcoin.me only lists traded tokens).
+  useEffect(() => {
+    const ids = data ? Object.keys(data.assets).filter((id) => id !== 'KLV') : [];
+    ids.forEach((id) => {
+      if (logos[id] !== undefined) return;
+      fetchAssetMeta(id).then((m) => { if (m?.logo) setLogos((p) => ({ ...p, [id]: m.logo })); }).catch(() => {});
+    });
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(async () => {
     if (!sendDialog || !sendTo.trim() || !sendAmount.trim()) return;
@@ -207,40 +229,62 @@ export default function WalletBalanceScreen() {
     const p = prices[a.assetId];
     return sum + (p && a.frozen > 0 ? fiatValue(toWhole(a.frozen, a.precision), p.usd) : 0);
   }, 0);
+  // Portfolio 24h change %, value-weighted across priced holdings.
+  const change24h = (() => {
+    let valued = 0, weighted = 0;
+    for (const a of assets) {
+      const p = prices[a.assetId];
+      if (!p) continue;
+      const v = fiatValue(toWhole(a.atomic + a.frozen, a.precision), p.usd);
+      valued += v; weighted += v * (p.change24h || 0);
+    }
+    return valued > 0 ? weighted / valued : 0;
+  })();
 
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.bgPrimary }]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />}
     >
-      {/* Hero — top→bottom gradient (lighter accent → accent → deeper) */}
-      <Gradient
-        colors={[colors.accentSecondary, colors.accentPrimary, darken(colors.accentPrimary, 0.32)]}
-        style={styles.hero}
-      >
-        <Text style={[styles.heroLabel, { color: '#FFFFFF' }]}>{t('wallet_total_balance')}</Text>
-        <Text style={[styles.heroFiat, { color: '#FFFFFF' }]}>{formatUsd(totalUsd)}</Text>
-        <Text style={[styles.heroKlv, { color: '#FFFFFF' }]}>
+      {/* Hero — minimal premium: subtle dark gradient + accent top-glow */}
+      <Gradient colors={[darken(colors.accentPrimary, 0.62), colors.bgPrimary]} style={styles.hero}>
+        <View style={styles.heroGlow} />
+        <View style={styles.heroTopRow}>
+          <Text style={[styles.heroLabel, { color: colors.textSecondary }]}>{t('wallet_total_balance')}</Text>
+          <TouchableOpacity style={[styles.curChip, { borderColor: colors.border }]} onPress={() => setCurrencyPicker(true)}>
+            <Text style={{ color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600' }}>{currency.toUpperCase()} ▾</Text>
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity activeOpacity={0.8} onPress={() => setHidden((h) => !h)} style={styles.heroBalRow}>
+          <Text style={[styles.heroFiat, { color: colors.textPrimary }]}>{money(totalUsd)}</Text>
+          {!hidden && Math.abs(change24h) >= 0.01 && (
+            <Text style={[styles.heroChange, { color: change24h >= 0 ? colors.success : colors.error }]}>
+              {change24h >= 0 ? '▲' : '▼'} {Math.abs(change24h).toFixed(1)}%
+            </Text>
+          )}
+          <Ionicons name={hidden ? 'eye-off-outline' : 'eye-outline'} size={15} color={colors.textSecondary} style={{ marginLeft: 8 }} />
+        </TouchableOpacity>
+        <Text style={[styles.heroKlv, { color: colors.textSecondary }]}>
           {data ? formatTokenAmount(data.balance, 6) : '0'} KLV
         </Text>
         {totalStakedUsd > 0 && (
-          <Text style={[styles.heroStaked, { color: '#FFFFFF' }]}>
-            🔒 {t('wallet_incl_staked', { amount: formatUsd(totalStakedUsd) })}
+          <Text style={[styles.heroStaked, { color: colors.accentSecondary }]}>
+            🔒 {t('wallet_incl_staked', { amount: money(totalStakedUsd) })}
           </Text>
         )}
-        <TouchableOpacity onPress={copyAddress} activeOpacity={0.7} style={styles.heroAddrChip}>
-          <Text style={[styles.heroAddr, { color: '#FFFFFF' }]} numberOfLines={1}>
+        <TouchableOpacity onPress={copyAddress} activeOpacity={0.7} style={styles.heroAddrRow}>
+          <Text style={[styles.heroAddr, { color: colors.textSecondary }]} numberOfLines={1}>
             {address.slice(0, 12)}…{address.slice(-6)}
           </Text>
-          <Ionicons name="copy-outline" size={13} color="#FFFFFF" style={{ marginLeft: 6 }} />
+          <Ionicons name="copy-outline" size={13} color={colors.textSecondary} style={{ marginLeft: 6 }} />
         </TouchableOpacity>
       </Gradient>
 
-      {/* Actions */}
+      {/* Actions — ghost pills */}
       <View style={styles.actions}>
-        <Action color={colors} label={t('transfer_send')} icon="arrow-up" onPress={() => setSendDialog({ assetId: 'KLV', precision: 6 })} />
-        <Action color={colors} label={t('wallet_receive')} icon="qr-code" onPress={() => navigation.navigate('Receive')} />
-        <Action color={colors} label={t('wallet_manage')} icon="settings-sharp" onPress={() => setManageOpen(true)} />
+        <GhostPill color={colors} label={t('transfer_send')} icon="arrow-up" onPress={() => setSendDialog({ assetId: 'KLV', precision: 6 })} />
+        <GhostPill color={colors} label={t('wallet_receive')} icon="qr-code" onPress={() => navigation.navigate('Receive')} />
+        <GhostPill color={colors} label={t('wallet_manage')} icon="settings-sharp" onPress={() => setManageOpen(true)} />
       </View>
 
       {/* Assets */}
@@ -256,8 +300,8 @@ export default function WalletBalanceScreen() {
               activeOpacity={0.7}
               onPress={() => navigation.navigate('TokenDetail', { assetId: a.assetId, name: a.name, precision: a.precision })}
             >
-              {p?.iconUrl ? (
-                <Image source={{ uri: p.iconUrl }} style={styles.icon} />
+              {(p?.iconUrl || logos[a.assetId]) ? (
+                <Image source={{ uri: p?.iconUrl || logos[a.assetId] }} style={styles.icon} />
               ) : (
                 <View style={[styles.icon, styles.iconFallback, { backgroundColor: colors.accentSecondary }]}>
                   <Text style={{ color: colors.textInverse, fontWeight: '700' }}>{a.assetId.slice(0, 1)}</Text>
@@ -277,7 +321,7 @@ export default function WalletBalanceScreen() {
             </TouchableOpacity>
             {p?.sparkline?.length ? <Sparkline data={p.sparkline} /> : <View style={{ width: 64 }} />}
             <View style={styles.rowRight}>
-              <Text style={[styles.assetUsd, { color: colors.textPrimary }]}>{usd > 0 ? formatUsd(usd) : '—'}</Text>
+              <Text style={[styles.assetUsd, { color: colors.textPrimary }]}>{usd > 0 ? money(usd) : '—'}</Text>
               <TouchableOpacity onPress={() => setSendDialog({ assetId: a.assetId, precision: a.precision })}>
                 <Text style={[styles.sendLink, { color: colors.accentPrimary }]}>{t('transfer_send')}</Text>
               </TouchableOpacity>
@@ -299,8 +343,8 @@ export default function WalletBalanceScreen() {
             style={[styles.row, { borderBottomColor: colors.border }]}
             onPress={async () => Linking.openURL(await getExplorerTxUrl(tx.hash))}
           >
-            <View style={[styles.icon, styles.iconFallback, { backgroundColor: a.color }]}>
-              <Text style={{ color: colors.textInverse, fontWeight: '700' }}>{a.glyph}</Text>
+            <View style={[styles.icon, styles.iconFallback]}>
+              <Text style={{ color: a.color, fontWeight: '700', fontSize: 22 }}>{a.glyph}</Text>
             </View>
             <View style={styles.rowMid}>
               <Text style={[styles.assetName, { color: colors.textPrimary }]}>{a.label}</Text>
@@ -347,6 +391,19 @@ export default function WalletBalanceScreen() {
       )}
 
       {/* Manage sheet */}
+      {currencyPicker && (
+        <Modal visible transparent animationType="slide" onRequestClose={() => setCurrencyPicker(false)}>
+          <TouchableOpacity style={styles.sheetOverlay} activeOpacity={1} onPress={() => setCurrencyPicker(false)}>
+            <View style={[styles.sheet, { backgroundColor: colors.bgSecondary }]} onStartShouldSetResponder={() => true}>
+              <Text style={[styles.dialogTitle, { color: colors.textPrimary, paddingHorizontal: spacing.lg }]}>{t('wallet_currency')}</Text>
+              {SUPPORTED_CURRENCIES.map((c) => (
+                <ManageItem key={c} color={colors} label={c.toUpperCase() + (c === currency ? '  ✓' : '')} onPress={() => pickCurrency(c)} />
+              ))}
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
       {manageOpen && (
         <Modal visible transparent animationType="slide" onRequestClose={() => setManageOpen(false)}>
           <TouchableOpacity style={styles.sheetOverlay} activeOpacity={1} onPress={() => setManageOpen(false)}>
@@ -366,13 +423,11 @@ export default function WalletBalanceScreen() {
   );
 }
 
-function Action({ color, label, icon, onPress }: { color: any; label: string; icon: React.ComponentProps<typeof Ionicons>['name']; onPress: () => void }) {
+function GhostPill({ color, label, icon, onPress }: { color: any; label: string; icon: React.ComponentProps<typeof Ionicons>['name']; onPress: () => void }) {
   return (
-    <TouchableOpacity style={styles.action} onPress={onPress} activeOpacity={0.7}>
-      <View style={[styles.actionCircle, { backgroundColor: color.accentPrimary }]}>
-        <Ionicons name={icon} size={24} color="#FFFFFF" />
-      </View>
-      <Text style={[styles.actionLabel, { color: color.textPrimary }]}>{label}</Text>
+    <TouchableOpacity style={[styles.ghostPill, { borderColor: color.border }]} onPress={onPress} activeOpacity={0.7}>
+      <Ionicons name={icon} size={18} color={color.accentPrimary} />
+      <Text style={[styles.ghostLabel, { color: color.accentPrimary }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -389,28 +444,28 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   hero: {
-    margin: spacing.md, padding: spacing.lg, borderRadius: radius.lg, alignItems: 'center',
-    overflow: 'hidden', // clip the gradient bands to the rounded corners
-    // subtle elevation so the card lifts off the dark background
-    shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6,
+    margin: spacing.md, padding: spacing.lg, borderRadius: radius.lg,
+    overflow: 'hidden', // clip the gradient bands + top-glow to the rounded corners
+    borderWidth: StyleSheet.hairlineWidth, borderColor: '#1F2C3A',
   },
-  heroLabel: { fontSize: fontSize.sm, opacity: 0.9, letterSpacing: 0.5 },
-  heroFiat: { fontSize: 40, fontWeight: '800', marginTop: spacing.xs },
-  heroKlv: { fontSize: fontSize.md, opacity: 0.95, marginTop: 2, fontWeight: '600' },
-  heroAddrChip: {
-    flexDirection: 'row', alignItems: 'center', marginTop: spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.18)', paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.full,
-  },
+  heroGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 2, backgroundColor: 'rgba(106,178,242,0.55)' },
+  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  heroLabel: { fontSize: fontSize.sm, letterSpacing: 0.5, textTransform: 'uppercase' },
+  curChip: { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+  heroBalRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: spacing.xs },
+  heroFiat: { fontSize: 42, fontWeight: '800', letterSpacing: -1 },
+  heroChange: { fontSize: fontSize.sm, fontWeight: '700', marginLeft: spacing.sm },
+  heroKlv: { fontSize: fontSize.md, marginTop: 2, fontWeight: '600' },
+  heroAddrRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.md },
   heroAddr: { fontSize: fontSize.xs },
-  heroStaked: { fontSize: fontSize.xs, opacity: 0.9, marginTop: 4 },
+  heroStaked: { fontSize: fontSize.xs, marginTop: 4 },
   assetStaked: { fontSize: fontSize.xs, marginTop: 2 },
-  actions: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: spacing.lg, marginBottom: spacing.md },
-  action: { alignItems: 'center', gap: spacing.xs },
-  actionCircle: {
-    width: 60, height: 60, borderRadius: radius.full, justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 4,
+  actions: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, marginBottom: spacing.md },
+  ghostPill: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    borderWidth: 1.5, borderRadius: radius.full, paddingVertical: spacing.sm,
   },
-  actionLabel: { fontSize: fontSize.xs, fontWeight: '600' },
+  ghostLabel: { fontSize: fontSize.sm, fontWeight: '600' },
   sectionTitle: { fontSize: fontSize.sm, fontWeight: '600', textTransform: 'uppercase', marginHorizontal: spacing.md, marginTop: spacing.md, marginBottom: spacing.xs },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, gap: spacing.sm },
   rowTap: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: spacing.sm },

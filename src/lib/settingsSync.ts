@@ -14,9 +14,18 @@ import { randomBytes } from '@noble/ciphers/webcrypto';
 import { getSetting, setSetting } from './settings';
 import { getClient } from './api';
 import { vaultExportKey } from './vault';
+import { ensureChannelOrgLoaded, getChannelOrg, applyRemoteOrg } from './channelOrg';
+import { addJoinedChannels } from './joinedChannels';
+import { ensureHiddenDmsLoaded, getHiddenDms, applyRemoteHiddenDms } from './dmHide';
 
 /** Settings keys that are synced across devices. */
 const SYNC_KEYS = ['theme', 'lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
+
+/** Object-valued synced setting (channel groups + custom ordering). Stored under
+ *  its own key in the blob and applied via LWW merge, not the scalar setSetting path. */
+const CHANNEL_ORG_KEY = 'channelOrg';
+/** Hidden DM conversations (per-peer hide timestamp) — same object-valued pattern. */
+const HIDDEN_DMS_KEY = 'hiddenDms';
 
 function fromHex(hex: string): Uint8Array {
   if (!hex || hex.length === 0) return new Uint8Array(0);
@@ -41,17 +50,27 @@ function deriveKey(hexKey: string): Uint8Array {
 
 /** Collect current settings and encrypt them with AES-256-GCM. */
 export async function encryptSettings(): Promise<{
-  encrypted_settings: number[];
-  nonce: number[];
+  encrypted_settings: Uint8Array;
+  nonce: Uint8Array;
   key_epoch: number;
 }> {
   const hexKey = await vaultExportKey();
   if (!hexKey) throw new Error('Cannot export wallet key for encryption');
 
-  const settings: Record<string, string | null> = {};
+  const settings: Record<string, unknown> = {};
   for (const key of SYNC_KEYS) {
     settings[key] = await getSetting(key);
   }
+  // Channel organization (groups + custom ordering) — an object value, carried
+  // with its own LWW `updatedAt` so the receiver can resolve multi-device edits.
+  // Must be hydrated first: if Settings is opened before the Chat tab ever
+  // mounts, the in-memory cache would still be the module-default emptyOrg(),
+  // and uploading it would silently wipe any real synced state.
+  await ensureChannelOrgLoaded();
+  settings[CHANNEL_ORG_KEY] = getChannelOrg();
+  // Hidden DM conversations — per-peer hide timestamps, merged by max() on receipt.
+  await ensureHiddenDmsLoaded();
+  settings[HIDDEN_DMS_KEY] = getHiddenDms();
 
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
   const key = deriveKey(hexKey);
@@ -63,8 +82,8 @@ export async function encryptSettings(): Promise<{
   key.fill(0);
 
   return {
-    encrypted_settings: Array.from(ciphertext),
-    nonce: Array.from(nonce),
+    encrypted_settings: ciphertext,
+    nonce,
     key_epoch: 0,
   };
 }
@@ -96,7 +115,24 @@ export async function decryptAndApplySettings(
 
   for (const [k, v] of Object.entries(settings)) {
     if (SYNC_KEYS.includes(k as any) && v !== null && v !== undefined) {
-      await setSetting(k, String(v));
+      await setSetting(k as any, String(v));
+    }
+    // Channel organization: apply via LWW (only if the remote copy is newer) and
+    // auto-join any channel the remote org places, so a channel grouped on
+    // another device becomes visible here. Must hydrate the local cache first,
+    // otherwise the LWW comparison runs against the module-default emptyOrg()
+    // (updatedAt: 0) instead of this device's real on-disk state, and the
+    // remote copy would always "win" and clobber a not-yet-loaded local edit.
+    if (k === CHANNEL_ORG_KEY && v && typeof v === 'object') {
+      await ensureChannelOrgLoaded();
+      const placedIds = applyRemoteOrg(v);
+      if (placedIds.length) await addJoinedChannels(placedIds);
+    }
+    // Hidden DM conversations: per-peer max() merge (see dmHide.ts). Hydrate
+    // first for the same reason channelOrg does above.
+    if (k === HIDDEN_DMS_KEY && v && typeof v === 'object') {
+      await ensureHiddenDmsLoaded();
+      applyRemoteHiddenDms(v);
     }
   }
 }
@@ -104,13 +140,13 @@ export async function decryptAndApplySettings(
 /** Upload current settings to L2 node. */
 export async function uploadSettings(): Promise<void> {
   const data = await encryptSettings();
-  const client = getClient();
+  const client = await getClient();
   await client.syncSettings(data);
 }
 
 /** Download and apply settings from L2 node. Returns true if settings were applied. */
 export async function downloadSettings(): Promise<boolean> {
-  const client = getClient();
+  const client = await getClient();
   const resp = await client.getSettings();
   if (!resp) return false;
   const encrypted = (resp as any).encrypted_settings;

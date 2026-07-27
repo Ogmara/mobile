@@ -5,7 +5,7 @@
  * FAB for starting a new DM by entering a klv1 address.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,11 +18,14 @@ import {
   Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
+import { ensureHiddenDmsLoaded, isConversationHidden, hideConversation } from '../lib/dmHide';
+import QuickMenu from '../components/QuickMenu';
+import ConfirmModal from '../components/ConfirmModal';
 import type { DmConversation } from '@ogmara/sdk';
 import type { DmStackParamList } from '../navigation/types';
 
@@ -44,7 +47,45 @@ export default function DmListScreen() {
     [client, signer],
   );
 
-  const conversations = data?.conversations ?? [];
+  // Refresh when this tab regains focus — otherwise, returning here after
+  // reading a conversation (which marks it read server-side) never updates
+  // the stale unread_count in local state, so the badge stuck around until
+  // an app restart.
+  useFocusEffect(
+    useCallback(() => {
+      if (client) onRefresh();
+    }, [client, onRefresh]),
+  );
+
+  // Hydrate hidden-DM state once on mount.
+  const [hiddenTick, setHiddenTick] = useState(0);
+  React.useEffect(() => {
+    ensureHiddenDmsLoaded().then(() => setHiddenTick((v) => v + 1));
+  }, []);
+
+  const allConversations = data?.conversations ?? [];
+  const conversations = useMemo(
+    () => allConversations.filter((c) => !isConversationHidden(c.peer, c.last_message_at)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hiddenTick forces recompute after hydration/delete
+    [allConversations, hiddenTick],
+  );
+
+  // --- Long-press "Delete conversation" ---
+  const [menuTarget, setMenuTarget] = useState<DmConversation | null>(null);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<DmConversation | null>(null);
+
+  const menuItems = useMemo(() => {
+    if (!menuTarget) return [];
+    return [
+      {
+        icon: 'trash-outline' as const,
+        label: t('dm_delete'),
+        danger: true,
+        onPress: () => setConfirmTarget(menuTarget),
+      },
+    ];
+  }, [menuTarget, t]);
 
   const handleStartDm = () => {
     const addr = newDmAddress.trim();
@@ -62,6 +103,7 @@ export default function DmListScreen() {
       style={[styles.row, { borderBottomColor: colors.border }]}
       activeOpacity={0.7}
       onPress={() => navigation.navigate('DmConversation', { address: item.peer })}
+      onLongPress={() => { setMenuTarget(item); setMenuVisible(true); }}
     >
       <View style={[styles.avatar, { backgroundColor: colors.accentPrimary }]}>
         <Text style={[styles.avatarText, { color: colors.textInverse }]}>
@@ -151,6 +193,22 @@ export default function DmListScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      <QuickMenu
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        items={menuItems}
+        anchor="bottom"
+      />
+      <ConfirmModal
+        visible={!!confirmTarget}
+        title={t('dm_delete')}
+        message={t('dm_delete_confirm')}
+        confirmLabel={t('dm_delete')}
+        danger
+        onConfirm={() => { if (confirmTarget) { hideConversation(confirmTarget.peer); setHiddenTick((v) => v + 1); } }}
+        onClose={() => setConfirmTarget(null)}
+      />
     </View>
   );
 }

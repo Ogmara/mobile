@@ -24,7 +24,9 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
 import { removeJoinedChannel } from '../lib/joinedChannels';
+import { clearPlacement } from '../lib/channelOrg';
 import { buildChannelInviteUrl } from '../lib/share';
+import ConfirmModal from '../components/ConfirmModal';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 
@@ -72,6 +74,11 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
 
   // Invite state
   const [inviteAddress, setInviteAddress] = useState('');
+
+  // Themed confirm dialog (replaces native Alert.alert for confirmations)
+  const [confirmState, setConfirmState] = useState<{
+    title: string; message: string; confirmLabel: string; danger?: boolean; onConfirm: () => void;
+  } | null>(null);
 
   const myRole = members.find((m) => m.address === myAddress)?.role ?? 'member';
   const isOwner = detail?.channel?.creator === myAddress;
@@ -149,42 +156,40 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
     }
   }, [client, channelId, isOwner, fetchAll, t]);
 
-  const handleKick = useCallback(async (address: string) => {
+  const handleKick = useCallback((address: string) => {
     if (!client || !isMod) return;
-    Alert.alert(t('channel_kick'), `${address.slice(0, 16)}...?`, [
-      { text: t('cancel'), style: 'cancel' },
-      {
-        text: t('channel_kick'),
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await client.kickUser(channelId, address);
-            fetchAll();
-          } catch (e) {
-            Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
-          }
-        },
+    setConfirmState({
+      title: t('channel_kick'),
+      message: `${address.slice(0, 16)}...?`,
+      confirmLabel: t('channel_kick'),
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await client.kickUser(channelId, address);
+          fetchAll();
+        } catch (e) {
+          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+        }
       },
-    ]);
+    });
   }, [client, channelId, isMod, fetchAll, t]);
 
-  const handleBan = useCallback(async (address: string) => {
+  const handleBan = useCallback((address: string) => {
     if (!client || !isMod) return;
-    Alert.alert(t('channel_ban'), `${address.slice(0, 16)}...?`, [
-      { text: t('cancel'), style: 'cancel' },
-      {
-        text: t('channel_ban'),
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await client.banUser(channelId, address);
-            fetchAll();
-          } catch (e) {
-            Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
-          }
-        },
+    setConfirmState({
+      title: t('channel_ban'),
+      message: `${address.slice(0, 16)}...?`,
+      confirmLabel: t('channel_ban'),
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await client.banUser(channelId, address);
+          fetchAll();
+        } catch (e) {
+          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+        }
       },
-    ]);
+    });
   }, [client, channelId, isMod, fetchAll, t]);
 
   const handleUnban = useCallback(async (address: string) => {
@@ -235,27 +240,47 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
     }
   }, [client, channelId, inviteAddress, isMod, t]);
 
-  const handleDeleteChannel = useCallback(async () => {
-    if (!client || !isOwner) return;
-    Alert.alert(t('channel_delete'), t('channel_delete_confirm'), [
-      { text: t('cancel'), style: 'cancel' },
-      {
-        text: t('chat_delete'),
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await client.deleteChannel(channelId);
-            // Drop the now-deleted channel from the local joined set so the
-            // channel list reflects the deletion immediately, then return to
-            // the list root rather than the (now-gone) channel screen.
-            await removeJoinedChannel(channelId).catch(() => {});
-            navigation.popToTop();
-          } catch (e) {
-            Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
-          }
-        },
+  const handleLeaveChannel = useCallback(() => {
+    if (!client) return;
+    setConfirmState({
+      title: t('channel_leave'),
+      message: t('channel_leave_confirm'),
+      confirmLabel: t('channel_leave'),
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await client.leaveChannel(channelId);
+          await removeJoinedChannel(channelId).catch(() => {});
+          clearPlacement(channelId);
+          navigation.popToTop();
+        } catch (e) {
+          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+        }
       },
-    ]);
+    });
+  }, [client, channelId, navigation, t]);
+
+  const handleDeleteChannel = useCallback(() => {
+    if (!client || !isOwner) return;
+    setConfirmState({
+      title: t('channel_delete'),
+      message: t('channel_delete_confirm'),
+      confirmLabel: t('chat_delete'),
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await client.deleteChannel(channelId);
+          // Drop the now-deleted channel from the local joined set so the
+          // channel list reflects the deletion immediately, then return to
+          // the list root rather than the (now-gone) channel screen.
+          await removeJoinedChannel(channelId).catch(() => {});
+          clearPlacement(channelId);
+          navigation.popToTop();
+        } catch (e) {
+          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+        }
+      },
+    });
   }, [client, channelId, isOwner, navigation, t]);
 
   // Show spinner while loading initial data
@@ -269,8 +294,28 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
 
   if (!isMod) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
-        <Text style={{ color: colors.textSecondary }}>{t('channel_admin_no_access')}</Text>
+      <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
+        <Text style={[styles.heading, { color: colors.textPrimary }]}>#{channelName}</Text>
+        <Text style={{ color: colors.textSecondary, paddingHorizontal: spacing.md, marginBottom: spacing.lg }}>
+          {t('channel_admin_no_access')}
+        </Text>
+        <View style={[styles.section, { backgroundColor: colors.bgSecondary }]}>
+          <TouchableOpacity
+            style={[styles.dangerBtn, { borderColor: colors.error }]}
+            onPress={handleLeaveChannel}
+          >
+            <Text style={{ color: colors.error, fontWeight: '600' }}>{t('channel_leave')}</Text>
+          </TouchableOpacity>
+        </View>
+        <ConfirmModal
+          visible={!!confirmState}
+          title={confirmState?.title ?? ''}
+          message={confirmState?.message ?? ''}
+          confirmLabel={confirmState?.confirmLabel ?? ''}
+          danger={confirmState?.danger}
+          onConfirm={() => confirmState?.onConfirm()}
+          onClose={() => setConfirmState(null)}
+        />
       </View>
     );
   }
@@ -445,6 +490,15 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       )}
 
       <View style={{ height: spacing.xl }} />
+      <ConfirmModal
+        visible={!!confirmState}
+        title={confirmState?.title ?? ''}
+        message={confirmState?.message ?? ''}
+        confirmLabel={confirmState?.confirmLabel ?? ''}
+        danger={confirmState?.danger}
+        onConfirm={() => confirmState?.onConfirm()}
+        onClose={() => setConfirmState(null)}
+      />
     </ScrollView>
   );
 }

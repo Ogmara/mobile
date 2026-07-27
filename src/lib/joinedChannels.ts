@@ -16,6 +16,14 @@ export async function addJoinedChannel(channelId: number): Promise<void> {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
 }
 
+/** Add multiple channels to the joined set in a single read-modify-write. */
+export async function addJoinedChannels(channelIds: number[]): Promise<void> {
+  if (!channelIds.length) return;
+  const ids = await loadJoinedChannels();
+  for (const id of channelIds) ids.add(id);
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
+}
+
 /** Remove a channel from the joined set. */
 export async function removeJoinedChannel(channelId: number): Promise<void> {
   const ids = await loadJoinedChannels();

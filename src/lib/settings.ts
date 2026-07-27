@@ -38,6 +38,7 @@ const KEYS = {
   avatarCid: 'ogmara.avatar_cid',
   avatarLocalUri: 'ogmara.avatar_local_uri',
   mediaAutoload: 'ogmara.media_autoload',
+  currency: 'ogmara.display_currency',
   // E2E encryption (kept in a separate ogmara.e2e.* namespace so wallet-vault
   // migrations never touch these). deviceId/encKeyBound are public markers; the
   // device enc *private* key lives in SecureStore, not here.

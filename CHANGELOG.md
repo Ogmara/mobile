@@ -5,6 +5,20 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.1] - 2026-07-27
+
+### Fixed
+
+- **Channel deletion + kick/ban removal now work app-wide**, closing the limitation noted in
+  0.27.0: previously `ChannelMessagesScreen`'s WS listener only reacted while that exact channel
+  was the open screen, so a removal arriving while the user was elsewhere never updated the
+  local joined-channels list until they happened to reopen it. New global listener in `App.tsx`
+  (`AppContent`, wired to the same `navigationRef` already used for notification-tap navigation)
+  handles both `channel_deleted` and kick/ban regardless of what screen is active, and still
+  bounces back to the channel list if the affected channel happens to be the one currently open.
+  `ChannelMessagesScreen`'s own now-redundant handling was removed to avoid a double-navigation
+  when both would otherwise fire for the same event.
+
 ## [0.27.0] - 2026-07-27
 
 ### Added

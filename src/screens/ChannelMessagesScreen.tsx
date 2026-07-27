@@ -40,7 +40,6 @@ import {
 } from '../lib/channelCrypto';
 import { chatErrorKey } from '../lib/chatErrors';
 import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
-import { removeJoinedChannel } from '../lib/joinedChannels';
 import { CHANNEL_TYPE_PRIVATE, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
@@ -283,18 +282,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         repollTicksRef.current = 0;
         return;
       }
-      // Channel deleted by its creator: drop it locally + bounce back, mirroring
-      // the join/leave/kick/ban handling above. Only reacts while this exact
-      // channel is open — mobile has no app-wide persistent WS listener (unlike
-      // web/desktop's always-mounted Sidebar), so a deletion that arrives while
-      // the user is elsewhere won't remove it from the channel list until they
-      // happen to open it again. Same pre-existing limitation kick/ban already
-      // has on mobile; a real fix needs a navigationRef + a global listener.
-      if (event.type === 'channel_deleted' && (event as any).channel_id === channelId) {
-        void removeJoinedChannel(channelId);
-        navigation.goBack();
-        return;
-      }
+      // Channel deletion + kick/ban removal are now handled app-wide in App.tsx
+      // (works regardless of which screen is open, not just this one).
       if (event.type === 'message' && event.envelope) {
         const env = normalizeEnvelope(event.envelope) as ExtendedEnvelope;
         const decoded = decodeChatMessage(env.payload);

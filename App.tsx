@@ -19,7 +19,8 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, type NavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { ThemeProvider, useTheme } from './src/theme';
-import { ConnectionProvider } from './src/context/ConnectionContext';
+import { ConnectionProvider, useConnection } from './src/context/ConnectionContext';
+import { removeJoinedChannel } from './src/lib/joinedChannels';
 import { getStartScreen, type StartScreen } from './src/lib/settings';
 import { isLockEnabled, getLockTimeout } from './src/lib/appLock';
 import { initDebugMode, installGlobalErrorHandler, debugLog } from './src/lib/debug';
@@ -119,6 +120,39 @@ function AppContent() {
     });
     return () => sub.remove();
   }, [locked]);
+
+  // App-wide channel removal (deletion + kick/ban): unlike ChannelMessagesScreen's
+  // own WS listener (which only reacts while that exact channel is the open
+  // screen), this fires regardless of what the user is currently viewing —
+  // mirrors web/desktop's always-mounted Sidebar handling, made possible here by
+  // the same navigationRef already used for notification-tap navigation above.
+  const { onWsEvent, walletAddress } = useConnection();
+  useEffect(() => {
+    const unsub = onWsEvent((event) => {
+      let channelId: number | null = null;
+      if (event.type === 'channel_deleted') {
+        channelId = (event as { channel_id: number }).channel_id;
+      } else if (event.type === 'channel_members_changed') {
+        const ev = event as { channel_id: number; action: string; member: string };
+        const isMe = !!walletAddress && !!ev.member && ev.member.toLowerCase() === walletAddress.toLowerCase();
+        if (isMe && (ev.action === 'kick' || ev.action === 'ban')) {
+          channelId = ev.channel_id;
+        }
+      }
+      if (channelId == null) return;
+      void removeJoinedChannel(channelId);
+      // Bounce back to the channel list only if the removed channel is the one
+      // currently open — leave the user wherever else they are undisturbed.
+      const current = navigationRef.current?.getCurrentRoute() as
+        | { name: string; params?: { channelId?: number } }
+        | undefined;
+      if (current?.name === 'ChannelMessages' && current.params?.channelId === channelId) {
+        // @ts-expect-error — dynamic navigation
+        navigationRef.current?.navigate('ChannelList');
+      }
+    });
+    return unsub;
+  }, [onWsEvent, walletAddress]);
 
   // useMemo MUST be before any conditional returns (React rules of hooks)
   const navTheme = useMemo(

@@ -5,6 +5,25 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.1] - 2026-07-29
+
+### Fixed
+
+- **Attaching a file in an encrypted DM/channel crashed with "Creating blobs
+  from 'ArrayBuffer' and 'ArrayBufferView' are not supported."**
+  `encryptAndUploadFile` (`src/lib/mediaCrypto.ts`) built a `new Blob([cipher])`
+  to carry the encrypted bytes in the upload `FormData` — React Native's `Blob`
+  polyfill only accepts strings/other Blobs as parts, not an `ArrayBuffer`/
+  `Uint8Array`, so every encrypted attachment attempt threw. There's no
+  on-disk file for the in-memory cipher (unlike the plaintext upload paths in
+  `ChannelMessagesScreen`/`ComposePostScreen`, which pass the picked asset's
+  real `file://` uri), so the fix instead hands RN's networking layer a
+  `data:application/octet-stream;base64,...` URI via the same
+  `{ uri, type, name }` FormData shape the plaintext paths already use —
+  no Blob construction at all. Plaintext attachments (public channels, news
+  posts) were never affected; only encrypted-channel/DM attachments were
+  broken.
+
 ## [0.29.0] - 2026-07-27
 
 ### Added

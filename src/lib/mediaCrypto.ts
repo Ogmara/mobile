@@ -97,11 +97,21 @@ export async function encryptAndUploadFile(file: PickedFile): Promise<MediaDescr
 
   const { cipher, key, nonce } = encryptFile(file.bytes);
 
-  // RN multipart: a Blob carries the raw cipher bytes; the node stores it as-is.
-  const blob = new Blob([cipher as unknown as BlobPart], { type: 'application/octet-stream' });
+  // RN's `Blob` polyfill only accepts strings/other Blobs as parts — passing
+  // an ArrayBuffer/Uint8Array throws "Creating blobs from 'ArrayBuffer' and
+  // 'ArrayBufferView' are not supported". There's no on-disk file for the
+  // cipher (it only exists in memory), so — mirroring the plaintext upload
+  // paths in ChannelMessagesScreen/ComposePostScreen, which use the picked
+  // asset's real `file://` uri — we hand RN's networking layer a `data:`
+  // URI instead of a Blob; both bridges (Android/iOS) read bytes directly
+  // from a `{ uri, type, name }` FormData part without any JS-side re-encode.
   const formData = new FormData();
   // Filename is irrelevant for an encrypted blob (the real name lives in the descriptor).
-  formData.append('file', blob as unknown as Blob, 'blob.bin');
+  formData.append('file', {
+    uri: `data:application/octet-stream;base64,${bytesToBase64(cipher)}`,
+    type: 'application/octet-stream',
+    name: 'blob.bin',
+  } as unknown as Blob);
   formData.append('encrypted', '1');
 
   const headers = await client.authHeaders('POST', '/api/v1/media/upload');

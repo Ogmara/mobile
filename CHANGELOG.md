@@ -5,6 +5,154 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.3] - 2026-07-29
+
+### Changed
+
+- **Shortened the public-encrypted-channel header badge** from "🔒 Encrypted
+  (public by design — any member can read)" to "🔒 Encrypted · public by
+  design" — matching the wording web/desktop already use
+  (`channel_encrypted_public`), which mobile's longer badge had drifted from.
+  The full explanation ("any member can read") now lives in the channel
+  admin/settings screen instead, shown once under the channel name rather
+  than repeated in the header on every visit.
+
+## [0.30.2] - 2026-07-29
+
+### Fixed
+
+- **Channel name wrapped across multiple lines when the encryption badge
+  text was long.** The channel header laid out the name and the encryption
+  badge (`ChannelMessagesScreen`'s "🔒 Encrypted (public by design — any
+  member can read)" text for public encrypted channels) side by side in one
+  row, both sharing the title's `flex: 1` — a long badge squeezed the
+  remaining width down until the channel name itself wrapped mid-word. Name
+  and badge now stack in their own column (each `numberOfLines={1}`), so the
+  name always gets the header's full width and the badge sits on its own
+  line below it.
+
+## [0.30.1] - 2026-07-29
+
+### Fixed
+
+- **Pinch-to-zoom didn't work at all.** `ImageViewerModal` rendered its
+  `GestureDetector` inside a plain `Modal` — RN's `Modal` opens a separate
+  native window on Android, outside the app's main view hierarchy, so the
+  top-level `GestureHandlerRootView` (in `App.tsx`) never covered it and
+  every gesture silently no-op'd. Fixed by nesting a second
+  `GestureHandlerRootView` scoped to the modal's own content.
+- **Native `Alert.alert()` dialogs didn't match the app's theme.** The
+  project already has themed `ConfirmModal`/`PromptModal` components for
+  exactly this reason. New `InfoModal` (single message + OK) fills the gap
+  for simple info/error alerts. Converted the message/chat-related ones:
+  `ImageViewerModal`'s save-result alert, `MessageBubble`'s delete
+  confirmation (→ themed `ConfirmModal`, danger-styled), and all the
+  info/error alerts in `ChannelMessagesScreen` and `DmConversationScreen`.
+  Wallet/settings/news screens still use `Alert.alert` in places — left for
+  a separate pass.
+- **Decrypted attachments weren't cached across app restarts**, forcing a
+  full re-fetch + re-decrypt of every image/video the first time a
+  previously-visited conversation was reopened after a cold start (the old
+  cache was an in-memory `Map`, gone on restart). New
+  `src/lib/mediaDiskCache.ts` persists decrypted plaintext to a cache
+  directory with a 7-day TTL (checked/enforced lazily on read via
+  `expo-file-system`'s file modification time); `loadDecryptedMedia` checks
+  it before hitting the network. Also folded in the same 404-retry-with-
+  backoff web/desktop already had for cross-node media (was missing on
+  mobile), and strengthened the cache-key fingerprint from "cid + first/last
+  byte of key" to a full "cid + hex(key) + hex(nonce)" (matching web/
+  desktop) — the weak version was an acceptable risk for an in-memory,
+  single-session cache, but not once it became load-bearing for a
+  persistent, cross-session one. `clearMediaCache()` (called on logout /
+  wallet switch) now wipes the disk cache too, so a different identity never
+  inherits another wallet's already-decrypted plaintext.
+
+### Security
+
+- Persisting E2E-decrypted plaintext to disk (even TTL-bounded, even
+  app-private) is a deliberate, real tradeoff for the offline-cache feature
+  above — flagging it explicitly rather than burying it in the Fixed
+  section. Mitigations: app-private cache directory (not shared/world-
+  readable, same location already used for user-initiated save/share),
+  7-day TTL, and a full wipe on logout/wallet switch.
+- **Disk-cache filename collision caught before release.** The cache
+  filename was initially derived by running the full `cid:hex(key):hex(nonce)`
+  fingerprint through the existing `sanitizeFilename` helper, which caps
+  length at 100 chars — for a CID + 64 hex key chars + 48 hex nonce chars
+  (~170 chars total), that silently truncated away the entire nonce and part
+  of the key, re-collapsing the exact cross-context collision the
+  full-fingerprint upgrade above was meant to close (a sender who reuses a
+  CID with a key sharing the surviving prefix could make a stale cached
+  plaintext resurface under a new message, skipping decryption of the actual
+  new ciphertext entirely). Fixed by hashing the full tag (SHA-256) for the
+  cache filename instead of truncating it — collision resistance no longer
+  depends on the tag's length.
+
+## [0.30.0] - 2026-07-29
+
+### Added
+
+- **Pinch-to-zoom image viewer + save-to-device / share attachments.** The
+  fullscreen image viewer (tap an image in a chat) was a plain fit-to-screen
+  `Modal` with no zoom and no way to save. New `ImageViewerModal`
+  (`src/components/ImageViewerModal.tsx`) adds pinch-to-zoom, double-tap to
+  toggle zoom, and drag-to-pan once zoomed (via `react-native-gesture-handler`
+  + `react-native-reanimated`, running on the UI thread), plus a download
+  button that saves the image straight to Photos (`expo-media-library`,
+  write-only/photo-only permission scope). Non-image attachments (file chips
+  in both plaintext and encrypted messages) were previously inert — tapping
+  one now writes it to a cache file and opens the native share sheet
+  (`expo-sharing`), so "Save to Files" / share-elsewhere is one tap away for
+  any file type, not just images.
+- New native dependencies: `react-native-gesture-handler`, `react-native-reanimated`
+  (+ babel plugin, `App.tsx` now wraps the tree in `GestureHandlerRootView`),
+  `expo-media-library` (new `expo-media-library` config plugin entry in
+  `app.json`, photo-only granular permission), `expo-sharing`,
+  `expo-file-system` (writes the temp file both features share). Required an
+  `expo prebuild --clean` to regenerate `android/` — anyone building locally
+  needs to re-run prebuild before the next Gradle build picks these up.
+
+### Security
+
+- **Attacker-controlled filenames sanitized before touching the filesystem.**
+  Both new save/share paths build a real cache-file path from peer-supplied
+  data — a `MediaDescriptor.name`/attachment `filename`, or a MIME string used
+  as a file extension — none of which `expo-file-system` sanitizes on its own.
+  New `src/lib/sanitize.ts` (`sanitizeFilename`) strips path separators and
+  control characters, caps length, and rejects a name that cleans down to a
+  bare `.`/`..` (which would otherwise resolve to the cache directory itself
+  or its parent). Applied in both `fileShare.ts` and `ImageViewerModal`'s
+  `saveImageToDevice`.
+- **`expo-media-library` requests write-only photo access, not full read.**
+  `app.json`'s plugin config sets `photosPermission: false` (suppresses iOS's
+  `NSPhotoLibraryUsageDescription`, full read access) since the app only ever
+  calls `requestPermissionsAsync(true)` (add-only) — `savePhotosPermission`
+  (`NSPhotoLibraryAddUsageDescription`) is the only one actually needed.
+- Temp cache files from a save-to-Photos are deleted immediately after
+  `saveToLibraryAsync` resolves (safe — it only resolves once the OS has made
+  its own library copy). Share-sheet temp files are intentionally left for
+  the OS's normal cache eviction instead of deleted eagerly, since
+  `shareAsync` can resolve before a slower receiving app finishes reading the
+  file — deleting on that timing would risk breaking the share.
+
+npm audit: 30 pre-existing/incidental advisories, all build-tooling-only
+(unchanged category from the already-tracked Expo SDK 57 migration item);
+no new advisory introduced by the added runtime dependencies themselves.
+
+## [0.29.2] - 2026-07-29
+
+### Fixed
+
+- **Couldn't send an attachment-only message in a channel.** The channel
+  composer's send button (`ChannelMessagesScreen`) only checked
+  `pendingAttachments` (the plaintext-upload queue) to decide whether to
+  enable itself, never `pendingEncryptedMedia` (the encrypted-upload queue)
+  — so in an encrypted channel, attaching an image with no text left the
+  button disabled and unpressable. `handleSend` itself already accounted for
+  both queues correctly; only the button's `disabled`/color logic was
+  missing the encrypted-media check. DM composer was unaffected (it only
+  ever uses the encrypted queue, so it already checked the right one).
+
 ## [0.29.1] - 2026-07-29
 
 ### Fixed

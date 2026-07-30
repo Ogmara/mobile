@@ -55,6 +55,17 @@ npm install
 rm -rf ../sdk-js/node_modules/@noble
 ```
 
+> **Only if a native dependency or `app.json` plugin/permission changed**
+> (new `npm install`d native module, edited `ios`/`android` keys or `plugins`
+> array in `app.json`) — regenerate the native project first:
+> ```bash
+> npx expo prebuild --clean --platform android
+> ```
+> This overwrites `android/` from scratch, including `versionCode`/
+> `versionName` (resets to `1`/whatever `app.json` says) — redo Step 1's
+> `android/app/build.gradle` edit *after* prebuild, not before. Not needed
+> for plain JS/TS changes.
+
 **Step 3 — build with Gradle:**
 ```bash
 cd android

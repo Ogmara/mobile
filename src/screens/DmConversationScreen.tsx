@@ -17,7 +17,6 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   AppState,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -38,6 +37,7 @@ import {
 import { chatErrorKey } from '../lib/chatErrors';
 import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
 import MessageBubble, { CHAT_REACTIONS, type ReplyContext } from '../components/MessageBubble';
+import InfoModal from '../components/InfoModal';
 import type { Envelope, MediaDescriptor } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DmStackParamList } from '../navigation/types';
@@ -98,6 +98,8 @@ export default function DmConversationScreen({ route, navigation }: Props) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ExtendedEnvelope[]>([]);
   const [editingMsg, setEditingMsg] = useState<{ msgId: string; content: string } | null>(null);
+  const [info, setInfo] = useState<{ title?: string; message: string } | null>(null);
+  const showInfo = useCallback((title: string, message: string) => setInfo({ title, message }), []);
   // P5: encrypted attachments pending send (descriptors hold per-file keys).
   const [pendingEncryptedMedia, setPendingEncryptedMedia] = useState<MediaDescriptor[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -312,7 +314,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
 
     // DMs are end-to-end encrypted; only built-in wallets can sign the key envelopes.
     if (!e2eAvailable()) {
-      Alert.alert(t('chat_send'), t('e2e_builtin_only'));
+      showInfo(t('chat_send'), t('e2e_builtin_only'));
       return;
     }
 
@@ -331,7 +333,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
       } catch (e) {
         const msg = e instanceof Error ? e.message : '';
         debugLog('warn', `DM edit failed: ${msg}`);
-        Alert.alert(t('chat_edit'), msg.slice(0, 150));
+        showInfo(t('chat_edit'), msg.slice(0, 150));
       }
       return;
     }
@@ -365,9 +367,9 @@ export default function DmConversationScreen({ route, navigation }: Props) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `DM send failed: ${msg}`);
       if (msg.includes('RECIPIENT_NO_ENC_KEYS')) {
-        Alert.alert(t('chat_send'), t('e2e_recipient_no_keys'));
+        showInfo(t('chat_send'), t('e2e_recipient_no_keys'));
       } else {
-        Alert.alert(t('chat_send'), msg.slice(0, 150));
+        showInfo(t('chat_send'), msg.slice(0, 150));
       }
     }
   }, [input, client, signer, myAddress, peerAddress, editingMsg, t, pendingEncryptedMedia]);
@@ -376,7 +378,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     if (!client || !signer || uploading) return;
     // DMs are always encrypted → read bytes (base64) and encrypt BEFORE upload (P5).
     if (!e2eAvailable()) {
-      Alert.alert(t('chat_send'), t('e2e_builtin_only'));
+      showInfo(t('chat_send'), t('e2e_builtin_only'));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -388,7 +390,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
     if (asset.fileSize && asset.fileSize > MAX_ENCRYPTED_MEDIA_BYTES) {
-      Alert.alert(t('error_generic'), 'File too large (max 50MB)');
+      showInfo(t('error_generic'), 'File too large (max 50MB)');
       return;
     }
     setUploading(true);
@@ -407,7 +409,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
       const friendly = msg === 'FILE_TOO_LARGE' ? 'File too large (max 50MB)'
         : msg.includes('404') ? t('news_upload_unavailable')
           : msg.slice(0, 150);
-      Alert.alert(t('error_generic'), friendly);
+      showInfo(t('error_generic'), friendly);
     } finally {
       setUploading(false);
     }
@@ -437,7 +439,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
       const errMsg = e instanceof Error ? e.message : '';
       debugLog('warn', `DM delete failed: ${errMsg}`);
       const key = chatErrorKey(errMsg);
-      Alert.alert(t('chat_delete'), key ? t(key) : errMsg.slice(0, 150));
+      showInfo(t('chat_delete'), key ? t(key) : errMsg.slice(0, 150));
     }
   }, [client, peerAddress, myAddress, t]);
 
@@ -607,6 +609,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
           </TouchableOpacity>
         </View>
       </View>
+      <InfoModal visible={!!info} title={info?.title} message={info?.message || ''} onClose={() => setInfo(null)} />
     </KeyboardAvoidingView>
   );
 }

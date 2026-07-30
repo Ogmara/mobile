@@ -17,7 +17,6 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   AppState,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -30,6 +29,7 @@ import { debugLog } from '../lib/debug';
 import MessageBubble, { CHAT_REACTIONS, type ReplyContext } from '../components/MessageBubble';
 import TipDialog from '../components/TipDialog';
 import EmojiPicker from '../components/EmojiPicker';
+import InfoModal from '../components/InfoModal';
 import { e2eAvailable } from '../lib/cryptoEnv';
 import {
   buildEncryptedChannelMsg,
@@ -110,6 +110,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [messages, setMessages] = useState<ExtendedEnvelope[]>([]);
   const [editingMsg, setEditingMsg] = useState<{ msgId: string; content: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ReplyContext | null>(null);
+  const [info, setInfo] = useState<{ title?: string; message: string } | null>(null);
+  const showInfo = useCallback((title: string, message: string) => setInfo({ title, message }), []);
   const inputRef = useRef<TextInput>(null);
   // Profile cache: address → display name
   const [profileNames, setProfileNames] = useState<Record<string, string>>({});
@@ -469,7 +471,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // message isn't wired yet (the SDK channel-edit envelope is text-only); skip for now.
     if (editingMsg) {
       if (isEncrypted) {
-        Alert.alert(t('chat_edit'), t('e2e_cant_decrypt'));
+        showInfo(t('chat_edit'), t('e2e_cant_decrypt'));
         return;
       }
       try {
@@ -485,7 +487,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       } catch (e) {
         const msg = e instanceof Error ? e.message : '';
         debugLog('warn', `Edit failed: ${msg}`);
-        Alert.alert(t('chat_edit'), msg.slice(0, 150));
+        showInfo(t('chat_edit'), msg.slice(0, 150));
       }
       return;
     }
@@ -501,14 +503,14 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       if (isEncrypted) {
         // E2E channels need a built-in wallet to sign the key envelopes.
         if (!e2eAvailable()) {
-          Alert.alert(t('chat_send'), t('e2e_builtin_only'));
+          showInfo(t('chat_send'), t('e2e_builtin_only'));
           return;
         }
         // Encrypted attachments ride INSIDE the ciphertext via `media` (not plaintext).
         if (sentEncryptedMedia.length > 0) options.media = sentEncryptedMedia;
         const built = await buildEncryptedChannelMsg(channelId, canEstablishKey, text || '', options, encFloor);
         if (built === 'waiting') {
-          Alert.alert(t('chat_send'), t('e2e_channel_waiting'));
+          showInfo(t('chat_send'), t('e2e_channel_waiting'));
           return;
         }
         const r = await client.sendMessageEnvelope(built);
@@ -546,7 +548,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Send failed: ${msg}`);
       const key = chatErrorKey(msg);
-      Alert.alert(t('chat_send'), key ? t(key) : msg.slice(0, 150));
+      showInfo(t('chat_send'), key ? t(key) : msg.slice(0, 150));
     }
     // pendingAttachments / pendingEncryptedMedia are declared after this callback; like
     // the original send they're read via closure (state setters keep them fresh enough
@@ -590,7 +592,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const errMsg = e instanceof Error ? e.message : '';
       debugLog('warn', `Delete failed: ${errMsg}`);
       const key = chatErrorKey(errMsg);
-      Alert.alert(t('chat_delete'), key ? t(key) : errMsg.slice(0, 150));
+      showInfo(t('chat_delete'), key ? t(key) : errMsg.slice(0, 150));
     }
   }, [client, channelId, myAddress, t]);
 
@@ -610,7 +612,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const errMsg = e instanceof Error ? e.message : '';
       debugLog('warn', `React failed: ${errMsg}`);
       const key = chatErrorKey(errMsg);
-      if (key) Alert.alert(t('chat_react'), t(key));
+      if (key) showInfo(t('chat_react'), t(key));
     }
   }, [client, channelId, t]);
 
@@ -651,7 +653,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     const asset = result.assets[0];
     const cap = isEncrypted ? MAX_ENCRYPTED_MEDIA_BYTES : 50 * 1024 * 1024;
     if (asset.fileSize && asset.fileSize > cap) {
-      Alert.alert(t('error_generic'), 'File too large (max 50MB)');
+      showInfo(t('error_generic'), 'File too large (max 50MB)');
       return;
     }
     setUploading(true);
@@ -702,7 +704,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const friendly = msg === 'FILE_TOO_LARGE' ? 'File too large (max 50MB)'
         : msg.includes('404') ? t('news_upload_unavailable')
           : msg.slice(0, 150);
-      Alert.alert(t('error_generic'), friendly);
+      showInfo(t('error_generic'), friendly);
     } finally {
       setUploading(false);
     }
@@ -771,17 +773,22 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 60}
     >
-      {/* Channel header */}
+      {/* Channel header — title and the (sometimes long) encryption badge each
+          get their own line, in a column that shares the row with the gear
+          icon; a long badge text used to steal width from the title's `flex: 1`
+          and wrap the channel name across multiple lines. */}
       <View style={[styles.header, { backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
-        <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>#{channelName}</Text>
-        {isEncrypted && (
-          <Text
-            style={{ color: colors.textSecondary, fontSize: fontSize.xs, marginRight: spacing.sm }}
-            numberOfLines={1}
-          >
-            {isPrivate ? t('e2e_encrypted_badge') : t('e2e_public_by_design')}
-          </Text>
-        )}
+        <View style={styles.headerTextCol}>
+          <Text style={[styles.headerTitle, { color: colors.textPrimary }]} numberOfLines={1}>#{channelName}</Text>
+          {isEncrypted && (
+            <Text
+              style={{ color: colors.textSecondary, fontSize: fontSize.xs }}
+              numberOfLines={1}
+            >
+              {isPrivate ? t('e2e_encrypted_badge') : t('e2e_public_by_design')}
+            </Text>
+          )}
+        </View>
         {signer && (
           <TouchableOpacity
             onPress={() => navigation.navigate('ChannelAdmin', { channelId, channelName })}
@@ -903,9 +910,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
               multiline
             />
             <TouchableOpacity
-              style={[styles.sendBtn, { backgroundColor: (input.trim() || pendingAttachments.length > 0) ? colors.accentPrimary : colors.textSecondary }]}
+              style={[styles.sendBtn, { backgroundColor: (input.trim() || pendingAttachments.length > 0 || pendingEncryptedMedia.length > 0) ? colors.accentPrimary : colors.textSecondary }]}
               onPress={handleSend}
-              disabled={!input.trim() && pendingAttachments.length === 0}
+              disabled={!input.trim() && pendingAttachments.length === 0 && pendingEncryptedMedia.length === 0}
             >
               <Text style={{ color: colors.textInverse, fontWeight: '600' }}>
                 {editingMsg ? t('save') : t('chat_send')}
@@ -932,6 +939,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           onClose={() => setTipTarget(null)}
         />
       )}
+      <InfoModal visible={!!info} title={info?.title} message={info?.message || ''} onClose={() => setInfo(null)} />
     </KeyboardAvoidingView>
   );
 }
@@ -946,7 +954,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerTitle: { fontSize: fontSize.lg, fontWeight: '700', flex: 1 },
+  headerTextCol: { flex: 1, marginRight: spacing.sm },
+  headerTitle: { fontSize: fontSize.lg, fontWeight: '700' },
   list: { paddingHorizontal: spacing.md, paddingBottom: spacing.md },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 60 },
   dateSeparator: {

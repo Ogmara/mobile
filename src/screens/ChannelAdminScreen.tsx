@@ -326,6 +326,13 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchAll} tintColor={colors.accentPrimary} />}
     >
       <Text style={[styles.heading, { color: colors.textPrimary }]}>#{channelName}</Text>
+      {detail?.channel?.encryption_enabled && (
+        <Text style={{ color: colors.textSecondary, fontSize: fontSize.xs, paddingHorizontal: spacing.md, marginBottom: spacing.sm }}>
+          {detail?.channel?.channel_type === 2
+            ? t('e2e_encrypted_badge')
+            : t('channel_public_encrypted_detail')}
+        </Text>
+      )}
 
       {/* ── Edit Info ── */}
       <View style={[styles.section, { backgroundColor: colors.bgSecondary }]}>

@@ -15,6 +15,7 @@ import { patchEd25519 } from './src/lib/ed25519-polyfill';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, type NavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
@@ -208,10 +209,12 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <ConnectionProvider>
-        <AppContent />
-      </ConnectionProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <ConnectionProvider>
+          <AppContent />
+        </ConnectionProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }

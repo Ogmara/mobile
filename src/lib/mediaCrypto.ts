@@ -7,18 +7,23 @@
  * + nonce ride inside the message ciphertext as a {@link MediaDescriptor}; only a
  * stripped `{ cid, size }` reaches the wire (handled by the SDK encrypted builders).
  *
- * Hermes/RN constraints (no `crypto.subtle`, no `expo-file-system` dependency):
+ * Hermes/RN constraints (no `crypto.subtle`):
  * - Read file bytes from the picked asset's `base64` (ImagePicker `{ base64: true }`).
  * - `encryptFile` / `decryptMedia` are pure-JS (@noble) — safe on Hermes.
  * - Upload: build a `Blob` from the cipher bytes and append to a `FormData` with an
  *   `encrypted=1` field (RN 0.81 `fetch` + `Blob` multipart).
- * - Render: fetch the ciphertext, `decryptMedia`, and expose a `data:` URI (no temp
- *   files). Decrypted results are cached by cid so a re-render doesn't re-fetch/decrypt.
+ * - Render: fetch the ciphertext (retrying a 404/network error — a freshly-uploaded
+ *   cross-node CID can take a few seconds to become fetchable), `decryptMedia`, and
+ *   persist the plaintext to a TTL-bounded disk cache (`mediaDiskCache.ts`) so a cold
+ *   app restart doesn't re-fetch/re-decrypt every attachment in a revisited
+ *   conversation. Also cached in-memory for the current session (faster, and covers
+ *   the case where disk write/read has some latency).
  */
 
 import { encryptFile, decryptMedia, type MediaDescriptor } from '@ogmara/sdk';
 import { getCryptoClient } from './cryptoEnv';
 import { e2elog } from './e2eDebug';
+import { getCachedMediaUri, putCachedMedia, clearDiskCache } from './mediaDiskCache';
 
 /** Hard cap on the plaintext size we buffer in memory (matches the plaintext-path
  *  50 MB UI cap). Streaming encryption is post-MVP. */
@@ -140,23 +145,66 @@ export async function encryptAndUploadFile(file: PickedFile): Promise<MediaDescr
 
 /** A resolved encrypted attachment, ready for `<Image>` / a file chip. */
 export interface DecryptedMedia {
-  /** `data:<mime>;base64,...` URI of the DECRYPTED bytes. */
+  /** `data:<mime>;base64,...` (freshly decrypted) or `file://...` (served from
+   *  the on-disk cache) URI of the DECRYPTED bytes. */
   uri: string;
   mime: string;
   name?: string;
 }
 
-// Cache by cid (+ a key fingerprint so a re-keyed cid can't collide). Bounded LRU-ish.
+// Cache by cid + full key/nonce fingerprint (NOT cid alone — a CID is an
+// attacker-chooseable content-addressed pointer, so two messages could
+// reference the same CID with different descriptor keys; a CID-only cache
+// would let one context's plaintext leak into another's — see the matching
+// comment in web/desktop's mediaCrypto.ts). Bounded LRU-ish in-memory; the
+// disk cache (mediaDiskCache.ts) is unbounded but TTL-expiring.
 const mediaCache = new Map<string, DecryptedMedia>();
 const MAX_MEDIA_CACHE = 64;
 const inflight = new Map<string, Promise<DecryptedMedia | null>>();
 
+function bytesToHex(b: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, '0');
+  return s;
+}
+
 const keyTag = (m: MediaDescriptor): string =>
-  `${m.cid}:${m.key.length ? m.key[0] : 0}${m.key.length > 1 ? m.key[m.key.length - 1] : 0}`;
+  `${m.cid}:${bytesToHex(m.key)}:${bytesToHex(m.nonce)}`;
+
+// A freshly-uploaded cross-node CID can 404 for a few seconds while it
+// propagates to the node the receiving client is talking to. Retry a
+// 404/network error on a flat poll (mirrors the equivalent web/desktop fix)
+// instead of failing permanently on the first attempt.
+const MEDIA_FETCH_RETRY_MS = 3000;
+const MEDIA_FETCH_MAX_WAIT_MS = 45000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchCipherWithRetry(url: string): Promise<Uint8Array> {
+  const start = Date.now();
+  for (;;) {
+    let resp: Response;
+    try {
+      resp = await fetch(url);
+    } catch (err) {
+      if (Date.now() - start >= MEDIA_FETCH_MAX_WAIT_MS) throw err;
+      await sleep(MEDIA_FETCH_RETRY_MS);
+      continue;
+    }
+    if (resp.ok) return new Uint8Array(await resp.arrayBuffer());
+    if (resp.status !== 404 || Date.now() - start >= MEDIA_FETCH_MAX_WAIT_MS) {
+      throw new Error(`media fetch ${resp.status}`);
+    }
+    await sleep(MEDIA_FETCH_RETRY_MS);
+  }
+}
 
 /**
- * Fetch the encrypted blob for `m.cid`, decrypt it, and return a `data:` URI of the
- * plaintext. Cached by cid; returns `null` on fetch/decrypt failure (caller shows a
+ * Fetch the encrypted blob for `m.cid`, decrypt it, and return a URI of the
+ * plaintext (disk-cached across app restarts, in-memory-cached for the
+ * session). Returns `null` on fetch/decrypt failure (caller shows a
  * "🔒 encrypted attachment" fallback). `mediaBaseUrl` ends with `/api/v1/media/`.
  */
 export async function loadDecryptedMedia(
@@ -171,15 +219,15 @@ export async function loadDecryptedMedia(
 
   const job = (async (): Promise<DecryptedMedia | null> => {
     try {
-      const resp = await fetch(`${mediaBaseUrl}${m.cid}`);
-      if (!resp.ok) throw new Error(`media fetch ${resp.status}`);
-      const buf = new Uint8Array(await resp.arrayBuffer());
-      const plain = decryptMedia(buf, m.key, m.nonce);
-      const result: DecryptedMedia = {
-        uri: `data:${m.mime};base64,${bytesToBase64(plain)}`,
-        mime: m.mime,
-        name: m.name,
-      };
+      const diskUri = getCachedMediaUri(tag);
+      const result: DecryptedMedia = diskUri
+        ? { uri: diskUri, mime: m.mime, name: m.name }
+        : await (async () => {
+            const buf = await fetchCipherWithRetry(`${mediaBaseUrl}${m.cid}`);
+            const plain = decryptMedia(buf, m.key, m.nonce);
+            const fileUri = putCachedMedia(tag, plain);
+            return { uri: fileUri, mime: m.mime, name: m.name };
+          })();
       if (mediaCache.size >= MAX_MEDIA_CACHE) {
         const first = mediaCache.keys().next().value;
         if (first) mediaCache.delete(first);
@@ -197,8 +245,10 @@ export async function loadDecryptedMedia(
   return job;
 }
 
-/** Drop cached decrypted media (e.g. on logout / wallet switch). */
+/** Drop cached decrypted media, in-memory AND on disk (logout / wallet switch —
+ *  a different identity shouldn't inherit another wallet's decrypted plaintext). */
 export function clearMediaCache(): void {
   mediaCache.clear();
   inflight.clear();
+  clearDiskCache();
 }

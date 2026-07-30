@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ogmara",
     "slug": "ogmara",
-    "version": "0.29.1",
+    "version": "0.30.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -34,7 +34,15 @@
     "plugins": [
       "expo-localization",
       "expo-secure-store",
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": false,
+          "savePhotosPermission": "Ogmara saves images you download from chats to your photo library.",
+          "granularPermissions": ["photo"]
+        }
+      ]
     ]
   }
 }

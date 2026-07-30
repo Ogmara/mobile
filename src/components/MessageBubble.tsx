@@ -18,14 +18,15 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
-  Alert,
   Modal,
-  Dimensions,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import type { Envelope, MediaDescriptor } from '@ogmara/sdk';
 import { loadDecryptedMedia } from '../lib/mediaCrypto';
+import { shareFileFromUri } from '../lib/fileShare';
+import { ImageViewerModal } from './ImageViewerModal';
+import ConfirmModal from './ConfirmModal';
 
 /** 30-minute edit window matching desktop */
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
@@ -134,12 +135,16 @@ function EncryptedAttachment({
       </TouchableOpacity>
     );
   }
+  const fileName = descriptor.name || `${descriptor.cid.slice(0, 12)}.bin`;
   return (
-    <View style={[styles.fileChip, { backgroundColor: colors.bgTertiary }]}>
+    <TouchableOpacity
+      style={[styles.fileChip, { backgroundColor: colors.bgTertiary }]}
+      onPress={() => { void shareFileFromUri(uri, fileName); }}
+    >
       <Text style={{ color: colors.textPrimary, fontSize: fontSize.xs }}>
-        🔒 {descriptor.name || descriptor.cid.slice(0, 12)}
+        🔒 {fileName}
       </Text>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -166,6 +171,7 @@ export default function MessageBubble({
   const [viewerImage, setViewerImage] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [reactPickerOpen, setReactPickerOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const canEdit = useMemo(() => {
     if (!isOwn || message.deleted) return false;
@@ -186,10 +192,7 @@ export default function MessageBubble({
       case 'react': setReactPickerOpen(true); break;
       case 'edit': onEdit?.(message); break;
       case 'delete':
-        Alert.alert(t('chat_delete'), t('confirm_delete'), [
-          { text: t('cancel'), style: 'cancel' },
-          { text: t('chat_delete'), style: 'destructive', onPress: () => onDelete?.(message) },
-        ]);
+        setDeleteConfirmOpen(true);
         break;
       case 'tip': onTip?.(message); break;
     }
@@ -282,12 +285,17 @@ export default function MessageBubble({
                   </TouchableOpacity>
                 );
               }
+              const fileName = att.filename || `${att.cid.slice(0, 12)}.bin`;
               return (
-                <View key={idx} style={[styles.fileChip, { backgroundColor: colors.bgTertiary }]}>
+                <TouchableOpacity
+                  key={idx}
+                  style={[styles.fileChip, { backgroundColor: colors.bgTertiary }]}
+                  onPress={() => { void shareFileFromUri(url, fileName); }}
+                >
                   <Text style={{ color: colors.textPrimary, fontSize: fontSize.xs }}>
-                    📎 {att.filename || att.cid.slice(0, 12)}
+                    📎 {fileName}
                   </Text>
-                </View>
+                </TouchableOpacity>
               );
             })}
           </View>
@@ -395,15 +403,18 @@ export default function MessageBubble({
         </TouchableOpacity>
       </Modal>
 
-      {/* Full-screen image viewer */}
-      {viewerImage && (
-        <Modal visible transparent animationType="fade" onRequestClose={() => setViewerImage(null)}>
-          <TouchableOpacity style={styles.imageViewerOverlay} activeOpacity={1} onPress={() => setViewerImage(null)}>
-            <Image source={{ uri: viewerImage }} style={styles.imageViewerFull} resizeMode="contain" />
-            <Text style={styles.imageViewerClose}>✕</Text>
-          </TouchableOpacity>
-        </Modal>
-      )}
+      {/* Full-screen image viewer — pinch/double-tap zoom + save to device */}
+      <ImageViewerModal uri={viewerImage} onClose={() => setViewerImage(null)} />
+
+      <ConfirmModal
+        visible={deleteConfirmOpen}
+        title={t('chat_delete')}
+        message={t('confirm_delete')}
+        confirmLabel={t('chat_delete')}
+        danger
+        onConfirm={() => onDelete?.(message)}
+        onClose={() => setDeleteConfirmOpen(false)}
+      />
     </TouchableOpacity>
   );
 }
@@ -498,24 +509,6 @@ const styles = StyleSheet.create({
   },
   reactEmoji: {
     fontSize: 28,
-  },
-  imageViewerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.92)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imageViewerFull: {
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height * 0.8,
-  },
-  imageViewerClose: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    color: '#fff',
-    fontSize: 28,
-    fontWeight: '600',
   },
   deletedBubble: {
     opacity: 0.6,

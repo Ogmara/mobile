@@ -1,6 +1,6 @@
 {
   "name": "@ogmara/mobile",
-  "version": "0.30.3",
+  "version": "0.31.0",
   "description": "Ogmara mobile app — decentralized chat and news on Klever blockchain",
   "main": "index.ts",
   "scripts": {
@@ -10,7 +10,8 @@
     "web": "expo start --web",
     "build:android": "eas build --platform android",
     "build:ios": "eas build --platform ios",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --test src/**/*.test.ts"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",

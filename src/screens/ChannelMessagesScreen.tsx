@@ -40,6 +40,7 @@ import {
 } from '../lib/channelCrypto';
 import { chatErrorKey } from '../lib/chatErrors';
 import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
+import { resolveIsEncrypted } from '../lib/channelEncryption';
 import { CHANNEL_TYPE_PRIVATE, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
@@ -122,8 +123,14 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [chanMeta, setChanMeta] = useState<{
     channelType: number; encryptionEnabled: boolean; keyEpochFloor: number; isMod: boolean;
   }>({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false });
+  // Whether `chanMeta` reflects a successful fetch for the CURRENT channelId (reset
+  // on every channel switch — see the effect below).
+  const [chanMetaResolved, setChanMetaResolved] = useState(false);
   const isPrivate = chanMeta.channelType === CHANNEL_TYPE_PRIVATE;
-  const isEncrypted = chanMeta.encryptionEnabled || isPrivate;
+  // FAILS CLOSED (2026-08-02, see channelEncryption.ts) — mirrors the web/
+  // desktop fix for the same bug (an image attached to a private channel
+  // during this exact window uploaded to IPFS unencrypted).
+  const isEncrypted = resolveIsEncrypted(chanMetaResolved, chanMeta.encryptionEnabled, isPrivate);
   const canEstablishKey = isPrivate ? chanMeta.isMod : true; // public: any member may seed
   const encFloor = isPrivate ? chanMeta.keyEpochFloor : 0;    // public never rotates
 
@@ -179,6 +186,10 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // Load channel encryption metadata + my role (gates encrypt-on-send + key seeding).
   useEffect(() => {
     if (!client) return;
+    // New channel (or first mount): we don't yet know its encryption state —
+    // isEncrypted's fail-closed guard needs this false until proven otherwise.
+    setChanMetaResolved(false);
+    setChanMeta({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false });
     let cancelled = false;
     (async () => {
       try {
@@ -198,7 +209,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           keyEpochFloor: ch?.key_epoch_floor ?? 0,
           isMod,
         });
-      } catch { /* keep defaults — plaintext path */ }
+        setChanMetaResolved(true);
+      } catch {
+        // FAIL CLOSED: do NOT mark resolved on failure. isEncrypted stays true
+        // for the rest of this mount instead of falling back to the
+        // plaintext-shaped defaults (was "keep defaults — plaintext path",
+        // itself part of the bug this fixes).
+      }
     })();
     return () => { cancelled = true; };
   }, [client, channelId, myAddress]);
@@ -641,7 +658,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   }, [myAddress]);
 
   const handlePickMedia = useCallback(async () => {
-    if (!client || !signer || uploading) return;
+    // Belt-and-suspenders alongside isEncrypted's fail-closed guard: don't even
+    // open the picker until we know this channel's real encryption state.
+    if (!client || !signer || uploading || !chanMetaResolved) return;
     // Encrypted channels read the bytes (base64) so we can encrypt BEFORE upload (P5).
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
@@ -708,7 +727,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     } finally {
       setUploading(false);
     }
-  }, [client, signer, uploading, isEncrypted, t]);
+  }, [client, signer, uploading, isEncrypted, chanMetaResolved, t]);
 
   // ── Render ──
 
@@ -889,9 +908,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
             <TouchableOpacity
               onPress={handlePickMedia}
               style={styles.emojiBtn}
-              disabled={uploading}
+              disabled={uploading || !chanMetaResolved}
             >
-              <Text style={{ fontSize: 20, opacity: uploading ? 0.4 : 1 }}>📎</Text>
+              <Text style={{ fontSize: 20, opacity: (uploading || !chanMetaResolved) ? 0.4 : 1 }}>📎</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setShowEmoji(true)}

@@ -5,6 +5,41 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-08-02
+
+### Security
+
+- **Media encryption gate failed OPEN: private/encrypted-channel images
+  could upload to IPFS as plaintext.** Found while checking mobile for the
+  same class of bug just fixed on web/desktop. `ChannelMessagesScreen`'s
+  `isEncrypted` was computed as `chanMeta.encryptionEnabled || isPrivate`,
+  where `chanMeta` starts at hardcoded plaintext-shaped defaults
+  (`{ encryptionEnabled: false, channelType: 0 }`) before the async
+  channel-metadata fetch resolves — and on a fetch failure, the code
+  explicitly kept those defaults ("keep defaults — plaintext path"). An
+  image attached to a private channel during either window uploaded
+  unencrypted. Extracted the decision into `src/lib/channelEncryption.ts`'s
+  `resolveIsEncrypted()`, which fails CLOSED via a new `chanMetaResolved`
+  flag: `false` until the fetch succeeds, reset on every channel switch, and
+  — unlike before — never set on a fetch failure either (stays fail-closed
+  for the rest of that mount rather than falling back to defaults). Also
+  disabled the attach button (and guarded `handlePickMedia` itself) until
+  `chanMetaResolved`, as belt-and-suspenders alongside the fail-closed
+  check. DMs were verified independently: `DmConversationScreen`'s
+  `handlePickMedia` calls the encrypted upload path unconditionally, no
+  channel-metadata dependency at all.
+- Added the first regression tests in this repo:
+  `src/lib/channelEncryption.test.ts` (5 cases, `node --test`, no new
+  dependency — Node 24 strips simple TS syntax natively). New `npm test`
+  script; `tsconfig.json` excludes `*.test.ts` (careful to preserve Expo's
+  base `exclude` list — `android`/`ios`/`node_modules`/config files — which
+  a naive override would have dropped).
+- **Known gap, not yet fixed (same as web/desktop):** `isPrivate` itself
+  still fails open the same way while unresolved, and separately still
+  drives `encFloor` (the P2d member-removal rotation-floor check) and
+  `canEstablishKey`. Does **not** leak plaintext (`isEncrypted` still forces
+  encryption); tracked as a follow-up across all three clients.
+
 ## [0.30.3] - 2026-07-29
 
 ### Changed

@@ -5,6 +5,30 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.2] - 2026-08-02
+
+### Fixed
+
+- **Preventive: the node's per-IP media-concurrency cap could be tripped by a
+  channel with many attachments.** Found and fixed live on desktop (a
+  channel with several encrypted images froze the app, see desktop
+  CHANGELOG 1.50.2) — `fetchCipherWithRetry` fired one ciphertext GET per
+  attachment/thumbnail with no concurrency limit, and any non-200/404 status
+  (including `429 too many concurrent media requests` from the node's
+  per-IP limiter, `l2-node api/media_limiter.rs`, default 4 concurrent)
+  failed immediately instead of retrying. RN's `fetch` has no implicit
+  per-origin concurrency cap either, so the same mismatch applies here.
+  Added a `MAX_CONCURRENT_MEDIA_FETCHES = 3` slot queue, and 429 is now
+  retried (honoring the node's `Retry-After` header, clamped to the
+  remaining retry budget) instead of failing immediately.
+
+### Security
+
+- The `Retry-After` value the node returns is untrusted input; the retry
+  wait is now clamped to the remaining `MEDIA_FETCH_MAX_WAIT_MS` budget so a
+  large or malformed value can't stall a single attachment past the
+  documented wait window (audit finding).
+
 ## [0.31.1] - 2026-08-02
 
 ### Fixed

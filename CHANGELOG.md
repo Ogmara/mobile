@@ -5,6 +5,33 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-08-17
+
+### Security
+
+- **Cross-network envelope replay (l2-node final pre-mainnet audit C1) —
+  coordinated wire-format cutover.** Bumped `@ogmara/sdk` to 0.42.0, which
+  binds every signed envelope's msg_id/signature to the target Klever
+  network — matches l2-node 0.83.0's `PROTOCOL_VERSION` 1 → 2 hard cutover.
+  No app-level call-site changes needed for the normal `OgmaraClient` path;
+  `src/lib/deviceEnc.ts`'s two direct `buildDeviceEncBinding`/
+  `buildDeviceEncRevoke` calls (built-in-wallet device-key binding/revoke —
+  these build wallet-authored envelopes outside `OgmaraClient`) now pass the
+  new required `network` parameter via the SDK's new
+  `OgmaraClient.getNetwork()`.
+- **Breaking:** hard wire-format cutover — this build only works against
+  l2-node 0.83.0+; a pre-0.83.0 node rejects every envelope it sends. Ships
+  together with matching bumps in `web` and `desktop`.
+
+### Fixed
+
+- `npm audit`: fixed 4 of the 27 flagged advisories (`ws` DoS, `js-yaml`
+  quadratic-CPU) via the non-breaking `npm audit fix`. The remaining 23 are
+  a previously-tracked set — all build-tooling-only, all gated behind an
+  Expo SDK 57 / RN 0.86.0 major bump that needs its own dedicated migration
+  session; left untouched per the no-blind-`--force` policy (unverifiable
+  in this session).
+
 ## [0.31.2] - 2026-08-02
 
 ### Fixed

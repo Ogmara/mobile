@@ -90,11 +90,13 @@ async function revokeStaleEncKeys(
     const stale = keys.filter(
       (k) => (k.device_id ?? '').toLowerCase() === did && (k.enc_pub ?? '').toLowerCase() !== cur,
     );
+    const network = await client.getNetwork();
     for (const k of stale) {
       const revoke = await buildDeviceEncRevoke({
         walletAddress: wallet,
         encPubHex: k.enc_pub,
         walletSign: sign,
+        network,
       });
       await withRetry(() => client.publishEncKeyEnvelope(wallet, revoke), 'revoke stale enc-key');
       e2elog('revoked stale enc_pub', { deviceId, staleEncPub: k.enc_pub });
@@ -145,6 +147,7 @@ export async function ensureDeviceEncBinding(): Promise<void> {
     encPubHex: kp.publicKeyHex,
     deviceIdHex: deviceId,
     walletSign: sign,
+    network: await client.getNetwork(),
   });
   await withRetry(() => client.publishEncKeyEnvelope(wallet, envelope), 'publish binding');
   e2elog('published binding', { deviceId, encPub: kp.publicKeyHex });

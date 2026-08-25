@@ -1,6 +1,6 @@
 {
   "name": "@ogmara/mobile",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "Ogmara mobile app — decentralized chat and news on Klever blockchain",
   "main": "index.ts",
   "scripts": {
@@ -52,6 +52,10 @@
   "devDependencies": {
     "@types/react": "~19.1.0",
     "typescript": "~5.9.2"
+  },
+  "//overrides": "postcss: @expo/metro-config 54.x pins postcss 8.4.49, which carries four sourceMappingURL path-traversal / arbitrary-.map-file-disclosure advisories plus a stringify XSS. Build-tooling only (never bundled into the app), but the fix is a same-major bump, so we lift it here rather than wait for the Expo SDK 57 upgrade. Remove this override once Expo ships a metro-config on postcss >=8.5.23.",
+  "overrides": {
+    "postcss": "^8.5.26"
   },
   "private": true,
   "repository": {

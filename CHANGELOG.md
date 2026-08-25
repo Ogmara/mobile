@@ -5,6 +5,57 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-08-25
+
+Pre-mainnet dependency-security pass. `npm audit` goes 18 → 17; the residual
+17 are analysed below. No app-source changes.
+
+### Security
+
+- **Pinned `postcss` to ^8.5.26 via `overrides`** — `@expo/metro-config` 54.x
+  ships `postcss` 8.4.49, which carries four advisories (GHSA-6g55-p6wh-862q,
+  GHSA-fxqj-rqcc-2cmp, GHSA-r28c-9q8g-f849 — attacker-controlled
+  `sourceMappingURL` leading to arbitrary `.map` file read / path traversal —
+  and GHSA-qx2v-qp2m-jg93, XSS via unescaped `</style>` in stringify output).
+  **Build tooling only** — `postcss` is reached only through Expo's *web* CSS
+  pipeline, and this app does not enable the web platform (no `react-dom` /
+  `react-native-web`), so it is not reachable in our builds at all and never
+  enters the shipped bundle. Same-major bump, so it does not require the
+  Expo SDK 57 migration. **Verified:** `expo export --platform android`
+  produces a byte-identical Hermes bundle before and after
+  (`index-f6acd905d6751b541c2269fb9793f041.hbc`); `npm test` and the existing
+  `tsc --noEmit` baseline are unchanged.
+
+  Remove this override once Expo ships a `metro-config` on `postcss` ≥8.5.23.
+
+### Known issues (17 residual `npm audit` findings)
+
+All 17 are **build/dev tooling only** — none of this code is bundled into the
+APK. They reduce to exactly two root causes, and neither has a clean fix today:
+
+- **`image-size` (2 high) — GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq.** Infinite
+  loops in the ICNS and JXL/HEIF parsers. Reached via `metro`.
+  **No patched version exists at any release** — the advisory's affected range
+  is `*`, including the current 2.0.2.
+  Note that `npm audit` reports `fixAvailable: expo@57.0.16`, but **that claim is
+  wrong**: `metro@latest` still depends on `image-size` `^1.0.2`, exactly as our
+  `metro@0.83.3` does. The Expo SDK 57 migration will *not* clear these two.
+  They can only be closed upstream, in `image-size` or by Metro dropping it.
+- **`uuid` <11.1.1 (1 moderate) — GHSA-w5hq-g745-h8pq.** Missing buffer bounds
+  check in v3/v5/v6. Reached via `@expo/config-plugins` → `xcode` → `uuid@7.0.3`,
+  i.e. the **iOS prebuild path only**. `xcode` 3.0.1 is the latest release and
+  still pins `uuid` `^7.0.3`, so there is no parent to bump; forcing an override
+  to 11.x would cross a breaking ESM/named-export change and break
+  `expo prebuild`. Deferred per the project's "never force an override newer
+  than the parent supports" rule.
+
+The remaining 14 findings are `npm audit` cascade entries — packages flagged
+solely because they "depend on vulnerable versions of" the two roots above
+(`metro`, `metro-config`, `@expo/cli`, `expo`, `expo-constants`, `expo-asset`,
+`expo-notifications`, `@expo/config`, `@expo/config-plugins`,
+`@expo/prebuild-config`, and friends). They carry no distinct advisory and will
+clear automatically when the two roots do.
+
 ## [0.32.0] - 2026-08-17
 
 ### Security

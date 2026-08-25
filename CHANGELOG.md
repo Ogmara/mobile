@@ -5,6 +5,40 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-08-25
+
+Every on-chain action on mobile was failing with "Smart contract address not
+configured". Found while verifying the 0.34.0 channel-creation fix, which
+depended on the same broken path.
+
+### Fixed
+
+- **The KApp contract address was never set, so no on-chain action worked.**
+  `src/lib/kleverTx.ts` exported `setContractAddress()` with a comment saying it
+  is "called after fetching node stats" — but nothing in the app ever called it,
+  and nothing ever called `networkStats()` either. `scAddress` stayed `''`, and
+  `invokeContract()` throws on an empty address, so **every** contract call
+  failed: on-chain user registration (from both `WalletScreen` and
+  `WalletBalanceScreen`), device delegation and revocation, governance voting,
+  public-key updates, and the public/read-public channel registration added in
+  0.34.0.
+
+  `ConnectionContext` now fetches `networkStats()` after a successful health
+  check and feeds `contract_address` to `setContractAddress()`, which is what
+  web and desktop have always done at startup. Mobile does it per-connect rather
+  than once at boot, because the node URL — and therefore the network and its
+  contract — can change at runtime. Both connect paths go through
+  `confirmAndWire()`, so switching or falling back to another node re-resolves
+  the address.
+
+  The fetch is deliberately non-fatal: an unreachable stats endpoint leaves
+  on-chain actions unavailable but must not tear down an otherwise-healthy
+  connection. Both the missing-field and request-failure cases log a warning.
+
+  Plain-transfer operations (tips, transfers, freeze/unfreeze, delegation,
+  withdrawals, claims) were never affected — they build native TX types directly
+  and do not go through `invokeContract()`.
+
 ## [0.34.0] - 2026-08-25
 
 Channel creation on mobile was non-functional, and `tsc --noEmit` had a red

@@ -14,6 +14,7 @@ import { bootstrapNodeSelection, rememberNetwork, recordKnownNode, getAvailableN
 import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultWipe } from '../lib/vault';
 import { debugLog } from '../lib/debug';
 import { setCryptoEnv, setCryptoClient, clearCryptoEnv } from '../lib/cryptoEnv';
+import { setContractAddress } from '../lib/kleverTx';
 import { ensureDeviceEncBinding, wipeDeviceEncKey } from '../lib/deviceEnc';
 // Side-effect import: registers the key-vault backup/restore listeners (P3) into the
 // dm/channel crypto caches at app start.
@@ -125,6 +126,24 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       await rememberNetwork((health as any).network).catch(() => {});
       debugLog('info', `Node connected, ${health.peers} peers`);
       connectWs(url);
+
+      // Every on-chain action (register, createChannel, device delegation,
+      // governance votes) invokes the KApp contract, and invokeContract() throws
+      // "Smart contract address not configured" until this is set. Web and
+      // desktop do the same at startup; mobile does it per-connect because the
+      // node URL — and therefore the network and its contract — can change at
+      // runtime. Non-fatal: an unreachable stats endpoint must not drop an
+      // otherwise-healthy connection, it only leaves on-chain actions disabled.
+      c.networkStats().then((stats: any) => {
+        if (stats?.contract_address) {
+          setContractAddress(stats.contract_address);
+          debugLog('info', `SC address set: ${String(stats.contract_address).slice(0, 12)}...`);
+        } else {
+          debugLog('warn', 'Node reported no contract_address; on-chain actions unavailable');
+        }
+      }).catch((e: unknown) => {
+        debugLog('warn', 'networkStats failed; on-chain actions unavailable', e);
+      });
 
       const addr = signerRef.current?.walletAddress || signerRef.current?.address;
       if (addr && !savedName) {

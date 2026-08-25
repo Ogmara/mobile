@@ -5,6 +5,32 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-08-25
+
+### Fixed
+
+- **The news feed never updated live.** l2-node 0.119.0 fixes the node half of
+  this (it previously broadcast no news envelope over the WebSocket at all);
+  this is the client half. The feed now refetches when a news envelope arrives
+  over the WS, instead of only when something forced a REST refetch.
+
+  On mobile the only thing that refreshed this list was the `useFocusEffect`
+  hook, which is precisely why a new post appeared only after leaving the feed
+  screen and coming back.
+
+  It refetches rather than splicing the envelope into the list: a WS frame is a
+  raw envelope with a MessagePack payload, while the list holds node-decoded
+  posts, so the two are not the same shape. Refetching also covers edits,
+  deletes, reactions and reposts through one code path, and news volume is far
+  too low for the extra request to matter.
+
+  Requires l2-node 0.119.0+ to have any effect; against an older node the
+  behaviour is unchanged rather than broken.
+
+### Changed
+
+- Bumped `@ogmara/sdk` to 0.48.0 for `isNewsEnvelope`.
+
 ## [0.35.0] - 2026-08-25
 
 Every on-chain action on mobile was failing with "Smart contract address not

@@ -6,7 +6,7 @@
  * Includes reaction buttons, repost, and bookmark per backport spec.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ import { decodeNewsPost } from '../lib/payloadDecoder';
 import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import { useUserDisplay } from '../hooks/useUserDisplay';
 import type { Envelope } from '@ogmara/sdk';
+import { isNewsEnvelope } from '@ogmara/sdk';
 import type { NewsStackParamList } from '../navigation/types';
 
 type NavProp = NativeStackNavigationProp<NewsStackParamList, 'NewsFeed'>;
@@ -38,7 +39,7 @@ const NEWS_REACTIONS = ['👍', '👎', '❤️', '🔥', '😂'];
 export default function NewsFeedScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, status, signer } = useConnection();
+  const { client, status, signer, onWsEvent } = useConnection();
   const navigation = useNavigation<NavProp>();
   const [feedMode, setFeedMode] = useState<'all' | 'following'>('all');
 
@@ -58,6 +59,24 @@ export default function NewsFeedScreen() {
     },
     [client, feedMode, signer],
   );
+
+  // Live feed updates. l2-node 0.119.0+ broadcasts news envelopes over the WS;
+  // before that the node pushed nothing for news at all, so the only thing that
+  // refreshed this list was the focus effect below — which is why a new post
+  // appeared only after leaving the feed and coming back.
+  //
+  // Refresh rather than splicing the envelope in: the WS frame is a raw envelope
+  // (msgpack payload) while this list holds node-decoded posts normalized by
+  // `normalizeEnvelopes`, so they are not the same shape. Refreshing also covers
+  // edits, deletes, reactions and reposts with one code path.
+  useEffect(() => {
+    const unsubscribe = onWsEvent((event) => {
+      if (event.type !== 'message') return;
+      if (!isNewsEnvelope((event as { envelope?: unknown }).envelope)) return;
+      onRefresh();
+    });
+    return unsubscribe;
+  }, [onWsEvent, onRefresh]);
 
   // Auto-refresh when screen gains focus (e.g., after posting)
   useFocusEffect(

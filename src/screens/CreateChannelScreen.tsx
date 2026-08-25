@@ -28,6 +28,8 @@ import { debugLog } from '../lib/debug';
 import { createChannelOnChain, getChannelIdFromTx } from '../lib/kleverTx';
 import { addJoinedChannel } from '../lib/joinedChannels';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
+import SegmentedControl from '../components/SegmentedControl';
 
 export default function CreateChannelScreen() {
   const { t } = useTranslation();
@@ -160,17 +162,13 @@ export default function CreateChannelScreen() {
 
         <Text style={[styles.label, { color: colors.textSecondary }]}>{t('channel_type_label')}</Text>
         <View style={styles.typeRow}>
-          {typeOptions.map((opt) => (
-            <TouchableOpacity
-              key={opt.value}
-              style={[styles.typeBtn, { backgroundColor: channelType === opt.value ? colors.accentPrimary : colors.bgSecondary }]}
-              onPress={() => setChannelType(opt.value)}
-            >
-              <Text style={{ color: channelType === opt.value ? colors.textInverse : colors.textPrimary, fontWeight: '600', fontSize: fontSize.sm }}>
-                {opt.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {/* Three mutually-exclusive options is a segmented control, not three
+              buttons — same control the news feed's All/Following uses. */}
+          <SegmentedControl
+            segments={typeOptions.map((opt) => ({ value: String(opt.value), label: opt.label }))}
+            value={String(channelType)}
+            onChange={(v) => setChannelType(Number(v) as 0 | 1 | 2)}
+          />
         </View>
 
         {channelType === 2 && (
@@ -179,15 +177,14 @@ export default function CreateChannelScreen() {
           </Text>
         )}
 
-        <TouchableOpacity
-          style={[styles.createBtn, { backgroundColor: creating ? colors.textSecondary : colors.accentPrimary }]}
+        <Button
+          label={t('channel_create')}
           onPress={handleCreate}
-          disabled={creating}
-        >
-          <Text style={[styles.createBtnText, { color: colors.textInverse }]}>
-            {creating ? t('loading') : t('channel_create')}
-          </Text>
-        </TouchableOpacity>
+          loading={creating}
+          fullWidth
+          size="lg"
+          style={styles.createBtn}
+        />
 
         {/* On-chain creation waits on TX confirmation, which can take tens of
             seconds — without a progress line it reads as a hung button. */}
@@ -206,10 +203,8 @@ const styles = StyleSheet.create({
   label: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs, marginTop: spacing.md },
   input: { padding: spacing.md, borderRadius: radius.md, fontSize: fontSize.md },
   textArea: { minHeight: 80 },
-  typeRow: { flexDirection: 'row', gap: spacing.sm },
-  typeBtn: { flex: 1, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center' },
+  typeRow: { marginTop: spacing.xs },
   hint: { fontSize: fontSize.xs, marginTop: spacing.sm, fontStyle: 'italic' },
-  createBtn: { marginTop: spacing.xl, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center' },
-  createBtnText: { fontSize: fontSize.md, fontWeight: '600' },
+  createBtn: { marginTop: spacing.xl },
   status: { fontSize: fontSize.sm, marginTop: spacing.md, textAlign: 'center' },
 });

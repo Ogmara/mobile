@@ -32,6 +32,7 @@ import Gradient from '../components/Gradient';
 import { debugLog } from '../lib/debug';
 import type { MoreStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 interface Asset { assetId: string; name: string; atomic: number; frozen: number; precision: number }
 
@@ -379,12 +380,20 @@ export default function WalletBalanceScreen() {
                 value={sendAmount} onChangeText={setSendAmount} keyboardType="decimal-pad"
               />
               <View style={styles.dialogActions}>
-                <TouchableOpacity style={[styles.dialogBtn, { borderColor: colors.border, borderWidth: 1 }]} onPress={() => { setSendDialog(null); setSendTo(''); setSendAmount(''); }} disabled={sending}>
-                  <Text style={{ color: colors.textPrimary }}>{t('cancel')}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.dialogBtn, { backgroundColor: sending ? colors.textSecondary : colors.accentPrimary }]} onPress={handleSend} disabled={sending || !sendTo.trim() || !sendAmount.trim()}>
-                  {sending ? <ActivityIndicator size="small" color={colors.textInverse} /> : <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('transfer_send')}</Text>}
-                </TouchableOpacity>
+                <Button
+                  label={t('cancel')}
+                  variant="secondary"
+                  onPress={() => { setSendDialog(null); setSendTo(''); setSendAmount(''); }}
+                  disabled={sending}
+                  style={styles.dialogBtn}
+                />
+                <Button
+                  label={t('transfer_send')}
+                  onPress={handleSend}
+                  loading={sending}
+                  disabled={!sendTo.trim() || !sendAmount.trim()}
+                  style={styles.dialogBtn}
+                />
               </View>
             </View>
           </TouchableOpacity>
@@ -484,7 +493,7 @@ const styles = StyleSheet.create({
   dialogTitle: { fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.md },
   dialogInput: { padding: spacing.md, borderRadius: radius.md, fontSize: fontSize.md, marginBottom: spacing.md },
   dialogActions: { flexDirection: 'row', gap: spacing.md },
-  dialogBtn: { flex: 1, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center' },
+  dialogBtn: { flex: 1 },
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.md, paddingBottom: spacing.xl },
   manageItem: { paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderTopWidth: StyleSheet.hairlineWidth },

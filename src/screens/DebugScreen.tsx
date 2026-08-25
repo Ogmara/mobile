@@ -21,6 +21,7 @@ import { getDebugLogs, clearDebugLogs, formatLogEntry, isDebugEnabled, setDebugE
 import { getVaultDiagnostics } from '../lib/vaultMigration';
 import { getKleverNetwork, setKleverNetwork, type KleverNetwork } from '../lib/klever';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 export default function DebugScreen() {
   const { t } = useTranslation();
@@ -142,12 +143,7 @@ export default function DebugScreen() {
             Debug: {debugOn ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.btn, { backgroundColor: colors.accentPrimary }]}
-          onPress={refresh}
-        >
-          <Text style={{ color: colors.textInverse, fontSize: fontSize.sm }}>Refresh</Text>
-        </TouchableOpacity>
+        <Button label="Refresh" onPress={refresh} size="sm" />
         <TouchableOpacity
           style={[styles.btn, { backgroundColor: colors.accentSecondary }]}
           onPress={handleExport}

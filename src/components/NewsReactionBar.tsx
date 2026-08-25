@@ -18,6 +18,15 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { spacing, fontSize, radius } from '../theme';
 
+/**
+ * 13%-alpha version of a hex token, for chip fills. React Native has no
+ * `color-mix`, and the palette is plain hex, so append an alpha byte.
+ * Non-`#rrggbb` input is returned untouched rather than corrupted.
+ */
+function tint(hex: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(hex) ? `${hex}22` : hex;
+}
+
 /** The five reactions offered on a news post. Mirrors web's `NEWS_REACTIONS`. */
 export const NEWS_REACTIONS = ['👍', '👎', '❤️', '🔥', '😂'] as const;
 
@@ -29,6 +38,7 @@ interface Props {
     accentPrimary: string;
     textInverse: string;
     textSecondary: string;
+    border: string;
   };
 }
 
@@ -48,7 +58,7 @@ export default function NewsReactionBar({ counts, onReact, colors }: Props) {
         {NEWS_REACTIONS.map((emoji) => (
           <TouchableOpacity
             key={emoji}
-            style={[styles.btn, { backgroundColor: colors.bgTertiary }]}
+            style={[styles.chip, { backgroundColor: colors.bgTertiary, borderColor: colors.border }]}
             onPress={() => pick(emoji)}
             accessibilityLabel={`React ${emoji}`}
           >
@@ -56,7 +66,7 @@ export default function NewsReactionBar({ counts, onReact, colors }: Props) {
           </TouchableOpacity>
         ))}
         <TouchableOpacity
-          style={[styles.btn, { backgroundColor: colors.bgTertiary }]}
+          style={[styles.chip, { backgroundColor: colors.bgTertiary, borderColor: colors.border }]}
           onPress={() => setExpanded(false)}
           accessibilityLabel="Close reactions"
         >
@@ -71,16 +81,19 @@ export default function NewsReactionBar({ counts, onReact, colors }: Props) {
       {active.map((emoji) => (
         <TouchableOpacity
           key={emoji}
-          style={[styles.btn, { backgroundColor: colors.accentPrimary }]}
+          // Tinted chip rather than a solid accent block: a reaction is a
+          // count, not a call to action, and a saturated fill made it compete
+          // with the post's own content for attention.
+          style={[styles.chip, { backgroundColor: tint(colors.accentPrimary), borderColor: colors.accentPrimary }]}
           onPress={() => onReact(emoji)}
           accessibilityLabel={`React ${emoji}`}
         >
           <Text style={styles.emoji}>{emoji}</Text>
-          <Text style={[styles.count, { color: colors.textInverse }]}>{counts[emoji]}</Text>
+          <Text style={[styles.count, { color: colors.accentPrimary }]}>{counts[emoji]}</Text>
         </TouchableOpacity>
       ))}
       <TouchableOpacity
-        style={[styles.btn, { backgroundColor: colors.bgTertiary }]}
+        style={[styles.chip, { backgroundColor: colors.bgTertiary, borderColor: colors.border }]}
         onPress={() => setExpanded(true)}
         accessibilityLabel="Add reaction"
       >
@@ -103,12 +116,15 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.xs,
   },
-  btn: {
+  chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    // Pill, matching Button/SegmentedControl's rounded language rather than
+    // the old near-square radius.sm.
+    borderRadius: radius.full,
+    borderWidth: 1,
     gap: 4,
   },
   emoji: { fontSize: fontSize.md },

@@ -29,6 +29,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 type Props = NativeStackScreenProps<ChatStackParamList, 'ChannelAdmin'>;
 
@@ -391,12 +392,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
               onChangeText={setModAddress}
               autoCapitalize="none"
             />
-            <TouchableOpacity
-              style={[styles.addBtn, { backgroundColor: colors.accentPrimary }]}
-              onPress={handleAddMod}
-            >
-              <Text style={{ color: colors.textInverse, fontWeight: '600' }}>+</Text>
-            </TouchableOpacity>
+            <Button label="+" onPress={handleAddMod} style={styles.addBtn} />
           </View>
         )}
       </View>
@@ -465,12 +461,12 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       {/* ── Invite ── */}
       <View style={[styles.section, { backgroundColor: colors.bgSecondary }]}>
         <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('channel_invite')}</Text>
-        <TouchableOpacity
-          style={[styles.actionBtn, { backgroundColor: colors.accentPrimary, marginBottom: spacing.sm }]}
+        <Button
+          label={t('channel_share_invite')}
           onPress={handleShareInvite}
-        >
-          <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('channel_share_invite')}</Text>
-        </TouchableOpacity>
+          fullWidth
+          style={styles.actionBtn}
+        />
         <View style={styles.addRow}>
           <TextInput
             style={[styles.addInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
@@ -480,12 +476,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
             onChangeText={setInviteAddress}
             autoCapitalize="none"
           />
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: colors.accentPrimary }]}
-            onPress={handleInvite}
-          >
-            <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('channel_invite')}</Text>
-          </TouchableOpacity>
+          <Button label={t('channel_invite')} onPress={handleInvite} style={styles.addBtn} />
         </View>
       </View>
 
@@ -528,11 +519,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: fontSize.md, fontWeight: '700', marginBottom: spacing.sm },
   input: { padding: spacing.md, borderRadius: radius.md, fontSize: fontSize.md, marginBottom: spacing.sm },
   textArea: { minHeight: 60 },
-  actionBtn: {
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
+  actionBtn: { marginBottom: spacing.sm },
   memberRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -545,7 +532,7 @@ const styles = StyleSheet.create({
   memberActions: { flexDirection: 'row', gap: spacing.md },
   addRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   addInput: { flex: 1, padding: spacing.sm, borderRadius: radius.md, fontSize: fontSize.sm },
-  addBtn: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.md, justifyContent: 'center' },
+  addBtn: { minWidth: 52 },
   dangerBtn: {
     paddingVertical: spacing.md,
     borderRadius: radius.md,

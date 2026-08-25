@@ -26,6 +26,7 @@ import type { Attachment } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 type Props = NativeStackScreenProps<NewsStackParamList, 'ComposePost'>;
 
@@ -263,18 +264,14 @@ export default function ComposePostScreen({ route, navigation }: Props) {
         />
       </ScrollView>
 
-      <TouchableOpacity
-        style={[
-          styles.submitBtn,
-          { backgroundColor: submitting ? colors.textSecondary : colors.accentPrimary },
-        ]}
+      <Button
+        label={isEdit ? t('save') : t('news_new_post')}
         onPress={handleSubmit}
-        disabled={submitting}
-      >
-        <Text style={[styles.submitText, { color: colors.textInverse }]}>
-          {submitting ? t('loading') : isEdit ? t('save') : t('news_new_post')}
-        </Text>
-      </TouchableOpacity>
+        loading={submitting}
+        fullWidth
+        size="lg"
+        style={styles.submitBtn}
+      />
     </KeyboardAwareView>
   );
 }
@@ -325,11 +322,5 @@ const styles = StyleSheet.create({
   },
   attachmentThumb: { width: 40, height: 40, borderRadius: radius.sm },
   attachmentName: { flex: 1, fontSize: fontSize.sm },
-  submitBtn: {
-    margin: spacing.md,
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  submitText: { fontSize: fontSize.md, fontWeight: '600' },
+  submitBtn: { margin: spacing.md },
 });

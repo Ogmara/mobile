@@ -28,6 +28,7 @@ import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MoreStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 type Props = NativeStackScreenProps<MoreStackParamList, 'TokenDetail'>;
 
@@ -140,13 +141,12 @@ export default function TokenDetailScreen({ route }: Props) {
         <Text style={[styles.cardValue, { color: colors.textPrimary }]}>
           {formatTokenAmount(claimable, precision)} {assetId.split('-')[0]}
         </Text>
-        <TouchableOpacity
-          style={[styles.primaryBtn, { backgroundColor: claimable > 0 && !busy ? colors.accentPrimary : colors.textSecondary }]}
+        <Button
+          label={t('stake_claim')}
           onPress={() => runTx(() => claimRewards(assetId), t('stake_claim'))}
           disabled={claimable <= 0 || busy}
-        >
-          <Text style={{ color: '#fff', fontWeight: '700' }}>{t('stake_claim')}</Text>
-        </TouchableOpacity>
+          fullWidth
+        />
       </View>
 
       {/* Stake */}
@@ -161,13 +161,12 @@ export default function TokenDetailScreen({ route }: Props) {
             onChangeText={setStakeInput}
             keyboardType="decimal-pad"
           />
-          <TouchableOpacity
-            style={[styles.primaryBtn, styles.stakeBtn, { backgroundColor: busy ? colors.textSecondary : colors.accentPrimary }]}
+          <Button
+            label={t('stake_action')}
             onPress={doStake}
-            disabled={busy}
-          >
-            {busy ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>{t('stake_action')}</Text>}
-          </TouchableOpacity>
+            loading={busy}
+            style={styles.stakeBtn}
+          />
         </View>
         <Text style={[styles.hint, { color: colors.textSecondary }]}>
           {t('stake_available_to_stake', { amount: `${formatTokenAmount(available, precision)} ${assetId.split('-')[0]}` })}
@@ -263,15 +262,19 @@ export default function TokenDetailScreen({ route }: Props) {
   );
 }
 
-function BucketBtn({ color, label, onPress, primary, disabled }: { color: any; label: string; onPress: () => void; primary?: boolean; disabled?: boolean }) {
+function BucketBtn({ label, onPress, primary, disabled }: { color?: unknown; label: string; onPress: () => void; primary?: boolean; disabled?: boolean }) {
+  // Kept as a thin alias so the call sites read the same; the look now comes
+  // from the shared Button rather than a local style. `secondary` IS the
+  // bordered treatment these buttons already had and that the design is
+  // standardising on.
   return (
-    <TouchableOpacity
-      style={[styles.bucketBtn, { backgroundColor: primary ? color.accentPrimary : 'transparent', borderColor: color.border, borderWidth: primary ? 0 : 1 }]}
+    <Button
+      label={label}
       onPress={onPress}
+      variant={primary ? 'primary' : 'secondary'}
+      size="sm"
       disabled={disabled}
-    >
-      <Text style={{ color: primary ? '#fff' : color.textPrimary, fontSize: fontSize.xs, fontWeight: '600' }}>{label}</Text>
-    </TouchableOpacity>
+    />
   );
 }
 
@@ -286,7 +289,6 @@ const styles = StyleSheet.create({
   card: { marginHorizontal: spacing.md, marginBottom: spacing.md, padding: spacing.md, borderRadius: radius.lg },
   cardLabel: { fontSize: fontSize.sm, fontWeight: '600', textTransform: 'uppercase' },
   cardValue: { fontSize: fontSize.xl, fontWeight: '700', marginVertical: spacing.sm },
-  primaryBtn: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg, borderRadius: radius.md, alignItems: 'center' },
   stakeRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, alignItems: 'center' },
   input: { flex: 1, padding: spacing.md, borderRadius: radius.md, fontSize: fontSize.md },
   stakeBtn: { justifyContent: 'center', minWidth: 90 },
@@ -298,7 +300,6 @@ const styles = StyleSheet.create({
   bucketAmount: { fontSize: fontSize.md, fontWeight: '600' },
   bucketStatus: { fontSize: fontSize.xs, marginTop: 2 },
   bucketActions: { flexDirection: 'row', gap: spacing.xs },
-  bucketBtn: { paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: radius.sm },
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.md, paddingBottom: spacing.lg },
   sheetTitle: { fontSize: fontSize.lg, fontWeight: '700', paddingHorizontal: spacing.lg, marginBottom: spacing.sm },

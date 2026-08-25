@@ -27,6 +27,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal } from 'react-native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import i18n from '../i18n/init';
+import Button from './Button';
 import {
   resolveButtons,
   backdropButtonFor,
@@ -121,32 +122,22 @@ export default function AlertHost() {
             <Text style={[styles.message, { color: colors.textSecondary }]}>{message}</Text>
           ) : null}
           <View style={[styles.actions, stacked && styles.actionsStacked]}>
-            {buttons.map((button, i) => {
-              const isCancel = button.style === 'cancel';
-              const isDestructive = button.style === 'destructive';
-              return (
-                <TouchableOpacity
-                  key={`${button.text}-${i}`}
-                  style={[
-                    styles.btn,
-                    stacked && styles.btnStacked,
-                    isCancel
-                      ? { borderColor: colors.border, borderWidth: 1 }
-                      : { backgroundColor: isDestructive ? colors.error : colors.accentPrimary },
-                  ]}
-                  onPress={() => dismiss(button)}
-                >
-                  <Text
-                    style={[
-                      styles.btnText,
-                      { color: isCancel ? colors.textPrimary : colors.textInverse },
-                    ]}
-                  >
-                    {button.text}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            {buttons.map((button, i) => (
+              <Button
+                key={`${button.text}-${i}`}
+                label={button.text}
+                onPress={() => dismiss(button)}
+                variant={
+                  button.style === 'cancel'
+                    ? 'secondary'
+                    : button.style === 'destructive'
+                      ? 'danger'
+                      : 'primary'
+                }
+                fullWidth={stacked}
+                style={stacked ? undefined : styles.btn}
+              />
+            ))}
           </View>
         </View>
       </TouchableOpacity>
@@ -172,12 +163,5 @@ const styles = StyleSheet.create({
   message: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.lg },
   actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
   actionsStacked: { flexDirection: 'column-reverse', alignItems: 'stretch' },
-  btn: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  btnStacked: { paddingVertical: spacing.md },
-  btnText: { fontWeight: '600' },
+  btn: { minWidth: 96 },
 });

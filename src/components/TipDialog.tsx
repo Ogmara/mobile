@@ -21,6 +21,7 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { sendTip, getExplorerTxUrl } from '../lib/kleverTx';
 import { debugLog } from '../lib/debug';
 import { showAlert } from '../components/AlertHost';
+import Button from './Button';
 
 interface Props {
   visible: boolean;
@@ -117,17 +118,13 @@ export default function TipDialog({ visible, recipientAddress, onClose }: Props)
             >
               <Text style={{ color: colors.textPrimary }}>{t('cancel')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.sendBtn, { backgroundColor: sending ? colors.textSecondary : colors.accentPrimary }]}
+            <Button
+              label={t('tip_send')}
               onPress={handleSend}
-              disabled={sending || !amount.trim()}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color={colors.textInverse} />
-              ) : (
-                <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('tip_send')}</Text>
-              )}
-            </TouchableOpacity>
+              loading={sending}
+              disabled={!amount.trim()}
+              style={styles.sendBtn}
+            />
           </View>
         </View>
       </TouchableOpacity>

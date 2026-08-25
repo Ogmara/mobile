@@ -5,6 +5,54 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.0] - 2026-08-25
+
+Button design system. Roughly thirty hand-rolled button styles across the app
+meant the same logical action looked different depending on which screen you
+were on — the wallet's bordered buttons read as designed, while flat
+solid-accent blocks elsewhere ("Claim rewards", "Stake", the feed tabs) read as
+unstyled system defaults. They effectively were: a full-bleed accent rectangle
+with no border, no radius scale and no press state is what an unstyled control
+looks like.
+
+### Added
+
+- **`Button`** — the single button primitive. Variants: `primary` (filled
+  accent, the one obvious action on a screen), `secondary` (transparent +
+  hairline border — the wallet's Send/Receive/Undelegate treatment, and the
+  right default for anything that isn't the primary action), `danger` (filled
+  error, destructive only) and `ghost` (text only). Sizes `sm`/`md`/`lg` map to
+  fixed heights so a row lines up regardless of label length or variant.
+  Built-in `loading` (spinner replaces the label and blocks presses) and
+  `disabled`, which dims rather than swapping in a grey fill — a disabled button
+  should read as the same button, unavailable, not as a different one.
+
+- **`SegmentedControl`** — pill switch for mutually-exclusive options. A single
+  rounded track with an inset pill marking the selection, instead of two
+  hard-edged accent rectangles that read as separate tabs.
+
+### Changed
+
+- Converted every primary/confirm action to `Button`: staking (Claim rewards,
+  Stake, Delegate/Undelegate/Unstake), wallet send dialog, Receive, compose
+  post, create channel, news reply, tip dialog, channel admin (share invite,
+  add moderator, invite), address book, DM list, node selector, channel join,
+  debug. Also `AlertHost`, `InfoModal`, `ConfirmModal` and `PromptModal`, so
+  dialogs match the screens they open over.
+- News feed All/Following and the create-channel type picker now use
+  `SegmentedControl` — three mutually-exclusive options is one control, not
+  three buttons.
+- **Reaction chips** are tinted rather than solid accent: a `13%`-alpha fill
+  with an accent border and accent-coloured count, on a full pill radius. A
+  saturated fill made a passive count compete with the post's own content for
+  attention. Neutral chips (the add-reaction trigger and the expanded picker)
+  use the same shape with border tokens.
+
+Nine hand-rolled touchables remain on purpose, because they aren't buttons in
+this sense: the news Reply/Repost/Bookmark inline text links, the lock screen's
+biometric affordance, message-bubble emoji chips, and the image viewer's
+overlay controls on a black backdrop.
+
 ## [0.39.0] - 2026-08-25
 
 ### Fixed

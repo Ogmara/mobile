@@ -26,6 +26,7 @@ import { useConnection } from '../context/ConnectionContext';
 import type { NodeWithPing } from '@ogmara/sdk';
 import AnchorBadge from './AnchorBadge';
 import { showAlert } from '../components/AlertHost';
+import Button from './Button';
 
 interface Props {
   visible: boolean;
@@ -191,12 +192,7 @@ export default function NodeSelector({ visible, onClose }: Props) {
               returnKeyType="go"
               onSubmitEditing={handleAddManual}
             />
-            <TouchableOpacity
-              style={[styles.manualBtn, { backgroundColor: colors.accentPrimary }]}
-              onPress={handleAddManual}
-            >
-              <Text style={{ color: colors.textInverse, fontWeight: '700' }}>+</Text>
-            </TouchableOpacity>
+            <Button label="+" onPress={handleAddManual} style={styles.manualBtn} />
           </View>
           {addError ? (
             <Text style={[styles.errorText, { color: colors.error }]}>{addError}</Text>
@@ -294,11 +290,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     fontSize: fontSize.sm,
   },
-  manualBtn: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.sm,
-  },
+  manualBtn: { minWidth: 52 },
   errorText: {
     fontSize: fontSize.xs,
     paddingHorizontal: spacing.md,

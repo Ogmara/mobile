@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
+import Button from './Button';
 
 interface Props {
   visible: boolean;
@@ -36,9 +37,7 @@ export default function InfoModal({ visible, title, message, onClose }: Props) {
         <View style={[styles.dialog, { backgroundColor: colors.bgSecondary }]} onStartShouldSetResponder={() => true}>
           {title ? <Text style={[styles.title, { color: colors.textPrimary }]}>{title}</Text> : null}
           <Text style={[styles.message, { color: colors.textSecondary }]}>{message}</Text>
-          <TouchableOpacity style={[styles.okBtn, { backgroundColor: colors.accentPrimary }]} onPress={onClose}>
-            <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('done')}</Text>
-          </TouchableOpacity>
+          <Button label={t('done')} onPress={onClose} style={styles.okBtn} />
         </View>
       </TouchableOpacity>
     </Modal>
@@ -61,9 +60,5 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.sm },
   message: { fontSize: fontSize.md, marginBottom: spacing.lg },
-  okBtn: {
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
+  okBtn: { alignSelf: 'flex-end' },
 });

@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
+import Button from './Button';
 
 interface Props {
   visible: boolean;
@@ -57,16 +58,8 @@ export default function PromptModal({ visible, title, initialValue = '', maxLeng
             onSubmitEditing={handleSubmit}
           />
           <View style={styles.actions}>
-            <TouchableOpacity style={[styles.cancelBtn, { borderColor: colors.border }]} onPress={onClose}>
-              <Text style={{ color: colors.textPrimary }}>{t('cancel')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.confirmBtn, { backgroundColor: colors.accentPrimary }]}
-              onPress={handleSubmit}
-              disabled={!value.trim()}
-            >
-              <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('save')}</Text>
-            </TouchableOpacity>
+            <Button label={t('cancel')} variant="secondary" onPress={onClose} />
+            <Button label={t('save')} onPress={handleSubmit} disabled={!value.trim()} />
           </View>
         </View>
       </TouchableOpacity>
@@ -98,18 +91,5 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     gap: spacing.md,
-  },
-  cancelBtn: {
-    flex: 1,
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    borderWidth: 1,
-  },
-  confirmBtn: {
-    flex: 1,
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
   },
 });

@@ -17,6 +17,7 @@ import { addJoinedChannel } from '../lib/joinedChannels';
 import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
+import Button from '../components/Button';
 
 type Props = NativeStackScreenProps<ChatStackParamList, 'ChannelJoin'>;
 
@@ -108,12 +109,7 @@ export default function ChannelJoinScreen({ route, navigation }: Props) {
         <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
           <Text style={[styles.name, { color: colors.textPrimary }]}>{t('channel_not_found')}</Text>
           <Text style={[styles.desc, { color: colors.textSecondary }]}>{t('channel_not_found_desc')}</Text>
-          <TouchableOpacity
-            style={[styles.btn, { backgroundColor: colors.accentPrimary }]}
-            onPress={() => navigation.popToTop()}
-          >
-            <Text style={{ color: colors.textInverse, fontWeight: '600' }}>{t('cancel')}</Text>
-          </TouchableOpacity>
+          <Button label={t('cancel')} onPress={() => navigation.popToTop()} style={styles.btn} />
         </View>
       </View>
     );
@@ -175,12 +171,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     textAlign: 'center',
   },
-  btn: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xl,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    alignSelf: 'stretch',
-  },
+  btn: { marginTop: spacing.lg },
   error: { marginTop: spacing.md, fontSize: fontSize.sm, textAlign: 'center' },
 });

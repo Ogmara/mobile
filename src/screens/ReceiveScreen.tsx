@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import QrCode from '../components/QrCode';
+import Button from '../components/Button';
 
 export default function ReceiveScreen() {
   const { t } = useTranslation();
@@ -45,14 +46,17 @@ export default function ReceiveScreen() {
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={[styles.btn, { backgroundColor: colors.accentPrimary }]} onPress={copy}>
-          <Text style={{ color: colors.textInverse, fontWeight: '600' }}>
-            {copied ? t('channel_invite_link_copied') : t('wallet_copy_address')}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, styles.btnOutline, { borderColor: colors.border }]} onPress={share}>
-          <Text style={{ color: colors.textPrimary, fontWeight: '600' }}>{t('channel_share_invite')}</Text>
-        </TouchableOpacity>
+        <Button
+          label={copied ? t('channel_invite_link_copied') : t('wallet_copy_address')}
+          onPress={copy}
+          fullWidth
+        />
+        <Button
+          label={t('channel_share_invite')}
+          variant="secondary"
+          onPress={share}
+          fullWidth
+        />
       </View>
     </View>
   );
@@ -67,6 +71,4 @@ const styles = StyleSheet.create({
   addrBox: { marginTop: spacing.lg, padding: spacing.md, borderRadius: radius.md, alignSelf: 'stretch' },
   addr: { fontSize: fontSize.sm, textAlign: 'center', fontFamily: 'monospace' },
   actions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg, alignSelf: 'stretch' },
-  btn: { flex: 1, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center' },
-  btnOutline: { borderWidth: 1 },
 });

@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import NewsReactionBar from '../components/NewsReactionBar';
 import PostImage from '../components/PostImage';
+import SegmentedControl from '../components/SegmentedControl';
 import { ImageViewerModal } from '../components/ImageViewerModal';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -102,23 +103,15 @@ export default function NewsFeedScreen() {
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
       {/* Feed mode toggle */}
       {signer && (
-        <View style={[styles.feedToggle, { backgroundColor: colors.bgSecondary }]}>
-          <TouchableOpacity
-            style={[styles.feedTab, feedMode === 'all' && { backgroundColor: colors.accentPrimary }]}
-            onPress={() => setFeedMode('all')}
-          >
-            <Text style={{ color: feedMode === 'all' ? colors.textInverse : colors.textPrimary, fontWeight: '600', fontSize: fontSize.sm }}>
-              {t('news_all')}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.feedTab, feedMode === 'following' && { backgroundColor: colors.accentPrimary }]}
-            onPress={() => setFeedMode('following')}
-          >
-            <Text style={{ color: feedMode === 'following' ? colors.textInverse : colors.textPrimary, fontWeight: '600', fontSize: fontSize.sm }}>
-              {t('news_following')}
-            </Text>
-          </TouchableOpacity>
+        <View style={styles.feedToggle}>
+          <SegmentedControl
+            segments={[
+              { value: 'all', label: t('news_all') },
+              { value: 'following', label: t('news_following') },
+            ]}
+            value={feedMode}
+            onChange={setFeedMode}
+          />
         </View>
       )}
       <FlatList
@@ -319,17 +312,7 @@ function NewsCard({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  feedToggle: {
-    flexDirection: 'row',
-    padding: spacing.xs,
-    gap: spacing.xs,
-  },
-  feedTab: {
-    flex: 1,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
+  feedToggle: { marginHorizontal: spacing.md, marginTop: spacing.sm, marginBottom: spacing.xs },
   list: { padding: spacing.md },
   emptyContainer: { flex: 1 },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 120 },

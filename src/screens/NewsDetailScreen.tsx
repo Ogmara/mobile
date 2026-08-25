@@ -27,6 +27,7 @@ import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 type Props = NativeStackScreenProps<NewsStackParamList, 'NewsDetail'>;
 
@@ -272,15 +273,13 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
               maxLength={2000}
               textAlignVertical="top"
             />
-            <TouchableOpacity
-              style={[styles.replyBtn, { backgroundColor: replySending || !replyText.trim() ? colors.textSecondary : colors.accentPrimary }]}
+            <Button
+              label={t('news_send_reply')}
               onPress={handleReply}
-              disabled={replySending || !replyText.trim()}
-            >
-              <Text style={[styles.replyBtnText, { color: colors.textInverse }]}>
-                {replySending ? t('loading') : t('news_send_reply')}
-              </Text>
-            </TouchableOpacity>
+              loading={replySending}
+              disabled={!replyText.trim()}
+              size="sm"
+            />
           </View>
         )}
       </ScrollView>
@@ -330,5 +329,4 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
   },
-  replyBtnText: { fontSize: fontSize.md, fontWeight: '600' },
 });

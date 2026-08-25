@@ -28,6 +28,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import type { DmConversation } from '@ogmara/sdk';
 import type { DmStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 type NavProp = NativeStackNavigationProp<DmStackParamList, 'DmList'>;
 
@@ -184,12 +185,7 @@ export default function DmListScreen() {
               autoCorrect={false}
               autoFocus
             />
-            <TouchableOpacity
-              style={[styles.modalBtn, { backgroundColor: colors.accentPrimary }]}
-              onPress={handleStartDm}
-            >
-              <Text style={[styles.modalBtnText, { color: colors.textInverse }]}>Start Conversation</Text>
-            </TouchableOpacity>
+            <Button label="Start Conversation" onPress={handleStartDm} fullWidth style={styles.modalBtn} />
           </View>
         </TouchableOpacity>
       </Modal>
@@ -275,10 +271,5 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     marginBottom: spacing.md,
   },
-  modalBtn: {
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  modalBtnText: { fontSize: fontSize.md, fontWeight: '600' },
+  modalBtn: { marginTop: spacing.md },
 });

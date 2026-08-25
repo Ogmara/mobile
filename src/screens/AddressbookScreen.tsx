@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { showAlert } from '../components/AlertHost';
+import Button from '../components/Button';
 
 const STORAGE_KEY = 'ogmara.addressbook';
 
@@ -159,12 +160,7 @@ export default function AddressbookScreen() {
               onChangeText={setNewName}
               maxLength={50}
             />
-            <TouchableOpacity
-              style={[styles.modalBtn, { backgroundColor: colors.accentPrimary }]}
-              onPress={handleAdd}
-            >
-              <Text style={[styles.modalBtnText, { color: colors.textInverse }]}>Add</Text>
-            </TouchableOpacity>
+            <Button label="Add" onPress={handleAdd} fullWidth style={styles.modalBtn} />
           </View>
         </TouchableOpacity>
       </Modal>
@@ -197,6 +193,5 @@ const styles = StyleSheet.create({
   modalContent: { width: '85%', borderRadius: radius.lg, padding: spacing.lg },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.md },
   modalInput: { padding: spacing.md, borderRadius: radius.md, fontSize: fontSize.sm, marginBottom: spacing.md },
-  modalBtn: { paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center' },
-  modalBtnText: { fontSize: fontSize.md, fontWeight: '600' },
+  modalBtn: { marginTop: spacing.md },
 });

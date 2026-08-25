@@ -18,7 +18,6 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from 'react-native';
 import { pingNode } from '@ogmara/sdk';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +26,7 @@ import { getAvailableNodes, getCurrentNodeUrl } from '../lib/api';
 import { useConnection } from '../context/ConnectionContext';
 import type { NodeWithPing } from '@ogmara/sdk';
 import AnchorBadge from './AnchorBadge';
+import { showAlert } from '../components/AlertHost';
 
 interface Props {
   visible: boolean;
@@ -98,10 +98,10 @@ export default function NodeSelector({ visible, onClose }: Props) {
   const handleDelete = (url: string) => {
     // Don't allow deleting the currently selected node
     if (url === currentUrl) {
-      Alert.alert('Cannot delete', 'Switch to another node first.');
+      showAlert('Cannot delete', 'Switch to another node first.');
       return;
     }
-    Alert.alert(
+    showAlert(
       'Remove node',
       url.replace(/^https?:\/\//, ''),
       [

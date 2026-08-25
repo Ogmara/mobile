@@ -13,7 +13,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Modal,
-  Alert,
   ActivityIndicator,
   Linking,
 } from 'react-native';
@@ -21,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { sendTip, getExplorerTxUrl } from '../lib/kleverTx';
 import { debugLog } from '../lib/debug';
+import { showAlert } from '../components/AlertHost';
 
 interface Props {
   visible: boolean;
@@ -38,11 +38,11 @@ export default function TipDialog({ visible, recipientAddress, onClose }: Props)
   const handleSend = useCallback(async () => {
     const klvAmount = parseFloat(amount);
     if (!klvAmount || klvAmount <= 0) {
-      Alert.alert(t('error_generic'), t('tip_amount_required'));
+      showAlert(t('error_generic'), t('tip_amount_required'));
       return;
     }
     if (klvAmount > 1_000_000) {
-      Alert.alert(t('error_generic'), t('tip_amount_too_large'));
+      showAlert(t('error_generic'), t('tip_amount_too_large'));
       return;
     }
 
@@ -50,7 +50,7 @@ export default function TipDialog({ visible, recipientAddress, onClose }: Props)
     try {
       const txHash = await sendTip(recipientAddress, klvAmount, note.trim() || undefined);
       const explorerUrl = await getExplorerTxUrl(txHash);
-      Alert.alert(
+      showAlert(
         t('tip_sent'),
         `${klvAmount} KLV → ${recipientAddress.slice(0, 12)}...`,
         [
@@ -64,7 +64,7 @@ export default function TipDialog({ visible, recipientAddress, onClose }: Props)
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Tip failed: ${msg}`);
-      Alert.alert(t('tip_failed'), msg.slice(0, 200));
+      showAlert(t('tip_failed'), msg.slice(0, 200));
     } finally {
       setSending(false);
     }

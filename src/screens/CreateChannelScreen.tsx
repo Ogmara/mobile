@@ -16,11 +16,9 @@ import {
   TextInput,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ScrollView,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
+import KeyboardAwareView from '../components/KeyboardAwareView';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { keccak_256 } from '@noble/hashes/sha3';
@@ -29,6 +27,7 @@ import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
 import { createChannelOnChain, getChannelIdFromTx } from '../lib/kleverTx';
 import { addJoinedChannel } from '../lib/joinedChannels';
+import { showAlert } from '../components/AlertHost';
 
 export default function CreateChannelScreen() {
   const { t } = useTranslation();
@@ -51,11 +50,11 @@ export default function CreateChannelScreen() {
   const handleCreate = async () => {
     const trimmedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-');
     if (!trimmedSlug) {
-      Alert.alert(t('error_generic'), t('channel_slug_required'));
+      showAlert(t('error_generic'), t('channel_slug_required'));
       return;
     }
     if (!client || !signer || !creatorAddress) {
-      Alert.alert(t('error_generic'), t('wallet_connect'));
+      showAlert(t('error_generic'), t('wallet_connect'));
       return;
     }
 
@@ -99,13 +98,13 @@ export default function CreateChannelScreen() {
 
       await addJoinedChannel(channelId).catch(() => {});
 
-      Alert.alert(t('channel_created'), `#${trimmedSlug}`, [
+      showAlert(t('channel_created'), `#${trimmedSlug}`, [
         { text: t('done'), onPress: () => navigation.goBack() },
       ]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Channel creation failed: ${msg}`);
-      Alert.alert(t('channel_create_failed'), msg.slice(0, 200));
+      showAlert(t('channel_create_failed'), msg.slice(0, 200));
     } finally {
       setCreating(false);
       setStatus('');
@@ -119,9 +118,8 @@ export default function CreateChannelScreen() {
   ];
 
   return (
-    <KeyboardAvoidingView
+    <KeyboardAwareView
       style={[styles.container, { backgroundColor: colors.bgPrimary }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={[styles.heading, { color: colors.textPrimary }]}>{t('channel_create')}</Text>
@@ -197,7 +195,7 @@ export default function CreateChannelScreen() {
           <Text style={[styles.status, { color: colors.textSecondary }]}>{status}</Text>
         )}
       </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAwareView>
   );
 }
 

@@ -15,7 +15,6 @@ import {
   TouchableOpacity,
   TextInput,
   Modal,
-  Alert,
   Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -36,6 +35,7 @@ import { e2eAvailable } from '../lib/cryptoEnv';
 import { backupNow, tryRestoreKeyVault } from '../lib/keyVault';
 import { e2eSelfCheck } from '../lib/dmCrypto';
 import Constants from 'expo-constants';
+import { showAlert } from '../components/AlertHost';
 
 /** Real installed version, from app.json via the native build. A hardcoded
  *  string here had drifted to 0.11.1 while the app was at 0.34.0, which made
@@ -117,7 +117,7 @@ export default function SettingsScreen() {
 
   const handleSaveProfile = async () => {
     if (!client || !signer) {
-      Alert.alert(t('error_generic'), t('wallet_connect'));
+      showAlert(t('error_generic'), t('wallet_connect'));
       return;
     }
     try {
@@ -141,7 +141,7 @@ export default function SettingsScreen() {
       }
       setEditingProfile(false);
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   };
 
@@ -463,9 +463,9 @@ export default function SettingsScreen() {
                 setSyncing(true);
                 try {
                   await uploadSettings();
-                  Alert.alert(t('settings_sync'), t('sync_upload_success'));
+                  showAlert(t('settings_sync'), t('sync_upload_success'));
                 } catch (e) {
-                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                  showAlert(t('error_generic'), e instanceof Error ? e.message : '');
                 } finally { setSyncing(false); }
               }}
               disabled={syncing}
@@ -486,12 +486,12 @@ export default function SettingsScreen() {
                     getSetting('fontSize').then((v) => { if (v) setFontSizeSetting(v); });
                     getSetting('compactLayout').then((v) => { if (v === 'true') setCompactLayout(true); });
                     getSetting('mediaAutoload').then((v) => { if (v) setMediaAutoload(v); });
-                    Alert.alert(t('settings_sync'), t('sync_download_success'));
+                    showAlert(t('settings_sync'), t('sync_download_success'));
                   } else {
-                    Alert.alert(t('settings_sync'), t('sync_no_data'));
+                    showAlert(t('settings_sync'), t('sync_no_data'));
                   }
                 } catch (e) {
-                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                  showAlert(t('error_generic'), e instanceof Error ? e.message : '');
                 } finally { setSyncing(false); }
               }}
               disabled={syncing}
@@ -517,9 +517,9 @@ export default function SettingsScreen() {
               onPress={async () => {
                 try {
                   await backupNow();
-                  Alert.alert(t('e2e_section'), t('e2e_backup_done'));
+                  showAlert(t('e2e_section'), t('e2e_backup_done'));
                 } catch (e) {
-                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                  showAlert(t('error_generic'), e instanceof Error ? e.message : '');
                 }
               }}
             >
@@ -530,7 +530,7 @@ export default function SettingsScreen() {
               style={styles.row}
               onPress={() => {
                 tryRestoreKeyVault();
-                Alert.alert(t('e2e_section'), t('e2e_restore_done'));
+                showAlert(t('e2e_section'), t('e2e_restore_done'));
               }}
             >
               <Text style={[styles.rowText, { color: colors.textPrimary }]}>{t('e2e_restore')}</Text>
@@ -541,9 +541,9 @@ export default function SettingsScreen() {
               onPress={async () => {
                 try {
                   const report = await e2eSelfCheck();
-                  Alert.alert(t('e2e_self_check'), String(report.bindingVerdict ?? report.error ?? ''));
+                  showAlert(t('e2e_self_check'), String(report.bindingVerdict ?? report.error ?? ''));
                 } catch (e) {
-                  Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+                  showAlert(t('error_generic'), e instanceof Error ? e.message : '');
                 }
               }}
             >

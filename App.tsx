@@ -33,6 +33,7 @@ import LockScreen from './src/screens/LockScreen';
 
 // Initialize i18n (side-effect import)
 import './src/i18n/init';
+import AlertHost from './src/components/AlertHost';
 
 /** Inner app — needs ThemeProvider to be a parent. */
 function AppContent() {
@@ -213,6 +214,9 @@ export default function App() {
       <ThemeProvider>
         <ConnectionProvider>
           <AppContent />
+          {/* Themed replacement for the native Alert.alert dialog. Mounted once,
+              inside ThemeProvider so it picks up the active colour scheme. */}
+          <AlertHost />
         </ConnectionProvider>
       </ThemeProvider>
     </GestureHandlerRootView>

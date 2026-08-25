@@ -13,7 +13,6 @@ import {
   FlatList,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Image,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
@@ -29,6 +28,7 @@ import { debugLog } from '../lib/debug';
 import type { Envelope } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { SharedStackParams } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type Props = NativeStackScreenProps<SharedStackParams, 'UserProfile'>;
 
@@ -141,7 +141,7 @@ export default function UserProfileScreen({ route, navigation }: Props) {
       }
     } catch (e) {
       debugLog('warn', `Follow toggle failed: ${e instanceof Error ? e.message : e}`);
-      Alert.alert(t('error_generic'));
+      showAlert(t('error_generic'));
     }
   };
 

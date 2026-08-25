@@ -27,6 +27,7 @@ import { loadPrices, fiatValue, formatUsd, type TokenPrice } from '../lib/prices
 import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MoreStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type Props = NativeStackScreenProps<MoreStackParamList, 'TokenDetail'>;
 
@@ -77,7 +78,7 @@ export default function TokenDetailScreen({ route }: Props) {
     try {
       const hash = await fn();
       const url = await getExplorerTxUrl(hash);
-      Alert.alert(successTitle, t('stake_submitted'), [
+      showAlert(successTitle, t('stake_submitted'), [
         { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
         { text: t('done'), style: 'cancel' },
       ]);
@@ -85,15 +86,15 @@ export default function TokenDetailScreen({ route }: Props) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Staking tx failed: ${msg}`);
-      Alert.alert(t('transfer_failed'), msg.slice(0, 220));
+      showAlert(t('transfer_failed'), msg.slice(0, 220));
     } finally { setBusy(false); }
   }, [onRefresh, t]);
 
   const doStake = useCallback(() => {
     const amt = parseFloat(stakeInput);
-    if (!amt || amt <= 0) { Alert.alert(t('error_generic'), t('tip_amount_required')); return; }
+    if (!amt || amt <= 0) { showAlert(t('error_generic'), t('tip_amount_required')); return; }
     const atomic = Math.round(amt * Math.pow(10, precision));
-    if (atomic > available) { Alert.alert(t('error_generic'), t('stake_insufficient')); return; }
+    if (atomic > available) { showAlert(t('error_generic'), t('stake_insufficient')); return; }
     setStakeInput('');
     runTx(() => freezeAsset(assetId, atomic), t('stake_action'));
   }, [stakeInput, available, precision, assetId, runTx, t]);
@@ -212,7 +213,7 @@ export default function TokenDetailScreen({ route }: Props) {
                 )}
                 {staked && !b.delegation && (
                   <BucketBtn color={colors} label={t('stake_unstake')} onPress={() =>
-                    Alert.alert(t('stake_unstake'), t('stake_confirm_unstake'), [
+                    showAlert(t('stake_unstake'), t('stake_confirm_unstake'), [
                       { text: t('cancel'), style: 'cancel' },
                       { text: t('stake_unstake'), style: 'destructive', onPress: () => runTx(() => unfreezeBucket(assetId, b.id), t('stake_unstake')) },
                     ])

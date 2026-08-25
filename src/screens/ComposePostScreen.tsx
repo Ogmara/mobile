@@ -12,13 +12,11 @@ import {
   TextInput,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ScrollView,
-  KeyboardAvoidingView,
-  Platform,
   Image,
   ActivityIndicator,
 } from 'react-native';
+import KeyboardAwareView from '../components/KeyboardAwareView';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +25,7 @@ import { useConnection } from '../context/ConnectionContext';
 import type { Attachment } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type Props = NativeStackScreenProps<NewsStackParamList, 'ComposePost'>;
 
@@ -94,7 +93,7 @@ export default function ComposePostScreen({ route, navigation }: Props) {
           continue;
         }
         if (att.fileSize > MAX_FILE_SIZE) {
-          Alert.alert(t('error_generic'), `${att.fileName}: file too large (max 50MB)`);
+          showAlert(t('error_generic'), `${att.fileName}: file too large (max 50MB)`);
           continue;
         }
         try {
@@ -131,10 +130,10 @@ export default function ComposePostScreen({ route, navigation }: Props) {
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Upload failed';
           if (msg.includes('404') || msg.includes('Network request failed')) {
-            Alert.alert(t('news_upload_unavailable'), t('news_upload_fallback'));
+            showAlert(t('news_upload_unavailable'), t('news_upload_fallback'));
             return uploaded;
           }
-          Alert.alert(t('error_generic'), `${att.fileName}: ${msg}`);
+          showAlert(t('error_generic'), `${att.fileName}: ${msg}`);
         }
       }
       return uploaded;
@@ -145,15 +144,15 @@ export default function ComposePostScreen({ route, navigation }: Props) {
 
   const handleSubmit = async () => {
     if (!content.trim()) {
-      Alert.alert(t('error_generic'), t('news_content_required'));
+      showAlert(t('error_generic'), t('news_content_required'));
       return;
     }
     if (!isEdit && !title.trim()) {
-      Alert.alert(t('error_generic'), t('news_title_required'));
+      showAlert(t('error_generic'), t('news_title_required'));
       return;
     }
     if (!client || !signer) {
-      Alert.alert(t('error_generic'), t('wallet_connect'));
+      showAlert(t('error_generic'), t('wallet_connect'));
       return;
     }
 
@@ -181,7 +180,7 @@ export default function ComposePostScreen({ route, navigation }: Props) {
       }
       navigation.goBack();
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     } finally {
       setSubmitting(false);
     }
@@ -190,9 +189,8 @@ export default function ComposePostScreen({ route, navigation }: Props) {
   const isImage = (mime: string) => mime.startsWith('image/');
 
   return (
-    <KeyboardAvoidingView
+    <KeyboardAwareView
       style={[styles.container, { backgroundColor: colors.bgPrimary }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.content}>
         <TextInput
@@ -277,7 +275,7 @@ export default function ComposePostScreen({ route, navigation }: Props) {
           {submitting ? t('loading') : isEdit ? t('save') : t('news_new_post')}
         </Text>
       </TouchableOpacity>
-    </KeyboardAvoidingView>
+    </KeyboardAwareView>
   );
 }
 

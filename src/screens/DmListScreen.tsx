@@ -15,7 +15,6 @@ import {
   TouchableOpacity,
   Modal,
   TextInput,
-  Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -28,6 +27,7 @@ import QuickMenu from '../components/QuickMenu';
 import ConfirmModal from '../components/ConfirmModal';
 import type { DmConversation } from '@ogmara/sdk';
 import type { DmStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type NavProp = NativeStackNavigationProp<DmStackParamList, 'DmList'>;
 
@@ -90,7 +90,7 @@ export default function DmListScreen() {
   const handleStartDm = () => {
     const addr = newDmAddress.trim();
     if (!addr.startsWith('klv1') || addr.length < 10) {
-      Alert.alert('Invalid address', 'Enter a valid klv1... address');
+      showAlert('Invalid address', 'Enter a valid klv1... address');
       return;
     }
     setNewDmOpen(false);

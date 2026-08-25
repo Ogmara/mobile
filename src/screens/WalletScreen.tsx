@@ -14,7 +14,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  Alert,
   Platform,
   Linking,
   ActivityIndicator,
@@ -29,6 +28,7 @@ import { vaultExportKey } from '../lib/vault';
 import { registerUser, getExplorerTxUrl } from '../lib/kleverTx';
 import { debugLog } from '../lib/debug';
 import * as Clipboard from 'expo-clipboard';
+import { showAlert } from '../components/AlertHost';
 
 const HEX_REGEX = /^[0-9a-fA-F]{64}$/;
 
@@ -58,14 +58,14 @@ export default function WalletScreen() {
     try {
       await generateWallet();
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   };
 
   const handleImport = async () => {
     const key = importKey.trim();
     if (!HEX_REGEX.test(key)) {
-      Alert.alert(t('error_generic'), 'Private key must be exactly 64 hex characters (0-9, a-f)');
+      showAlert(t('error_generic'), 'Private key must be exactly 64 hex characters (0-9, a-f)');
       return;
     }
     try {
@@ -73,12 +73,12 @@ export default function WalletScreen() {
       setImportKey('');
       setShowImport(false);
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   };
 
   const handleRevealKey = () => {
-    Alert.alert(
+    showAlert(
       'Reveal Private Key',
       'Your private key gives FULL ACCESS to your wallet and all funds.\n\n' +
       'NEVER share it with anyone.\n' +
@@ -96,7 +96,7 @@ export default function WalletScreen() {
               setRevealedKey(key);
               setCopied(false);
             } else {
-              Alert.alert(t('error_generic'), 'Could not export key. PIN unlock may be required.');
+              showAlert(t('error_generic'), 'Could not export key. PIN unlock may be required.');
             }
           },
         },
@@ -121,7 +121,7 @@ export default function WalletScreen() {
   };
 
   const handleDisconnect = () => {
-    Alert.alert(
+    showAlert(
       t('wallet_disconnect'),
       t('confirm_delete'),
       [
@@ -137,7 +137,7 @@ export default function WalletScreen() {
 
   const handleRegister = async () => {
     if (!signer) return;
-    Alert.alert(
+    showAlert(
       t('register_title'),
       t('register_confirm'),
       [
@@ -149,7 +149,7 @@ export default function WalletScreen() {
             try {
               const txHash = await registerUser(signer.publicKeyHex);
               const url = await getExplorerTxUrl(txHash);
-              Alert.alert(
+              showAlert(
                 t('register_success'),
                 t('register_tx_sent'),
                 [
@@ -160,7 +160,7 @@ export default function WalletScreen() {
             } catch (e) {
               const msg = e instanceof Error ? e.message : '';
               debugLog('warn', `Registration failed: ${msg}`);
-              Alert.alert(t('register_failed'), msg.slice(0, 200));
+              showAlert(t('register_failed'), msg.slice(0, 200));
             } finally {
               setRegistering(false);
             }

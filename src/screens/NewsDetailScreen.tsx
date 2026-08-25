@@ -13,10 +13,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
+import KeyboardAwareView from '../components/KeyboardAwareView';
+import NewsReactionBar from '../components/NewsReactionBar';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
@@ -25,13 +24,13 @@ import { normalizeEnvelope } from '../lib/envelopeNormalizer';
 import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type Props = NativeStackScreenProps<NewsStackParamList, 'NewsDetail'>;
 
 /** 30-minute edit window */
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
 
-const NEWS_REACTIONS = ['👍', '👎', '❤️', '🔥', '😂'];
 
 export default function NewsDetailScreen({ route, navigation }: Props) {
   const { msgId, post: rawPost } = route.params;
@@ -90,11 +89,11 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     try {
       await client.repostNews(msgId, post.author);
       setReposted(true);
-      Alert.alert(t('news_reposted'));
+      showAlert(t('news_reposted'));
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Repost failed: ${msg}`);
-      Alert.alert(t('error_generic'), msg.slice(0, 100));
+      showAlert(t('error_generic'), msg.slice(0, 100));
     }
   }, [client, signer, msgId, post, reposted]);
 
@@ -104,11 +103,11 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     try {
       await client.postComment(msgId, replyText.trim());
       setReplyText('');
-      Alert.alert(t('news_reply_sent'));
+      showAlert(t('news_reply_sent'));
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Reply failed: ${msg}`);
-      Alert.alert(t('error_generic'), msg.slice(0, 100));
+      showAlert(t('error_generic'), msg.slice(0, 100));
     } finally {
       setReplySending(false);
     }
@@ -126,7 +125,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
 
   const handleDelete = useCallback(async () => {
     if (!client || !signer || !isOwn) return;
-    Alert.alert(
+    showAlert(
       t('chat_delete'),
       t('confirm_delete'),
       [
@@ -140,7 +139,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
               setDeleted(true);
             } catch (e) {
               debugLog('warn', `Delete news failed: ${e instanceof Error ? e.message : ''}`);
-              Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+              showAlert(t('error_generic'), e instanceof Error ? e.message : '');
             }
           },
         },
@@ -165,9 +164,8 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
   }
 
   return (
-    <KeyboardAvoidingView
+    <KeyboardAwareView
       style={[styles.container, { backgroundColor: colors.bgPrimary }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView style={styles.scroll}>
         <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
@@ -211,22 +209,9 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
             </View>
           )}
 
-          {/* Reactions */}
+          {/* Reactions — collapsed until somebody actually reacts. */}
           <View style={styles.actions}>
-            {NEWS_REACTIONS.map((emoji) => (
-              <TouchableOpacity
-                key={emoji}
-                style={[styles.reactionBtn, { backgroundColor: colors.bgTertiary }]}
-                onPress={() => handleReaction(emoji)}
-              >
-                <Text style={styles.reactionEmoji}>{emoji}</Text>
-                {(reactionCounts[emoji] ?? 0) > 0 && (
-                  <Text style={[styles.reactionCount, { color: colors.textSecondary }]}>
-                    {reactionCounts[emoji]}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            ))}
+            <NewsReactionBar counts={reactionCounts} onReact={handleReaction} colors={colors} />
           </View>
 
           {/* Meta actions */}
@@ -288,7 +273,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
           </View>
         )}
       </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAwareView>
   );
 }
 
@@ -307,16 +292,6 @@ const styles = StyleSheet.create({
   tag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm },
   tagText: { fontSize: fontSize.xs, fontWeight: '600' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.sm },
-  reactionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: radius.sm,
-    gap: 4,
-  },
-  reactionEmoji: { fontSize: fontSize.lg },
-  reactionCount: { fontSize: fontSize.sm, fontWeight: '600' },
   metaActions: {
     flexDirection: 'row',
     gap: spacing.md,

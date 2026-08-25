@@ -13,7 +13,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Share,
-  Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -21,6 +20,7 @@ import { useConnection } from '../context/ConnectionContext';
 import { getDebugLogs, clearDebugLogs, formatLogEntry, isDebugEnabled, setDebugEnabled } from '../lib/debug';
 import { getVaultDiagnostics } from '../lib/vaultMigration';
 import { getKleverNetwork, setKleverNetwork, type KleverNetwork } from '../lib/klever';
+import { showAlert } from '../components/AlertHost';
 
 export default function DebugScreen() {
   const { t } = useTranslation();
@@ -109,7 +109,7 @@ export default function DebugScreen() {
             { backgroundColor: kleverNet === 'mainnet' ? colors.success : colors.bgTertiary },
           ]}
           onPress={() => {
-            Alert.alert(
+            showAlert(
               'Switch to Mainnet',
               'This will use real KLV for transactions. Are you sure?',
               [

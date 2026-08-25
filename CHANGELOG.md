@@ -5,6 +5,65 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0] - 2026-08-25
+
+Three UI fixes from device testing.
+
+### Fixed
+
+- **The keyboard covered the input on every screen you can type on.** The app
+  builds with `edgeToEdgeEnabled=true`, and in edge-to-edge mode Android no
+  longer resizes the window for the IME — the app draws behind it. That makes
+  the manifest's `android:windowSoftInputMode="adjustResize"` inert, and
+  `KeyboardAvoidingView`'s Android `behavior="height"` path, which derives its
+  adjustment from exactly that window resize, computes nothing.
+
+  Replaced with a `KeyboardAwareView` that measures the keyboard directly from
+  `Keyboard` events — which do report the correct height in edge-to-edge — and
+  applies it as bottom padding. Applied to all five screens with a text input:
+  chat, DMs, news detail, compose post and create channel.
+
+  It pads by the keyboard height alone and not by the safe-area inset, so with
+  the keyboard closed the padding is exactly 0 and layout is unchanged. That
+  keeps the fix to the reported bug and avoids double-padding on screens inside
+  the tab navigator, whose tab bar already applies its own inset.
+
+- **Dialogs were bare native OS alerts.** ~90 `Alert.alert` calls rendered the
+  system dialog — system font, system colours, ALL-CAPS buttons, no relation to
+  the app's theme. `InfoModal`/`ConfirmModal`/`PromptModal` already existed for
+  cases a screen could model as local state, but converting 90 call sites into
+  per-screen `useState` + JSX would have been a large, error-prone edit.
+
+  Added `AlertHost`: an app-wide themed dialog with the same imperative
+  `(title, message, buttons)` shape, callable from anywhere including
+  non-component code. Migration was then a call-site rename, `Alert.alert(` →
+  `showAlert(`, across 17 files. Multi-button, `cancel` and `destructive` styles
+  are all supported, and alerts raised before the host mounts are queued rather
+  than dropped.
+
+  A backdrop tap activates a `cancel` button if one exists and otherwise runs
+  nothing. It deliberately does not fall back to "the last button", which would
+  let a tap outside the dialog silently perform an action the user never chose —
+  confirming an unstake, for instance.
+
+- **News posts showed all five reaction emoji whether or not anyone had used
+  them.** That implied five reactions existed when the true count was usually
+  zero, and cost a row of visual noise on every card. The bar is now collapsed
+  by default: only reactions somebody actually used are shown, with their count,
+  next to a single trigger that expands the chooser. This is the behaviour web
+  and desktop already had via their `ReactionPicker` — mobile was the outlier.
+
+  The chooser expands inline rather than floating above the trigger the way the
+  web popup does, because these cards render inside a `FlatList` where an
+  absolutely positioned overlay is liable to be clipped.
+
+### Added
+
+- `KeyboardAwareView` (with a `useKeyboardHeight` hook), `AlertHost` +
+  `showAlert`, and `NewsReactionBar` components.
+- Tests for the alert button rules, including that a backdrop tap never
+  activates a non-cancel action.
+
 ## [0.36.0] - 2026-08-25
 
 ### Fixed

@@ -15,10 +15,9 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
   AppState,
 } from 'react-native';
+import KeyboardAwareView from '../components/KeyboardAwareView';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
@@ -787,10 +786,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const keyExtractor = useCallback((item: ListItem) => item.key, []);
 
   return (
-    <KeyboardAvoidingView
+    <KeyboardAwareView
       style={[styles.container, { backgroundColor: colors.bgPrimary }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 60}
     >
       {/* Channel header — title and the (sometimes long) encryption badge each
           get their own line, in a column that shares the row with the gear
@@ -959,7 +956,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         />
       )}
       <InfoModal visible={!!info} title={info?.title} message={info?.message || ''} onClose={() => setInfo(null)} />
-    </KeyboardAvoidingView>
+    </KeyboardAwareView>
   );
 }
 

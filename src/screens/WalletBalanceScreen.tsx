@@ -31,6 +31,7 @@ import Sparkline from '../components/Sparkline';
 import Gradient from '../components/Gradient';
 import { debugLog } from '../lib/debug';
 import type { MoreStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 interface Asset { assetId: string; name: string; atomic: number; frozen: number; precision: number }
 
@@ -118,16 +119,16 @@ export default function WalletBalanceScreen() {
     if (!sendDialog || !sendTo.trim() || !sendAmount.trim()) return;
     const recipient = sendTo.trim();
     if (!recipient.startsWith('klv1') || recipient.length < 40) {
-      Alert.alert(t('error_generic'), 'Invalid Klever address'); return;
+      showAlert(t('error_generic'), 'Invalid Klever address'); return;
     }
     const amountFloat = parseFloat(sendAmount);
-    if (!amountFloat || amountFloat <= 0) { Alert.alert(t('error_generic'), t('tip_amount_required')); return; }
+    if (!amountFloat || amountFloat <= 0) { showAlert(t('error_generic'), t('tip_amount_required')); return; }
     const atomicAmount = Math.round(amountFloat * Math.pow(10, sendDialog.precision));
     setSending(true);
     try {
       const txHash = await sendTransfer(recipient, sendDialog.assetId, atomicAmount);
       const url = await getExplorerTxUrl(txHash);
-      Alert.alert(t('transfer_sent'), `${amountFloat} ${sendDialog.assetId}`, [
+      showAlert(t('transfer_sent'), `${amountFloat} ${sendDialog.assetId}`, [
         { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
         { text: t('done'), style: 'cancel' },
       ]);
@@ -135,19 +136,19 @@ export default function WalletBalanceScreen() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       debugLog('warn', `Transfer failed: ${msg}`);
-      Alert.alert(t('transfer_failed'), msg.slice(0, 200));
+      showAlert(t('transfer_failed'), msg.slice(0, 200));
     } finally { setSending(false); }
   }, [sendDialog, sendTo, sendAmount, onRefresh, t]);
 
   const copyAddress = async () => {
     if (!address) return;
     await Clipboard.setStringAsync(address);
-    Alert.alert(t('wallet_copy_address'), t('channel_invite_link_copied'));
+    showAlert(t('wallet_copy_address'), t('channel_invite_link_copied'));
   };
 
   const handleRegister = useCallback(() => {
     if (!signer) return;
-    Alert.alert(t('register_title'), t('register_confirm'), [
+    showAlert(t('register_title'), t('register_confirm'), [
       { text: t('cancel'), style: 'cancel' },
       {
         text: t('register_proceed'),
@@ -156,12 +157,12 @@ export default function WalletBalanceScreen() {
           try {
             const txHash = await registerUser(signer.publicKeyHex);
             const url = await getExplorerTxUrl(txHash);
-            Alert.alert(t('register_success'), t('register_tx_sent'), [
+            showAlert(t('register_success'), t('register_tx_sent'), [
               { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
               { text: t('done'), style: 'cancel' },
             ]);
           } catch (e) {
-            Alert.alert(t('register_failed'), e instanceof Error ? e.message.slice(0, 200) : '');
+            showAlert(t('register_failed'), e instanceof Error ? e.message.slice(0, 200) : '');
           } finally { setBusy(false); }
         },
       },
@@ -169,7 +170,7 @@ export default function WalletBalanceScreen() {
   }, [signer, t]);
 
   const handleExport = useCallback(() => {
-    Alert.alert(t('wallet_export_key'), t('wallet_export_warning'), [
+    showAlert(t('wallet_export_key'), t('wallet_export_warning'), [
       { text: t('cancel'), style: 'cancel' },
       {
         text: t('wallet_export_reveal'),
@@ -177,13 +178,13 @@ export default function WalletBalanceScreen() {
         onPress: async () => {
           try {
             const key = await vaultExportKey();
-            if (!key) { Alert.alert(t('error_generic'), 'Could not export key.'); return; }
-            Alert.alert(t('wallet_export_key'), key, [
+            if (!key) { showAlert(t('error_generic'), 'Could not export key.'); return; }
+            showAlert(t('wallet_export_key'), key, [
               { text: t('wallet_copy_address'), onPress: () => Clipboard.setStringAsync(key) },
               { text: t('done'), style: 'cancel' },
             ]);
           } catch {
-            Alert.alert(t('error_generic'), 'Could not export key.');
+            showAlert(t('error_generic'), 'Could not export key.');
           }
         },
       },
@@ -191,7 +192,7 @@ export default function WalletBalanceScreen() {
   }, [t]);
 
   const handleDisconnect = useCallback(() => {
-    Alert.alert(t('wallet_disconnect'), t('wallet_disconnect_confirm'), [
+    showAlert(t('wallet_disconnect'), t('wallet_disconnect_confirm'), [
       { text: t('cancel'), style: 'cancel' },
       { text: t('wallet_disconnect'), style: 'destructive', onPress: () => { setManageOpen(false); setWallet(null); } },
     ]);

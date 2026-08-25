@@ -17,7 +17,6 @@ import {
   RefreshControl,
   StyleSheet,
   TouchableOpacity,
-  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -38,6 +37,7 @@ import PromptModal from '../components/PromptModal';
 import ConfirmModal from '../components/ConfirmModal';
 import type { Channel } from '@ogmara/sdk';
 import type { ChatStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type NavProp = NativeStackNavigationProp<ChatStackParamList, 'ChannelList'>;
 
@@ -199,7 +199,7 @@ export default function ChatScreen() {
           refreshOrg();
           onRefresh();
         } catch (e) {
-          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+          showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
@@ -220,7 +220,7 @@ export default function ChatScreen() {
           refreshOrg();
           onRefresh();
         } catch (e) {
-          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+          showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });

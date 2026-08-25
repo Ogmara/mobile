@@ -13,7 +13,6 @@ import {
   TextInput,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ScrollView,
   RefreshControl,
   ActivityIndicator,
@@ -29,6 +28,7 @@ import { buildChannelInviteUrl } from '../lib/share';
 import ConfirmModal from '../components/ConfirmModal';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type Props = NativeStackScreenProps<ChatStackParamList, 'ChannelAdmin'>;
 
@@ -121,9 +121,9 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
         displayName: editName.trim() || undefined,
         description: editDesc.trim() || undefined,
       });
-      Alert.alert(t('save'), t('channel_info_saved'));
+      showAlert(t('save'), t('channel_info_saved'));
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     } finally {
       setSaving(false);
     }
@@ -132,7 +132,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
   const handleAddMod = useCallback(async () => {
     if (!client || !modAddress.trim() || !isOwner) return;
     if (!isValidAddress(modAddress.trim())) {
-      Alert.alert(t('error_generic'), 'Invalid Klever address format');
+      showAlert(t('error_generic'), 'Invalid Klever address format');
       return;
     }
     try {
@@ -147,7 +147,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       setModAddress('');
       fetchAll();
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   }, [client, channelId, modAddress, isOwner, fetchAll, t]);
 
@@ -157,7 +157,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       await client.removeModerator(channelId, address);
       fetchAll();
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   }, [client, channelId, isOwner, fetchAll, t]);
 
@@ -173,7 +173,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
           await client.kickUser(channelId, address);
           fetchAll();
         } catch (e) {
-          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+          showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
@@ -191,7 +191,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
           await client.banUser(channelId, address);
           fetchAll();
         } catch (e) {
-          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+          showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
@@ -203,7 +203,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       await client.unbanUser(channelId, address);
       fetchAll();
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   }, [client, channelId, isMod, fetchAll, t]);
 
@@ -213,7 +213,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       await client.unpinMessage(channelId, msgId);
       fetchAll();
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   }, [client, channelId, isMod, fetchAll, t]);
 
@@ -233,15 +233,15 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
   const handleInvite = useCallback(async () => {
     if (!client || !inviteAddress.trim() || !isMod) return;
     if (!isValidAddress(inviteAddress.trim())) {
-      Alert.alert(t('error_generic'), 'Invalid Klever address format');
+      showAlert(t('error_generic'), 'Invalid Klever address format');
       return;
     }
     try {
       await client.inviteUser(channelId, inviteAddress.trim());
       setInviteAddress('');
-      Alert.alert(t('channel_invite'), t('channel_invite_sent'));
+      showAlert(t('channel_invite'), t('channel_invite_sent'));
     } catch (e) {
-      Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     }
   }, [client, channelId, inviteAddress, isMod, t]);
 
@@ -259,7 +259,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
           clearPlacement(channelId);
           navigation.popToTop();
         } catch (e) {
-          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+          showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
@@ -282,7 +282,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
           clearPlacement(channelId);
           navigation.popToTop();
         } catch (e) {
-          Alert.alert(t('error_generic'), e instanceof Error ? e.message : '');
+          showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });

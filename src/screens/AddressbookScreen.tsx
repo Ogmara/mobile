@@ -14,11 +14,11 @@ import {
   TouchableOpacity,
   Modal,
   TextInput,
-  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
+import { showAlert } from '../components/AlertHost';
 
 const STORAGE_KEY = 'ogmara.addressbook';
 
@@ -55,11 +55,11 @@ export default function AddressbookScreen() {
     const addr = newAddr.trim();
     const name = newName.trim();
     if (!addr.startsWith('klv1') || addr.length < 20) {
-      Alert.alert('Invalid address', 'Enter a valid klv1... address');
+      showAlert('Invalid address', 'Enter a valid klv1... address');
       return;
     }
     if (contacts.some((c) => c.address === addr)) {
-      Alert.alert('Duplicate', 'This address is already in your addressbook');
+      showAlert('Duplicate', 'This address is already in your addressbook');
       return;
     }
     const updated = [...contacts, { address: addr, name: name || addr.slice(0, 16) }];
@@ -71,7 +71,7 @@ export default function AddressbookScreen() {
   };
 
   const handleDelete = (addr: string) => {
-    Alert.alert('Remove contact', 'Are you sure?', [
+    showAlert('Remove contact', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove',

@@ -14,9 +14,9 @@ import {
   RefreshControl,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Image,
 } from 'react-native';
+import NewsReactionBar from '../components/NewsReactionBar';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -30,11 +30,11 @@ import { useUserDisplay } from '../hooks/useUserDisplay';
 import type { Envelope } from '@ogmara/sdk';
 import { isNewsEnvelope } from '@ogmara/sdk';
 import type { NewsStackParamList } from '../navigation/types';
+import { showAlert } from '../components/AlertHost';
 
 type NavProp = NativeStackNavigationProp<NewsStackParamList, 'NewsFeed'>;
 
 /** Predefined reaction emojis for news posts. */
-const NEWS_REACTIONS = ['👍', '👎', '❤️', '🔥', '😂'];
 
 export default function NewsFeedScreen() {
   const { t } = useTranslation();
@@ -203,7 +203,7 @@ function NewsCard({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       debugLog('warn', `Bookmark failed: ${msg}`);
-      Alert.alert('Bookmark failed', msg.slice(0, 150));
+      showAlert('Bookmark failed', msg.slice(0, 150));
     }
   }, [client, post.msg_id, bookmarked]);
 
@@ -215,7 +215,7 @@ function NewsCard({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       debugLog('warn', `Repost failed: ${msg}`);
-      Alert.alert('Repost failed', msg.slice(0, 150));
+      showAlert('Repost failed', msg.slice(0, 150));
     }
   }, [client, post.msg_id, post.author, reposted]);
 
@@ -264,22 +264,9 @@ function NewsCard({
         {new Date(post.timestamp).toLocaleDateString()}
       </Text>
 
-      {/* Reactions row — right aligned */}
+      {/* Reactions — collapsed until somebody actually reacts. */}
       <View style={styles.reactionsRow}>
-        {NEWS_REACTIONS.map((emoji) => (
-          <TouchableOpacity
-            key={emoji}
-            style={[styles.reactionBtn, { backgroundColor: colors.bgTertiary }]}
-            onPress={() => handleReaction(emoji)}
-          >
-            <Text style={styles.reactionEmoji}>{emoji}</Text>
-            {(reactionCounts[emoji] ?? 0) > 0 && (
-              <Text style={[styles.reactionCount, { color: colors.textSecondary }]}>
-                {reactionCounts[emoji]}
-              </Text>
-            )}
-          </TouchableOpacity>
-        ))}
+        <NewsReactionBar counts={reactionCounts} onReact={handleReaction} colors={colors} />
       </View>
 
       {/* Actions row — left aligned */}
@@ -350,16 +337,6 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(128,128,128,0.2)',
     paddingTop: spacing.sm,
   },
-  reactionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: radius.sm,
-    gap: 4,
-  },
-  reactionEmoji: { fontSize: fontSize.md },
-  reactionCount: { fontSize: fontSize.xs, fontWeight: '600' },
   actionBtn: {
     paddingHorizontal: 8,
     paddingVertical: 4,

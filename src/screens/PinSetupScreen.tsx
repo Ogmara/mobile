@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { setupPin } from '../lib/appLock';
+import { showAlert } from '../components/AlertHost';
 
 const PIN_LENGTH = 6;
 
@@ -42,7 +43,7 @@ export default function PinSetupScreen() {
           setupPin(newPin)
             .then(() => {
               setSaving(false);
-              Alert.alert(t('done'), '', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+              showAlert(t('done'), '', [{ text: 'OK', onPress: () => navigation.goBack() }]);
             })
             .catch(() => { setSaving(false); setError(t('error_generic')); });
         } else {

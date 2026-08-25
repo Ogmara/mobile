@@ -16,9 +16,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   Modal,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
+import KeyboardAwareView from './KeyboardAwareView';
 import { pingNode } from '@ogmara/sdk';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -159,9 +158,8 @@ export default function NodeSelector({ visible, onClose }: Props) {
 
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView
+      <KeyboardAwareView
         style={styles.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
         <View style={[styles.sheet, { backgroundColor: colors.bgPrimary }]}>
@@ -229,7 +227,7 @@ export default function NodeSelector({ visible, onClose }: Props) {
           )}
         </View>
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
-      </KeyboardAvoidingView>
+      </KeyboardAwareView>
     </Modal>
   );
 }

@@ -20,8 +20,9 @@ Three UI fixes from device testing.
 
   Replaced with a `KeyboardAwareView` that measures the keyboard directly from
   `Keyboard` events — which do report the correct height in edge-to-edge — and
-  applies it as bottom padding. Applied to all five screens with a text input:
-  chat, DMs, news detail, compose post and create channel.
+  applies it as bottom padding. Applied everywhere the app takes text input:
+  chat, DMs, news detail, compose post, create channel, and the node-selector
+  sheet.
 
   It pads by the keyboard height alone and not by the safe-area inset, so with
   the keyboard closed the padding is exactly 0 and layout is unchanged. That

@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import NewsReactionBar from '../components/NewsReactionBar';
 import PostImage from '../components/PostImage';
+import { ImageViewerModal } from '../components/ImageViewerModal';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -183,6 +184,7 @@ function NewsCard({
   }, [serverCounts]);
   const [bookmarked, setBookmarked] = useState(false);
   const [reposted, setReposted] = useState(false);
+  const [viewerImage, setViewerImage] = useState<string | null>(null);
 
   // Decode the MessagePack payload into readable title/content
   const decoded = decodeNewsPost(post.payload);
@@ -267,7 +269,16 @@ function NewsCard({
       {decoded?.attachments && decoded.attachments.length > 0 && client && (
         <View style={styles.attachRow}>
           {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).slice(0, 4).map((att, idx) => (
-            <PostImage key={idx} uri={client.getMediaUrl(att.cid)} />
+            <TouchableOpacity
+              key={idx}
+              activeOpacity={0.9}
+              // Nested Touchable: the tap is consumed here and never reaches the
+              // card's own onPress, so tapping an image zooms it while tapping
+              // anywhere else still opens the post.
+              onPress={() => setViewerImage(client.getMediaUrl(att.cid))}
+            >
+              <PostImage uri={client.getMediaUrl(att.cid)} />
+            </TouchableOpacity>
           ))}
         </View>
       )}
@@ -279,6 +290,8 @@ function NewsCard({
       <View style={styles.reactionsRow}>
         <NewsReactionBar counts={reactionCounts} onReact={handleReaction} colors={colors} />
       </View>
+
+      <ImageViewerModal uri={viewerImage} onClose={() => setViewerImage(null)} />
 
       {/* Actions row — left aligned */}
       <View style={styles.actionsRow}>

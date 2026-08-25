@@ -5,6 +5,33 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.0] - 2026-08-25
+
+### Fixed
+
+- **Your own avatar never showed on your own posts.** The own-address branch of
+  `useUserDisplay` read only `avatarLocalUri`, the file written when you pick an
+  avatar *on this device*. Set it from web or desktop and mobile had nothing, so
+  your posts fell back to the letter circle while every other client showed the
+  picture. It now falls through to the node's `avatar_cid` when there is no local
+  file, exactly as for any other user.
+
+- **A profile carrying an avatar but no display name was discarded.**
+  `useUserDisplay` gated the whole API response on `user.display_name`, so such a
+  profile was never rendered and never cached — and because `apiFetched` is never
+  cleared, that address was then skipped for the rest of the session. It now gates
+  on the profile existing, keeps the context name rather than letting an empty
+  server profile blank it out, and un-marks the address on a fetch failure so a
+  transient error doesn't disable it for the session.
+
+### Changed
+
+- **Tapping an image in a news post opens the fullscreen zoom viewer** instead of
+  the post. `ImageViewerModal` (pinch-zoom, pan, save-to-device) already existed
+  and was wired into chat, but never into news. Tapping anywhere else on the card
+  still opens the post, as before — the image sits in its own nested touchable, so
+  its tap is consumed there and never reaches the card.
+
 ## [0.38.0] - 2026-08-25
 
 Three news-feed fixes from device testing.

@@ -25,12 +25,28 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
   useEffect(() => {
     if (!address) return;
 
-    // Own address — use context + local avatar
+    // Own address — context name, then the locally-picked avatar file.
+    //
+    // The local file is only there if you chose an avatar ON THIS DEVICE. Set it
+    // from web or desktop and mobile had nothing, so your own posts fell back to
+    // the letter circle while every other client showed the picture. Fall through
+    // to the node's `avatar_cid` in that case, exactly as for any other user.
     if (address === myAddress) {
       getSetting('avatarLocalUri').then((uri) => {
-        setCached({ displayName: myName, avatarUri: uri });
+        if (uri) {
+          setCached({ displayName: myName, avatarUri: uri });
+          return;
+        }
+        getCachedUser(address).then((user) => {
+          setCached({
+            displayName: myName ?? user?.displayName ?? null,
+            avatarUri: user?.avatarCid && client ? client.getMediaUrl(user.avatarCid) : null,
+          });
+        });
       });
-      return;
+      // Deliberately no early return: the API fetch below refreshes the cached
+      // avatar_cid for our own address too, so a picture set on another client
+      // shows up here without needing one set locally first.
     }
 
     // Check local cache first.
@@ -57,17 +73,26 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
       apiFetched.add(address);
       client.getUserProfile(address).then((resp: any) => {
         const user = resp?.user;
-        if (user?.display_name) {
-          const name = user.display_name;
-          const avatarCid = user.avatar_cid;
-          setCached({
-            displayName: name,
-            avatarUri: avatarCid ? client.getMediaUrl(avatarCid) : null,
-          });
-          // Update local cache for future use
-          setCachedUser(address, { displayName: name, avatarCid: avatarCid || null });
-        }
-      }).catch(() => {});
+        // Gate on the profile existing, not on `display_name`. Gating on the name
+        // meant a profile carrying only an avatar was discarded outright — never
+        // rendered, never cached — and since `apiFetched` is never cleared, that
+        // address was then skipped for the rest of the session.
+        if (!user) return;
+        const name = user.display_name ?? null;
+        const avatarCid = user.avatar_cid ?? null;
+        if (!name && !avatarCid) return; // nothing to show; leave any cache intact
+        setCached((prev) => ({
+          // Keep our own context name rather than letting an empty server profile
+          // blank it out.
+          displayName: name ?? prev.displayName,
+          avatarUri: avatarCid ? client.getMediaUrl(avatarCid) : prev.avatarUri,
+        }));
+        setCachedUser(address, { displayName: name, avatarCid });
+      }).catch(() => {
+        // Allow a retry later in the session rather than marking this address
+        // permanently fetched on a transient failure.
+        apiFetched.delete(address);
+      });
     }
   }, [address, myAddress, myName, client]);
 

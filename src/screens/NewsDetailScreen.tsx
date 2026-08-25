@@ -17,6 +17,7 @@ import {
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import NewsReactionBar from '../components/NewsReactionBar';
 import PostImage from '../components/PostImage';
+import { ImageViewerModal } from '../components/ImageViewerModal';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
@@ -51,6 +52,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
   const [replyText, setReplyText] = useState('');
   const [replySending, setReplySending] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [viewerImage, setViewerImage] = useState<string | null>(null);
 
   const post = rawPost ? normalizeEnvelope(rawPost) : null;
   const decoded = post ? decodeNewsPost(post.payload) : null;
@@ -193,7 +195,13 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
           {decoded.attachments && decoded.attachments.length > 0 && client && (
             <View style={styles.attachRow}>
               {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).map((att, idx) => (
-                <PostImage key={idx} uri={client.getMediaUrl(att.cid)} />
+                <TouchableOpacity
+                  key={idx}
+                  activeOpacity={0.9}
+                  onPress={() => setViewerImage(client.getMediaUrl(att.cid))}
+                >
+                  <PostImage uri={client.getMediaUrl(att.cid)} />
+                </TouchableOpacity>
               ))}
             </View>
           )}
@@ -276,6 +284,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
           </View>
         )}
       </ScrollView>
+      <ImageViewerModal uri={viewerImage} onClose={() => setViewerImage(null)} />
     </KeyboardAwareView>
   );
 }

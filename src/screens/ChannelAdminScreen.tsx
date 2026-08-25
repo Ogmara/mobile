@@ -118,7 +118,7 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
     try {
       await client.updateChannel({
         channelId,
-        display_name: editName.trim() || undefined,
+        displayName: editName.trim() || undefined,
         description: editDesc.trim() || undefined,
       });
       Alert.alert(t('save'), t('channel_info_saved'));
@@ -136,8 +136,13 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       return;
     }
     try {
+      // Same permission set web/desktop grant from their equivalent
+      // "add moderator by address" form: moderation powers, but not content
+      // deletion or channel-info editing. ModeratorPermissions has no optional
+      // fields, so all six must be stated.
       await client.addModerator(channelId, modAddress.trim(), {
-        can_delete: true, can_ban: true, can_pin: true, can_mute: true,
+        can_mute: true, can_kick: true, can_ban: true,
+        can_pin: true, can_edit_info: false, can_delete_msgs: false,
       });
       setModAddress('');
       fetchAll();

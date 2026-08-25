@@ -5,6 +5,66 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] - 2026-08-25
+
+Channel creation on mobile was non-functional, and `tsc --noEmit` had a red
+baseline hiding it. Both are fixed; the lint gate is clean again.
+
+### Fixed
+
+- **Channel creation never worked.** `CreateChannelScreen` called
+  `client.createChannel()` without a `channelId`, which the L2 ChannelCreate
+  envelope requires and the node does *not* assign — so the envelope went out
+  with `channel_id: undefined`. It also passed `channel_type`, `display_name`
+  and a non-existent `content_rating` field, none of which the SDK reads (it
+  expects `channelType` / `displayName`), so the channel type was silently
+  dropped: **a channel the user selected as Private would have been created as
+  Public.**
+
+  The screen now runs the same flow web and desktop already use. Private
+  channels derive their ID locally from
+  `Keccak-256(creator + slug + timestamp)` truncated to u64, with no on-chain
+  call. Public and Read-Public register on-chain via `createChannelOnChain()`
+  and take the SC-assigned ID from `getChannelIdFromTx()` — both helpers already
+  existed in `src/lib/kleverTx.ts` and were simply never wired up.
+
+  The creator is now derived from `walletAddress`, not `address`. For external /
+  delegated (K5) wallets those differ — `address` is the `ogd1…` device key —
+  and hashing the device key would have given the same channel a different ID on
+  mobile than on every other client.
+
+  New channels are created with `encryptionEnabled: true`, matching web and
+  desktop. Without it the node falls back to type-based defaults, which would
+  have left mobile-created public channels plaintext while the same channel
+  created from web was encrypted.
+
+  The new channel is added to the joined-channels list on success, as the join
+  and search screens already do.
+
+- **Channel rename silently did nothing.** `ChannelAdminScreen` passed
+  `display_name` to `updateChannel()`, which reads `displayName`, so save-info
+  discarded the new name.
+- **Newly added moderators got the wrong permissions.** The add-moderator form
+  passed `can_delete`, which is not a field on `ModeratorPermissions` (the real
+  name is `can_delete_msgs`), so the grant silently resolved to mute/ban/pin
+  only. It now grants the same set web and desktop grant from their equivalent
+  form: mute, kick, ban and pin, without content deletion or channel-info
+  editing.
+
+### Changed
+
+- Creating a Public or Read-Public channel now costs roughly 4.8 KLV, because
+  it now actually performs the on-chain registration it always should have.
+  Private channels remain free. A progress line reports the transaction and
+  confirmation steps, which can take tens of seconds.
+
+### Added
+
+- `channel_create_deriving`, `channel_create_onchain`,
+  `channel_create_confirming` and `channel_create_publishing` strings in all
+  seven locales (de, en, es, ja, pt, ru, zh). The locale files also gained a
+  trailing newline, which six of them were missing.
+
 ## [0.33.0] - 2026-08-25
 
 Pre-mainnet dependency-security pass. `npm audit` goes 18 → 17; the residual

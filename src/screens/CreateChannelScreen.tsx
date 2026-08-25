@@ -23,20 +23,30 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
+import { keccak_256 } from '@noble/hashes/sha3';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
+import { createChannelOnChain, getChannelIdFromTx } from '../lib/kleverTx';
+import { addJoinedChannel } from '../lib/joinedChannels';
 
 export default function CreateChannelScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, signer, address: myAddress } = useConnection();
+  // walletAddress, not address: for external/delegated wallets (K5) `address` is
+  // the ogd1... device key, while the private-channel ID must be derived from the
+  // klv1... on-chain identity — that is what web and desktop hash, and what the
+  // protocol treats as the creator. Getting this wrong would give the same
+  // channel a different ID on mobile than on every other client.
+  const { client, signer, walletAddress, address } = useConnection();
+  const creatorAddress = walletAddress || address;
   const navigation = useNavigation();
   const [slug, setSlug] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [channelType, setChannelType] = useState<0 | 1 | 2>(0);
   const [creating, setCreating] = useState(false);
+  const [status, setStatus] = useState('');
 
   const handleCreate = async () => {
     const trimmedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-');
@@ -44,20 +54,50 @@ export default function CreateChannelScreen() {
       Alert.alert(t('error_generic'), t('channel_slug_required'));
       return;
     }
-    if (!client || !signer) {
+    if (!client || !signer || !creatorAddress) {
       Alert.alert(t('error_generic'), t('wallet_connect'));
       return;
     }
 
     setCreating(true);
     try {
+      // The L2 ChannelCreate envelope carries a channel_id that the node
+      // requires; it is NOT assigned by the node. Where it comes from depends
+      // on the channel type, and must match web/desktop exactly or the same
+      // channel would get different IDs on different clients.
+      let channelId: number;
+
+      if (channelType === 2) {
+        // Private channels are L2-only — no SC call, no fee. The ID is derived
+        // locally from Keccak-256(creator + slug + timestamp), truncated to u64
+        // (per protocol spec).
+        setStatus(t('channel_create_deriving'));
+        const ts = Date.now();
+        const hash = keccak_256(new TextEncoder().encode(creatorAddress + trimmedSlug + ts));
+        const view = new DataView(hash.buffer, hash.byteOffset, hash.byteLength);
+        channelId = Number(view.getBigUint64(0) % BigInt(Number.MAX_SAFE_INTEGER));
+      } else {
+        // Public / Read-Public are registered on-chain; the SC assigns the ID.
+        setStatus(t('channel_create_onchain'));
+        const txHash = await createChannelOnChain(trimmedSlug, channelType);
+        setStatus(t('channel_create_confirming'));
+        channelId = await getChannelIdFromTx(txHash, trimmedSlug);
+      }
+
+      setStatus(t('channel_create_publishing'));
       await client.createChannel({
+        channelId,
         slug: trimmedSlug,
-        channel_type: channelType,
-        display_name: displayName.trim() || undefined,
+        channelType,
+        displayName: displayName.trim() || undefined,
         description: description.trim() || undefined,
-        content_rating: 0,
+        // P4: all new channels are E2E-encrypted (forced on, no toggle), matching
+        // web and desktop. Omitting this would let the node fall back to
+        // type-based defaults and leave mobile-created public channels plaintext.
+        encryptionEnabled: true,
       });
+
+      await addJoinedChannel(channelId).catch(() => {});
 
       Alert.alert(t('channel_created'), `#${trimmedSlug}`, [
         { text: t('done'), onPress: () => navigation.goBack() },
@@ -68,6 +108,7 @@ export default function CreateChannelScreen() {
       Alert.alert(t('channel_create_failed'), msg.slice(0, 200));
     } finally {
       setCreating(false);
+      setStatus('');
     }
   };
 
@@ -149,6 +190,12 @@ export default function CreateChannelScreen() {
             {creating ? t('loading') : t('channel_create')}
           </Text>
         </TouchableOpacity>
+
+        {/* On-chain creation waits on TX confirmation, which can take tens of
+            seconds — without a progress line it reads as a hung button. */}
+        {creating && status !== '' && (
+          <Text style={[styles.status, { color: colors.textSecondary }]}>{status}</Text>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -166,4 +213,5 @@ const styles = StyleSheet.create({
   hint: { fontSize: fontSize.xs, marginTop: spacing.sm, fontStyle: 'italic' },
   createBtn: { marginTop: spacing.xl, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center' },
   createBtnText: { fontSize: fontSize.md, fontWeight: '600' },
+  status: { fontSize: fontSize.sm, marginTop: spacing.md, textAlign: 'center' },
 });

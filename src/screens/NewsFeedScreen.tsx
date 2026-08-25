@@ -17,6 +17,7 @@ import {
   Image,
 } from 'react-native';
 import NewsReactionBar from '../components/NewsReactionBar';
+import PostImage from '../components/PostImage';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -164,7 +165,22 @@ function NewsCard({
 }) {
   const { t } = useTranslation();
   const { client } = useConnection();
-  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({});
+  // Seed from the server's counts. This was hardcoded to `{}`, so a card only
+  // ever showed reactions YOU added in this session — everyone else's were
+  // invisible on mobile no matter how often you refreshed. The node returns
+  // `reaction_counts` on every news item and `normalizeEnvelope` spreads it
+  // through untouched; it was simply never read.
+  const serverCounts = (post as unknown as { reaction_counts?: Record<string, number> })
+    .reaction_counts;
+  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>(
+    serverCounts ?? {},
+  );
+  // Re-seed when the list refetches. FlatList reuses card instances by key, so
+  // useState's initial value alone would keep showing the count from whenever
+  // this row was first mounted.
+  useEffect(() => {
+    setReactionCounts(serverCounts ?? {});
+  }, [serverCounts]);
   const [bookmarked, setBookmarked] = useState(false);
   const [reposted, setReposted] = useState(false);
 
@@ -251,12 +267,7 @@ function NewsCard({
       {decoded?.attachments && decoded.attachments.length > 0 && client && (
         <View style={styles.attachRow}>
           {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).slice(0, 4).map((att, idx) => (
-            <Image
-              key={idx}
-              source={{ uri: client.getMediaUrl(att.cid) }}
-              style={styles.postImage}
-              resizeMode="contain"
-            />
+            <PostImage key={idx} uri={client.getMediaUrl(att.cid)} />
           ))}
         </View>
       )}
@@ -321,7 +332,6 @@ const styles = StyleSheet.create({
   title: { fontSize: fontSize.lg, fontWeight: '700', lineHeight: 24, marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
   attachRow: { gap: spacing.xs, marginBottom: spacing.sm },
-  postImage: { width: '100%', height: 180, borderRadius: radius.md },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   reactionsRow: {
     flexDirection: 'row',

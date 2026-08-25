@@ -33,10 +33,22 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
       return;
     }
 
-    // Check local cache first
+    // Check local cache first.
+    //
+    // This branch used to hardcode `avatarUri: null` while `setCachedUser` below
+    // faithfully stored the `avatarCid` — so the cache held the avatar and the
+    // read path threw it away. Combined with the `apiFetched` guard (which never
+    // clears, so an address is fetched at most once per session), the first card
+    // for a user showed their avatar and every later one fell back to the letter
+    // circle. In a FlatList that recycles cards constantly, that meant the news
+    // feed effectively never showed avatars, while the profile screen — which
+    // fetches directly — always did.
     getCachedUser(address).then((user) => {
-      if (user?.displayName) {
-        setCached({ displayName: user.displayName, avatarUri: null });
+      if (user?.displayName || user?.avatarCid) {
+        setCached({
+          displayName: user.displayName ?? null,
+          avatarUri: user.avatarCid && client ? client.getMediaUrl(user.avatarCid) : null,
+        });
       }
     });
 

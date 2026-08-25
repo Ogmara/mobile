@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import NewsReactionBar from '../components/NewsReactionBar';
+import PostImage from '../components/PostImage';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
@@ -37,7 +38,14 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client, signer, address: myAddress } = useConnection();
-  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({});
+  // Seeded from the server's counts — see the same fix in NewsFeedScreen. This
+  // screen renders the post object handed over by the feed, which carries the
+  // node's `reaction_counts`; starting at `{}` meant other people's reactions
+  // were invisible here too.
+  const seededCounts =
+    (rawPost as unknown as { reaction_counts?: Record<string, number> } | undefined)
+      ?.reaction_counts ?? {};
+  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>(seededCounts);
   const [bookmarked, setBookmarked] = useState(false);
   const [reposted, setReposted] = useState(false);
   const [replyText, setReplyText] = useState('');
@@ -185,12 +193,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
           {decoded.attachments && decoded.attachments.length > 0 && client && (
             <View style={styles.attachRow}>
               {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).map((att, idx) => (
-                <Image
-                  key={idx}
-                  source={{ uri: client.getMediaUrl(att.cid) }}
-                  style={styles.detailImage}
-                  resizeMode="contain"
-                />
+                <PostImage key={idx} uri={client.getMediaUrl(att.cid)} />
               ))}
             </View>
           )}
@@ -286,7 +289,6 @@ const styles = StyleSheet.create({
   title: { fontSize: fontSize.xl, fontWeight: '700', lineHeight: 28, marginBottom: spacing.sm },
   content: { fontSize: fontSize.md, lineHeight: 24, marginBottom: spacing.md },
   attachRow: { gap: spacing.sm, marginBottom: spacing.md },
-  detailImage: { width: '100%', height: 200, borderRadius: radius.md },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.md },
   tag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm },

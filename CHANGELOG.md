@@ -5,6 +5,46 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0] - 2026-08-25
+
+Three news-feed fixes from device testing.
+
+### Fixed
+
+- **Other people's reactions were invisible.** `NewsCard` initialised
+  `reactionCounts` to `{}` and only ever incremented it locally when you tapped,
+  so a card showed reactions YOU added in this session and nothing else, no
+  matter how often you refreshed. The node returns `reaction_counts` on every
+  news item and `normalizeEnvelope` spreads it through untouched — it was simply
+  never read. Now seeded from the server, and re-seeded when the list refetches,
+  since `FlatList` reuses card instances by key and `useState`'s initial value
+  alone would keep showing a stale count. Same fix on the detail screen, which
+  renders the post object handed over by the feed.
+
+  Needs l2-node 0.120.0 for reactions to arrive *live*; before that they appear
+  on the next refetch.
+
+- **Avatars never appeared in the news feed.** `useUserDisplay`'s cache branch
+  hardcoded `avatarUri: null` while `setCachedUser` faithfully stored the
+  `avatarCid` — the cache held the avatar and the read path threw it away.
+  Combined with the module-level `apiFetched` guard, which never clears, an
+  address was fetched at most once per session: the first card for a user showed
+  their avatar and every later one fell back to the letter circle. In a
+  `FlatList` that recycles cards constantly the feed effectively never showed
+  avatars, while the profile screen — which fetches directly — always did.
+
+- **Post images rendered as thumbnails.** Attachments went into a fixed 180px
+  box with `resizeMode="contain"`, which letterboxed them: a wide screenshot
+  became a small strip floating in dead space. The new `PostImage` fills the
+  width and derives its height from the image's own aspect ratio, measured via
+  `Image.getSize`, so nothing is letterboxed or cropped. It holds a 16:9 box
+  until the measurement lands so rows don't jump, and clamps anything taller
+  than 4:5 portrait so one screenshot can't take over the feed.
+
+### Added
+
+- `PostImage` component.
+
 ## [0.37.0] - 2026-08-25
 
 Three UI fixes from device testing.

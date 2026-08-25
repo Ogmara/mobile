@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ogmara",
     "slug": "ogmara",
-    "version": "0.32.0",
+    "version": "0.35.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -22,6 +22,7 @@
     },
     "android": {
       "package": "org.ogmara.app",
+      "versionCode": 49,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0E1621"
@@ -40,7 +41,9 @@
         {
           "photosPermission": false,
           "savePhotosPermission": "Ogmara saves images you download from chats to your photo library.",
-          "granularPermissions": ["photo"]
+          "granularPermissions": [
+            "photo"
+          ]
         }
       ]
     ]

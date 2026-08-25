@@ -35,6 +35,13 @@ import { uploadSettings, downloadSettings } from '../lib/settingsSync';
 import { e2eAvailable } from '../lib/cryptoEnv';
 import { backupNow, tryRestoreKeyVault } from '../lib/keyVault';
 import { e2eSelfCheck } from '../lib/dmCrypto';
+import Constants from 'expo-constants';
+
+/** Real installed version, from app.json via the native build. A hardcoded
+ *  string here had drifted to 0.11.1 while the app was at 0.34.0, which made
+ *  a stale install impossible to spot from inside the app. */
+const APP_VERSION: string = Constants.expoConfig?.version ?? 'unknown';
+
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
@@ -626,7 +633,7 @@ export default function SettingsScreen() {
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('settings_version')}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>0.11.1</Text>
+          <Text style={{ color: colors.textSecondary }}>{APP_VERSION}</Text>
         </View>
         <TouchableOpacity
           style={styles.row}

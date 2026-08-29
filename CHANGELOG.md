@@ -5,6 +5,27 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.2] - 2026-08-29
+
+### Fixed
+
+- Adjusted `ChannelMessagesScreen`/`DmConversationScreen`'s local
+  `ExtendedEnvelope` type and `MessageBubble`'s `message` prop for
+  `@ogmara/sdk` 0.51.0's `Envelope.payload`/`Envelope.signature` type fix
+  (now correctly `number[]`, matching the wire, instead of the old — wrong —
+  `string`). These screens genuinely construct locally-only optimistic
+  messages with a plain content string in `payload` before the real
+  server envelope arrives; that's a legitimate app-local convention, so the
+  screens' own types now explicitly widen `payload` to `number[] | string`
+  rather than the SDK type doing so for every consumer.
+- `envelopeNormalizer.ts` no longer hex-encodes `signature` on incoming
+  envelopes. It did so on the belief (per its own comment) that "the SDK's
+  Envelope type expects hex strings for msg_id and signature" — true of the
+  old, wrong SDK type, never true of the wire (`envelope_to_json` in
+  l2-node only ever converts `msg_id`). Nothing in the app reads
+  `.signature` off a received envelope, so this was inert, but it doc-lied
+  about the format if anyone went looking.
+
 ## [0.40.1] - 2026-08-28
 
 ### Fixed

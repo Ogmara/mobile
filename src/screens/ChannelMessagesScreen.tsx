@@ -82,7 +82,14 @@ function getDateLabel(timestamp: string | number, todayLabel: string, yesterdayL
   return date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 }
 
-type ExtendedEnvelope = Envelope & {
+type ExtendedEnvelope = Omit<Envelope, 'payload'> & {
+  // Real server envelopes carry `payload` as bytes (the SDK's `Envelope`
+  // type). A locally-constructed optimistic message (sent-but-unconfirmed,
+  // or mid-edit) instead stuffs the plain content string in here directly —
+  // `_decodedContent` is what's actually rendered, but some fallback reads
+  // go through `.payload` when it's a string (see `typeof m.payload ===
+  // 'string'` checks below).
+  payload: Envelope['payload'] | string;
   deleted?: boolean;
   edited?: boolean;
   last_edited_at?: number;
@@ -549,7 +556,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         timestamp: Date.now(),
         lamport_ts: 0,
         payload: text || '',
-        signature: '',
+        signature: [],
         relay_path: [],
         _optimistic: true,
         _decodedContent: text || '',
@@ -594,7 +601,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     inputRef.current?.focus();
   }, [myAddress]);
 
-  const handleDelete = useCallback(async (msg: Envelope) => {
+  const handleDelete = useCallback(async (msg: ExtendedEnvelope) => {
     // Ownership guard — only delete own messages
     if (!client || msg.author !== myAddress) return;
     try {
@@ -612,7 +619,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     }
   }, [client, channelId, myAddress, t]);
 
-  const handleReact = useCallback(async (msg: Envelope, emoji: string) => {
+  const handleReact = useCallback(async (msg: ExtendedEnvelope, emoji: string) => {
     if (!client) return;
     // Validate emoji against allowlist
     if (!CHAT_REACTIONS.includes(emoji)) return;
@@ -651,7 +658,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [pendingEncryptedMedia, setPendingEncryptedMedia] = useState<MediaDescriptor[]>([]);
   const [uploading, setUploading] = useState(false);
 
-  const handleTip = useCallback((msg: Envelope) => {
+  const handleTip = useCallback((msg: ExtendedEnvelope) => {
     if (msg.author === myAddress) return; // can't tip yourself
     setTipTarget(msg.author);
   }, [myAddress]);

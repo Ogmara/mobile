@@ -47,13 +47,21 @@ export interface MessageAttachment {
   thumbnail_cid?: string;
 }
 
+// Real envelopes carry `payload` as bytes. Callers may also pass a
+// locally-constructed optimistic message with a plain content string in
+// `payload` instead (see ChannelMessagesScreen/DmConversationScreen's
+// `ExtendedEnvelope`); this component doesn't read `.payload` itself, only
+// the caller-supplied `content` prop, so it accepts either shape.
+type BubbleMessage = Omit<Envelope, 'payload'> & {
+  payload: Envelope['payload'] | string;
+  deleted?: boolean;
+  edited?: boolean;
+  last_edited_at?: number;
+  reactions?: Record<string, number>;
+};
+
 interface Props {
-  message: Envelope & {
-    deleted?: boolean;
-    edited?: boolean;
-    last_edited_at?: number;
-    reactions?: Record<string, number>;
-  };
+  message: BubbleMessage;
   content: string;
   isOwn: boolean;
   authorLabel: string;
@@ -63,11 +71,11 @@ interface Props {
   /** Base URL for media (e.g., "https://node.ogmara.org/api/v1/media/") */
   mediaBaseUrl?: string;
   replyContext?: ReplyContext | null;
-  onReply?: (msg: Envelope) => void;
-  onEdit?: (msg: Envelope) => void;
-  onDelete?: (msg: Envelope) => void;
-  onReact?: (msg: Envelope, emoji: string) => void;
-  onTip?: (msg: Envelope) => void;
+  onReply?: (msg: BubbleMessage) => void;
+  onEdit?: (msg: BubbleMessage) => void;
+  onDelete?: (msg: BubbleMessage) => void;
+  onReact?: (msg: BubbleMessage, emoji: string) => void;
+  onTip?: (msg: BubbleMessage) => void;
   onAuthorPress?: (address: string) => void;
   onReplyPress?: (msgId: string) => void;
   /** Hide author + avatar for grouped consecutive messages */

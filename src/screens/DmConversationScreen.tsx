@@ -74,7 +74,11 @@ function getDateLabel(timestamp: string | number, todayLabel: string, yesterdayL
   return date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 }
 
-type ExtendedEnvelope = Envelope & {
+type ExtendedEnvelope = Omit<Envelope, 'payload'> & {
+  // See ChannelMessagesScreen's identical override: real envelopes carry
+  // `payload` as bytes, but a locally-constructed optimistic DM stuffs the
+  // plain content string in here directly.
+  payload: Envelope['payload'] | string;
   deleted?: boolean;
   edited?: boolean;
   last_edited_at?: number;
@@ -351,7 +355,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
         timestamp: Date.now(),
         lamport_ts: 0,
         payload: text,
-        signature: '',
+        signature: [],
         relay_path: [],
         _optimistic: true,
         _decodedEncryptedMedia: sentMedia.length > 0 ? sentMedia : undefined,
@@ -424,7 +428,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     inputRef.current?.focus();
   }, [myAddress]);
 
-  const handleDelete = useCallback(async (msg: Envelope) => {
+  const handleDelete = useCallback(async (msg: ExtendedEnvelope) => {
     // Ownership guard
     if (!client || msg.author !== myAddress) return;
     try {
@@ -442,7 +446,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     }
   }, [client, peerAddress, myAddress, t]);
 
-  const handleReact = useCallback(async (msg: Envelope, emoji: string) => {
+  const handleReact = useCallback(async (msg: ExtendedEnvelope, emoji: string) => {
     if (!client) return;
     // Validate emoji against allowlist
     if (!CHAT_REACTIONS.includes(emoji)) return;

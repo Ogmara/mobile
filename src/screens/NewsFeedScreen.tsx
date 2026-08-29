@@ -31,7 +31,7 @@ import { decodeNewsPost } from '../lib/payloadDecoder';
 import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import { useUserDisplay } from '../hooks/useUserDisplay';
 import type { Envelope } from '@ogmara/sdk';
-import { isNewsEnvelope } from '@ogmara/sdk';
+import { isNewsEnvelope, MSG_TYPE_NAME } from '@ogmara/sdk';
 import type { NewsStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
 
@@ -159,6 +159,16 @@ function NewsCard({
 }) {
   const { t } = useTranslation();
   const { client } = useConnection();
+  const navigation = useNavigation<NavProp>();
+  // `Envelope.msg_type` is typed `number` (the signed wire envelope's
+  // representation), but the node's REST responses serialize it as the Rust
+  // enum's variant NAME string (e.g. "NewsRepost") — see @ogmara/sdk's
+  // `isNewsEnvelope`/`MSG_TYPE_NAME` doc comments for the same duality.
+  const msgTypeName =
+    typeof post.msg_type === 'number'
+      ? MSG_TYPE_NAME[post.msg_type]
+      : (post.msg_type as unknown as string);
+  const isRepost = msgTypeName === 'NewsRepost';
   // Seed from the server's counts. This was hardcoded to `{}`, so a card only
   // ever showed reactions YOU added in this session — everyone else's were
   // invisible on mobile no matter how often you refreshed. The node returns
@@ -179,10 +189,23 @@ function NewsCard({
   const [reposted, setReposted] = useState(false);
   const [viewerImage, setViewerImage] = useState<string | null>(null);
 
-  // Decode the MessagePack payload into readable title/content
-  const decoded = decodeNewsPost(post.payload);
+  // A NewsRepost payload only carries {original_id, original_author, comment}
+  // — no title/content — so decoding it as a NewsPost is meaningless. The
+  // l2-node enriches repost feed items with original_* / repost_comment
+  // fields instead (mirroring the parent_* enrichment comments get).
+  const decoded = isRepost ? null : decodeNewsPost(post.payload);
   const title = decoded?.title || '';
   const body = decoded?.content || (typeof post.payload === 'string' ? post.payload : '');
+  const repostFields = post as unknown as {
+    repost_comment?: string;
+    original_available?: boolean;
+    original_id?: string;
+    original_author?: string;
+    original_title?: string;
+    original_content?: string;
+    original_deleted?: boolean;
+    original_attachment?: { cid: string; mime_type: string; thumbnail_cid?: string };
+  };
   const { displayName: authorName, avatarUri: authorAvatar } = useUserDisplay(post.author);
 
   const handleReaction = useCallback(
@@ -250,30 +273,78 @@ function NewsCard({
           {authorName || `${post.author.slice(0, 16)}...`}
         </Text>
       </TouchableOpacity>
-      {title ? (
-        <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={2}>
-          {title}
-        </Text>
-      ) : null}
-      <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={4}>
-        {body}
-      </Text>
-      {/* Inline image attachments */}
-      {decoded?.attachments && decoded.attachments.length > 0 && client && (
-        <View style={styles.attachRow}>
-          {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).slice(0, 4).map((att, idx) => (
+      {isRepost ? (
+        <>
+          {repostFields.repost_comment ? (
+            <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={4}>
+              {repostFields.repost_comment}
+            </Text>
+          ) : null}
+          {repostFields.original_available ? (
             <TouchableOpacity
-              key={idx}
-              activeOpacity={0.9}
-              // Nested Touchable: the tap is consumed here and never reaches the
-              // card's own onPress, so tapping an image zooms it while tapping
-              // anywhere else still opens the post.
-              onPress={() => setViewerImage(client.getMediaUrl(att.cid))}
+              style={[styles.repostQuote, { borderColor: colors.border }]}
+              activeOpacity={0.8}
+              onPress={() =>
+                repostFields.original_id &&
+                navigation.navigate('NewsDetail', { msgId: repostFields.original_id })
+              }
             >
-              <PostImage uri={client.getMediaUrl(att.cid)} />
+              <Text style={[styles.repostQuoteAuthor, { color: colors.textSecondary }]}>
+                {repostFields.original_author
+                  ? `${repostFields.original_author.slice(0, 16)}...`
+                  : ''}
+              </Text>
+              {repostFields.original_deleted ? (
+                <Text style={{ color: colors.textSecondary, fontStyle: 'italic', fontSize: fontSize.sm }}>
+                  {t('message_deleted')}
+                </Text>
+              ) : (
+                <>
+                  {repostFields.original_title ? (
+                    <Text style={[styles.repostQuoteTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                      {repostFields.original_title}
+                    </Text>
+                  ) : null}
+                  <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }} numberOfLines={2}>
+                    {repostFields.original_content}
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
-          ))}
-        </View>
+          ) : (
+            <Text style={{ color: colors.textSecondary, fontStyle: 'italic', fontSize: fontSize.sm }}>
+              {t('news_original_unavailable')}
+            </Text>
+          )}
+        </>
+      ) : (
+        <>
+          {title ? (
+            <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={2}>
+              {title}
+            </Text>
+          ) : null}
+          <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={4}>
+            {body}
+          </Text>
+          {/* Inline image attachments */}
+          {decoded?.attachments && decoded.attachments.length > 0 && client && (
+            <View style={styles.attachRow}>
+              {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).slice(0, 4).map((att, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  activeOpacity={0.9}
+                  // Nested Touchable: the tap is consumed here and never reaches the
+                  // card's own onPress, so tapping an image zooms it while tapping
+                  // anywhere else still opens the post.
+                  onPress={() => setViewerImage(client.getMediaUrl(att.cid))}
+                >
+                  <PostImage uri={client.getMediaUrl(att.cid)} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </>
       )}
       <Text style={[styles.time, { color: colors.textSecondary }]}>
         {new Date(post.timestamp).toLocaleDateString()}
@@ -328,6 +399,14 @@ const styles = StyleSheet.create({
   title: { fontSize: fontSize.lg, fontWeight: '700', lineHeight: 24, marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
   attachRow: { gap: spacing.xs, marginBottom: spacing.sm },
+  repostQuote: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  repostQuoteAuthor: { fontSize: fontSize.xs, marginBottom: 2 },
+  repostQuoteTitle: { fontSize: fontSize.md, fontWeight: '600', marginBottom: 2 },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   reactionsRow: {
     flexDirection: 'row',

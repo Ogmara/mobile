@@ -191,6 +191,7 @@
   "news_like": "Нравится",
   "news_dislike": "Не нравится",
   "news_repost": "Репост",
+  "news_original_unavailable": "Исходный пост недоступен",
   "news_reposted": "Репост сделан",
   "news_bookmark": "В закладки",
   "news_bookmarked": "Сохранено",

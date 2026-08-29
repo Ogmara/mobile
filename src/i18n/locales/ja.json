@@ -193,6 +193,7 @@
   "news_like": "いいね",
   "news_dislike": "よくないね",
   "news_repost": "リポスト",
+  "news_original_unavailable": "元の投稿は利用できません",
   "news_reposted": "リポスト済み",
   "news_bookmark": "ブックマーク",
   "news_bookmarked": "保存済み",

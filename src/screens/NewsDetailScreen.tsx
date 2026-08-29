@@ -26,6 +26,7 @@ import { normalizeEnvelope } from '../lib/envelopeNormalizer';
 import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
+import { MSG_TYPE_NAME } from '@ogmara/sdk';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
 
@@ -56,7 +57,29 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
   const [viewerImage, setViewerImage] = useState<string | null>(null);
 
   const post = rawPost ? normalizeEnvelope(rawPost) : null;
-  const decoded = post ? decodeNewsPost(post.payload) : null;
+  // `Envelope.msg_type` is typed `number` (the signed wire envelope's
+  // representation), but the node's REST responses serialize it as the Rust
+  // enum's variant NAME string (e.g. "NewsRepost") — see @ogmara/sdk's
+  // `isNewsEnvelope`/`MSG_TYPE_NAME` doc comments for the same duality.
+  const msgTypeName =
+    typeof post?.msg_type === 'number'
+      ? MSG_TYPE_NAME[post.msg_type]
+      : (post?.msg_type as unknown as string | undefined);
+  const isRepost = msgTypeName === 'NewsRepost';
+  // A NewsRepost payload only carries {original_id, original_author, comment}
+  // — no title/content — so decoding it as a NewsPost is meaningless. The
+  // l2-node enriches repost feed items with original_* / repost_comment
+  // fields instead.
+  const decoded = post && !isRepost ? decodeNewsPost(post.payload) : null;
+  const repostFields = post as unknown as {
+    repost_comment?: string;
+    original_available?: boolean;
+    original_id?: string;
+    original_author?: string;
+    original_title?: string;
+    original_content?: string;
+    original_deleted?: boolean;
+  } | null;
 
   const isOwn = post?.author === myAddress;
   const canEdit = useMemo(() => {
@@ -166,7 +189,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     );
   }
 
-  if (!post || !decoded) {
+  if (!post || (!decoded && !isRepost)) {
     return (
       <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
         <Text style={{ color: colors.textSecondary }}>{t('error_not_found')}</Text>
@@ -186,32 +209,76 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
             </Text>
           </TouchableOpacity>
 
-          {decoded.title ? (
-            <Text style={[styles.title, { color: colors.textPrimary }]}>{decoded.title}</Text>
-          ) : null}
-
-          <Text style={[styles.content, { color: colors.textPrimary }]}>{decoded.content}</Text>
-
-          {/* Inline image attachments */}
-          {decoded.attachments && decoded.attachments.length > 0 && client && (
-            <View style={styles.attachRow}>
-              {decoded.attachments.filter((a) => a.mime_type.startsWith('image/')).map((att, idx) => (
+          {isRepost ? (
+            <>
+              {repostFields?.repost_comment ? (
+                <Text style={[styles.content, { color: colors.textPrimary }]}>
+                  {repostFields.repost_comment}
+                </Text>
+              ) : null}
+              {repostFields?.original_available ? (
                 <TouchableOpacity
-                  key={idx}
-                  activeOpacity={0.9}
-                  onPress={() => setViewerImage(client.getMediaUrl(att.cid))}
+                  style={[styles.repostQuote, { borderColor: colors.border }]}
+                  activeOpacity={0.8}
+                  onPress={() =>
+                    repostFields.original_id &&
+                    navigation.push('NewsDetail', { msgId: repostFields.original_id })
+                  }
                 >
-                  <PostImage uri={client.getMediaUrl(att.cid)} />
+                  <Text style={[styles.repostQuoteAuthor, { color: colors.textSecondary }]}>
+                    {repostFields.original_author ? `${repostFields.original_author.slice(0, 20)}...` : ''}
+                  </Text>
+                  {repostFields.original_deleted ? (
+                    <Text style={{ color: colors.textSecondary, fontStyle: 'italic' }}>
+                      {t('message_deleted')}
+                    </Text>
+                  ) : (
+                    <>
+                      {repostFields.original_title ? (
+                        <Text style={[styles.repostQuoteTitle, { color: colors.textPrimary }]}>
+                          {repostFields.original_title}
+                        </Text>
+                      ) : null}
+                      <Text style={{ color: colors.textSecondary }}>{repostFields.original_content}</Text>
+                    </>
+                  )}
                 </TouchableOpacity>
-              ))}
-            </View>
+              ) : (
+                <Text style={{ color: colors.textSecondary, fontStyle: 'italic' }}>
+                  {t('news_original_unavailable')}
+                </Text>
+              )}
+            </>
+          ) : (
+            <>
+              {decoded!.title ? (
+                <Text style={[styles.title, { color: colors.textPrimary }]}>{decoded!.title}</Text>
+              ) : null}
+
+              <Text style={[styles.content, { color: colors.textPrimary }]}>{decoded!.content}</Text>
+
+              {/* Inline image attachments */}
+              {decoded!.attachments && decoded!.attachments.length > 0 && client && (
+                <View style={styles.attachRow}>
+                  {decoded!.attachments.filter((a) => a.mime_type.startsWith('image/')).map((att, idx) => (
+                    <TouchableOpacity
+                      key={idx}
+                      activeOpacity={0.9}
+                      onPress={() => setViewerImage(client.getMediaUrl(att.cid))}
+                    >
+                      <PostImage uri={client.getMediaUrl(att.cid)} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </>
           )}
 
           <Text style={[styles.time, { color: colors.textSecondary }]}>
             {new Date(post.timestamp).toLocaleDateString()}
           </Text>
 
-          {decoded.tags && decoded.tags.length > 0 && (
+          {decoded?.tags && decoded.tags.length > 0 && (
             <View style={styles.tagRow}>
               {decoded.tags.map((tag) => (
                 <View key={tag} style={[styles.tag, { backgroundColor: colors.bgTertiary }]}>
@@ -297,6 +364,14 @@ const styles = StyleSheet.create({
   title: { fontSize: fontSize.xl, fontWeight: '700', lineHeight: 28, marginBottom: spacing.sm },
   content: { fontSize: fontSize.md, lineHeight: 24, marginBottom: spacing.md },
   attachRow: { gap: spacing.sm, marginBottom: spacing.md },
+  repostQuote: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  repostQuoteAuthor: { fontSize: fontSize.xs, marginBottom: 2 },
+  repostQuoteTitle: { fontSize: fontSize.md, fontWeight: '600', marginBottom: 2 },
   time: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.md },
   tag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm },

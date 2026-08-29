@@ -23,6 +23,7 @@ import { decodeNewsPost } from '../lib/payloadDecoder';
 import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import { debugLog } from '../lib/debug';
 import type { Envelope } from '@ogmara/sdk';
+import { MSG_TYPE_NAME } from '@ogmara/sdk';
 
 export default function BookmarksScreen() {
   const { t } = useTranslation();
@@ -54,7 +55,22 @@ export default function BookmarksScreen() {
   const bookmarks = data?.bookmarks ?? [];
 
   const renderItem = ({ item }: { item: Envelope }) => {
-    const decoded = decodeNewsPost(item.payload);
+    // `Envelope.msg_type` is typed `number`, but the node's REST responses
+    // serialize it as the Rust enum's variant NAME string — see
+    // @ogmara/sdk's `isNewsEnvelope`/`MSG_TYPE_NAME` doc comments.
+    const msgTypeName =
+      typeof item.msg_type === 'number' ? MSG_TYPE_NAME[item.msg_type] : (item.msg_type as unknown as string);
+    const isRepost = msgTypeName === 'NewsRepost';
+    const decoded = isRepost ? null : decodeNewsPost(item.payload);
+    const repostFields = item as unknown as {
+      repost_comment?: string;
+      original_available?: boolean;
+      original_id?: string;
+      original_author?: string;
+      original_title?: string;
+      original_content?: string;
+      original_deleted?: boolean;
+    };
     return (
       <TouchableOpacity
         style={[styles.card, { backgroundColor: colors.bgSecondary }]}
@@ -64,14 +80,53 @@ export default function BookmarksScreen() {
         <Text style={[styles.author, { color: colors.accentPrimary }]}>
           {item.author.slice(0, 16)}...
         </Text>
-        {decoded?.title ? (
-          <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={1}>
-            {decoded.title}
-          </Text>
-        ) : null}
-        <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={3}>
-          {decoded?.content || ''}
-        </Text>
+        {isRepost ? (
+          <>
+            {repostFields.repost_comment ? (
+              <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={3}>
+                {repostFields.repost_comment}
+              </Text>
+            ) : null}
+            {repostFields.original_available ? (
+              <View style={[styles.repostQuote, { borderColor: colors.border }]}>
+                <Text style={[styles.repostQuoteAuthor, { color: colors.textSecondary }]}>
+                  {repostFields.original_author ? `${repostFields.original_author.slice(0, 16)}...` : ''}
+                </Text>
+                {repostFields.original_deleted ? (
+                  <Text style={{ color: colors.textSecondary, fontStyle: 'italic', fontSize: fontSize.sm }}>
+                    {t('message_deleted')}
+                  </Text>
+                ) : (
+                  <>
+                    {repostFields.original_title ? (
+                      <Text style={[styles.repostQuoteTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                        {repostFields.original_title}
+                      </Text>
+                    ) : null}
+                    <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }} numberOfLines={2}>
+                      {repostFields.original_content}
+                    </Text>
+                  </>
+                )}
+              </View>
+            ) : (
+              <Text style={{ color: colors.textSecondary, fontStyle: 'italic', fontSize: fontSize.sm }}>
+                {t('news_original_unavailable')}
+              </Text>
+            )}
+          </>
+        ) : (
+          <>
+            {decoded?.title ? (
+              <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={1}>
+                {decoded.title}
+              </Text>
+            ) : null}
+            <Text style={[styles.content, { color: colors.textPrimary }]} numberOfLines={3}>
+              {decoded?.content || ''}
+            </Text>
+          </>
+        )}
         <Text style={[styles.time, { color: colors.textSecondary }]}>
           {new Date(item.timestamp).toLocaleDateString()}
         </Text>
@@ -128,4 +183,12 @@ const styles = StyleSheet.create({
   title: { fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.xs },
   content: { fontSize: fontSize.md, lineHeight: 22, marginBottom: spacing.sm },
   time: { fontSize: fontSize.xs },
+  repostQuote: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  repostQuoteAuthor: { fontSize: fontSize.xs, marginBottom: 2 },
+  repostQuoteTitle: { fontSize: fontSize.md, fontWeight: '600', marginBottom: 2 },
 });

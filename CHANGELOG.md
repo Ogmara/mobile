@@ -5,6 +5,25 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.1] - 2026-08-28
+
+### Fixed
+
+- **Reposts rendered as empty cards** in the feed, a repost's own detail
+  screen, bookmarks, and a user's profile posts — just the author row and
+  action buttons, no content, no link back to what was reposted. A
+  `NewsRepost` payload only carries `{original_id, original_author,
+  comment}`; the code decoded it the same way as a `NewsPost`
+  (`title`/`content`), which is always empty for this type. Requires
+  l2-node 0.122.1, which now enriches repost items with `original_*`
+  preview fields. `NewsFeedScreen`, `NewsDetailScreen`, `BookmarksScreen`,
+  and `UserProfileScreen` all gained a quote-card branch rendering the
+  reposted post's author/title/content (or "Original post unavailable" /
+  "Message deleted" when it can't be shown), plus the repost's own optional
+  quote-comment text. Also fixed `NewsDetailScreen` treating every repost as
+  "not found": its `!post || !decoded` guard assumed every post decodes to
+  a title/content payload, which a repost never does.
+
 ## [0.40.0] - 2026-08-25
 
 Button design system. Roughly thirty hand-rolled button styles across the app

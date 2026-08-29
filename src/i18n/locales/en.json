@@ -103,6 +103,7 @@
   "news_like": "Like",
   "news_dislike": "Dislike",
   "news_repost": "Repost",
+  "news_original_unavailable": "Original post unavailable",
   "news_reposted": "Reposted",
   "news_bookmark": "Bookmark",
   "news_bookmarked": "Saved",

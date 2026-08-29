@@ -193,6 +193,7 @@
   "news_like": "点赞",
   "news_dislike": "踩",
   "news_repost": "转发",
+  "news_original_unavailable": "原始帖子不可用",
   "news_reposted": "已转发",
   "news_bookmark": "收藏",
   "news_bookmarked": "已收藏",

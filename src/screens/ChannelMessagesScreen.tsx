@@ -801,6 +801,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           icon; a long badge text used to steal width from the title's `flex: 1`
           and wrap the channel name across multiple lines. */}
       <View style={[styles.header, { backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={{ marginRight: spacing.sm }}
+        >
+          <Text style={{ color: colors.textPrimary, fontSize: fontSize.lg }}>←</Text>
+        </TouchableOpacity>
         <View style={styles.headerTextCol}>
           <Text style={[styles.headerTitle, { color: colors.textPrimary }]} numberOfLines={1}>#{channelName}</Text>
           {isEncrypted && (

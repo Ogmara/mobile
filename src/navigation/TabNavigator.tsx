@@ -66,10 +66,10 @@ function NewsTab() {
   return (
     <NewsStack.Navigator screenOptions={{ headerShown: false }}>
       <NewsStack.Screen name="NewsFeed" component={NewsFeedScreen} />
-      <NewsStack.Screen name="NewsDetail" component={NewsDetailScreen} />
+      <NewsStack.Screen name="NewsDetail" component={NewsDetailScreen} options={{ headerShown: true, title: '' }} />
       <NewsStack.Screen name="ComposePost" component={ComposePostScreen} />
-      <NewsStack.Screen name="UserProfile" component={UserProfileScreen} />
-      <NewsStack.Screen name="FollowList" component={FollowListScreen} />
+      <NewsStack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: true, title: 'Profile' }} />
+      <NewsStack.Screen name="FollowList" component={FollowListScreen} options={{ headerShown: true, title: '' }} />
     </NewsStack.Navigator>
   );
 }
@@ -82,8 +82,8 @@ function ChatTab() {
       <ChatStack.Screen name="ChannelMessages" component={ChannelMessagesScreen} />
       <ChatStack.Screen name="ChannelAdmin" component={ChannelAdminScreen} />
       <ChatStack.Screen name="ChannelJoin" component={ChannelJoinScreen} />
-      <ChatStack.Screen name="UserProfile" component={UserProfileScreen} />
-      <ChatStack.Screen name="FollowList" component={FollowListScreen} />
+      <ChatStack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: true, title: 'Profile' }} />
+      <ChatStack.Screen name="FollowList" component={FollowListScreen} options={{ headerShown: true, title: '' }} />
     </ChatStack.Navigator>
   );
 }
@@ -93,8 +93,8 @@ function DmTab() {
     <DmStack.Navigator screenOptions={{ headerShown: false }}>
       <DmStack.Screen name="DmList" component={DmListScreen} />
       <DmStack.Screen name="DmConversation" component={DmConversationScreen} />
-      <DmStack.Screen name="UserProfile" component={UserProfileScreen} />
-      <DmStack.Screen name="FollowList" component={FollowListScreen} />
+      <DmStack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: true, title: 'Profile' }} />
+      <DmStack.Screen name="FollowList" component={FollowListScreen} options={{ headerShown: true, title: '' }} />
     </DmStack.Navigator>
   );
 }
@@ -105,9 +105,9 @@ function SearchTab() {
       <SearchStack.Screen name="SearchHome" component={SearchScreen} />
       <SearchStack.Screen name="ChannelMessages" component={ChannelMessagesScreen} />
       <SearchStack.Screen name="ChannelJoin" component={ChannelJoinScreen} />
-      <SearchStack.Screen name="NewsDetail" component={NewsDetailScreen} />
-      <SearchStack.Screen name="UserProfile" component={UserProfileScreen} />
-      <SearchStack.Screen name="FollowList" component={FollowListScreen} />
+      <SearchStack.Screen name="NewsDetail" component={NewsDetailScreen} options={{ headerShown: true, title: '' }} />
+      <SearchStack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: true, title: 'Profile' }} />
+      <SearchStack.Screen name="FollowList" component={FollowListScreen} options={{ headerShown: true, title: '' }} />
     </SearchStack.Navigator>
   );
 }
@@ -125,23 +125,31 @@ function MoreTab() {
       <MoreStack.Screen name="PinSetup" component={PinSetupScreen} />
       <MoreStack.Screen name="DebugLogs" component={DebugScreen} />
       <MoreStack.Screen name="Notifications" component={NotificationsScreen} />
-      <MoreStack.Screen name="UserProfile" component={UserProfileScreen} />
-      <MoreStack.Screen name="FollowList" component={FollowListScreen} />
+      <MoreStack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: true, title: 'Profile' }} />
+      <MoreStack.Screen name="FollowList" component={FollowListScreen} options={{ headerShown: true, title: '' }} />
     </MoreStack.Navigator>
   );
 }
 
-// MoreStack screens that render their own native-stack header (back arrow +
-// title). The outer Tab.Navigator header must be hidden while one of these
-// is focused, otherwise it stacks on top and leaves a "Settings" header
-// above a screen that isn't Settings.
+// Screens that render their own native-stack header (back arrow + title).
+// The outer Tab.Navigator header must be hidden while one of these is
+// focused, otherwise it stacks on top and leaves e.g. a "Settings" header
+// above a screen that isn't Settings — and with no header of its own at
+// all, a pushed screen like UserProfile/NewsDetail/FollowList had no way
+// back except an OS-level gesture.
 const MORE_STACK_SCREENS_WITH_OWN_HEADER = [
   'Bookmarks',
   'Addressbook',
   'WalletBalance',
   'Receive',
   'TokenDetail',
+  'UserProfile',
+  'FollowList',
 ];
+const NEWS_STACK_SCREENS_WITH_OWN_HEADER = ['NewsDetail', 'UserProfile', 'FollowList'];
+const CHAT_STACK_SCREENS_WITH_OWN_HEADER = ['UserProfile', 'FollowList'];
+const DM_STACK_SCREENS_WITH_OWN_HEADER = ['UserProfile', 'FollowList'];
+const SEARCH_STACK_SCREENS_WITH_OWN_HEADER = ['NewsDetail', 'UserProfile', 'FollowList'];
 
 /** Map start screen setting to tab route name. */
 function startScreenToRoute(startScreen: StartScreen): string {
@@ -212,13 +220,16 @@ export default function TabNavigator({ startScreen }: Props) {
       <Tab.Screen
         name="NewsTab"
         component={NewsTab}
-        options={{
+        options={({ route }) => ({
           title: t('nav_news'),
           tabBarLabel: t('nav_news'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="newspaper-outline" size={size} color={color} />
           ),
-        }}
+          headerShown: !NEWS_STACK_SCREENS_WITH_OWN_HEADER.includes(
+            getFocusedRouteNameFromRoute(route) ?? 'NewsFeed'
+          ),
+        })}
         listeners={({ navigation: tabNav }) => ({
           tabPress: () => { tabNav.navigate('NewsTab', { screen: 'NewsFeed' }); },
         })}
@@ -226,13 +237,16 @@ export default function TabNavigator({ startScreen }: Props) {
       <Tab.Screen
         name="ChatTab"
         component={ChatTab}
-        options={{
+        options={({ route }) => ({
           title: t('nav_chat'),
           tabBarLabel: t('nav_chat'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubbles-outline" size={size} color={color} />
           ),
-        }}
+          headerShown: !CHAT_STACK_SCREENS_WITH_OWN_HEADER.includes(
+            getFocusedRouteNameFromRoute(route) ?? 'ChannelList'
+          ),
+        })}
         listeners={({ navigation: tabNav }) => ({
           tabPress: () => { tabNav.navigate('ChatTab', { screen: 'ChannelList' }); },
         })}
@@ -240,13 +254,16 @@ export default function TabNavigator({ startScreen }: Props) {
       <Tab.Screen
         name="DmTab"
         component={DmTab}
-        options={{
+        options={({ route }) => ({
           title: t('nav_dms'),
           tabBarLabel: t('nav_dms'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="mail-outline" size={size} color={color} />
           ),
-        }}
+          headerShown: !DM_STACK_SCREENS_WITH_OWN_HEADER.includes(
+            getFocusedRouteNameFromRoute(route) ?? 'DmList'
+          ),
+        })}
         listeners={({ navigation: tabNav }) => ({
           tabPress: () => { tabNav.navigate('DmTab', { screen: 'DmList' }); },
         })}
@@ -254,13 +271,16 @@ export default function TabNavigator({ startScreen }: Props) {
       <Tab.Screen
         name="SearchTab"
         component={SearchTab}
-        options={{
+        options={({ route }) => ({
           title: t('nav_search'),
           tabBarLabel: t('nav_search'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="search-outline" size={size} color={color} />
           ),
-        }}
+          headerShown: !SEARCH_STACK_SCREENS_WITH_OWN_HEADER.includes(
+            getFocusedRouteNameFromRoute(route) ?? 'SearchHome'
+          ),
+        })}
         listeners={({ navigation: tabNav }) => ({
           tabPress: () => { tabNav.navigate('SearchTab', { screen: 'SearchHome' }); },
         })}

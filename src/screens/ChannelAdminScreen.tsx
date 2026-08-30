@@ -458,7 +458,10 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* ── Invite ── */}
+      {/* ── Invite ──
+          Address-based invite (ChannelInvite, protocol spec §3.9) only applies
+          to Private channels and only creator/moderators may send one — the
+          node rejects it from a plain member (router.rs ChannelInvite arm). */}
       <View style={[styles.section, { backgroundColor: colors.bgSecondary }]}>
         <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('channel_invite')}</Text>
         <Button
@@ -467,17 +470,19 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
           fullWidth
           style={styles.actionBtn}
         />
-        <View style={styles.addRow}>
-          <TextInput
-            style={[styles.addInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
-            placeholder="klv1..."
-            placeholderTextColor={colors.textSecondary}
-            value={inviteAddress}
-            onChangeText={setInviteAddress}
-            autoCapitalize="none"
-          />
-          <Button label={t('channel_invite')} onPress={handleInvite} style={styles.addBtn} />
-        </View>
+        {isMod && detail?.channel?.channel_type === 2 && (
+          <View style={styles.addRow}>
+            <TextInput
+              style={[styles.addInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
+              placeholder="klv1..."
+              placeholderTextColor={colors.textSecondary}
+              value={inviteAddress}
+              onChangeText={setInviteAddress}
+              autoCapitalize="none"
+            />
+            <Button label={t('channel_invite')} onPress={handleInvite} style={styles.addBtn} />
+          </View>
+        )}
       </View>
 
       {/* ── Danger Zone ── */}

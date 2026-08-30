@@ -5,6 +5,33 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.3] - 2026-08-30
+
+### Fixed
+
+- **Pushed "detail" screens (UserProfile, FollowList, NewsDetail) had no
+  back button at all.** `TabNavigator.tsx` hides the native stack header
+  (`headerShown: false`) on every nested stack, and none of these screens
+  drew a back control of their own — the only way out was an OS-level
+  edge-swipe/back gesture. Extended the existing `MoreTab`
+  own-header-per-screen pattern (already used for Bookmarks/Addressbook/
+  Wallet screens) to `NewsTab`/`ChatTab`/`DmTab`/`SearchTab`: the affected
+  screens now get `headerShown: true` with React Navigation's automatic back
+  button, and the outer `Tab.Navigator` header hides itself while one is
+  focused (via `getFocusedRouteNameFromRoute`), matching how `MoreTab`
+  already handled it.
+- `ChannelMessagesScreen` and `DmConversationScreen` draw their own header
+  in-body rather than using the native one — added a `←` back button
+  (`navigation.goBack()`) to each, since re-enabling the native header there
+  would have doubled up.
+- **The channel-invite address input was visible to every member**, not just
+  creator/moderators, even though the node rejects a `ChannelInvite` from a
+  plain member — pressing "Invite" as a non-mod silently did nothing (the
+  guard in `handleInvite` returned before any error). Gated the invite input
+  in `ChannelAdminScreen.tsx` on `isMod && channel_type === 2` (invites only
+  apply to Private channels per protocol spec §3.9), matching the equivalent,
+  newly-added UI in web/desktop.
+
 ## [0.40.2] - 2026-08-29
 
 ### Fixed

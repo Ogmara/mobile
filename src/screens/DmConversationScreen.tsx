@@ -525,6 +525,13 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     >
       {/* Peer header */}
       <View style={[styles.header, { backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={{ marginRight: spacing.sm }}
+        >
+          <Text style={{ color: colors.textPrimary, fontSize: fontSize.lg }}>←</Text>
+        </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>{peerLabel}</Text>
       </View>
 
@@ -618,6 +625,8 @@ export default function DmConversationScreen({ route, navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,

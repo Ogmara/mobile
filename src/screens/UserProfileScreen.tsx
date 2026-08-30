@@ -85,20 +85,24 @@ export default function UserProfileScreen({ route, navigation }: Props) {
   // Fetch user's posts from global feed (filter by author)
   const { data: postsData, onRefresh: refreshPosts } = useApi(
     async () => {
-      if (!client) return { posts: [] };
+      if (!client) return { posts: [], total: 0 };
       try {
         // Try user-specific endpoint first
         const resp = await client.getUserPosts(profileAddress, { page: 1, limit: 20 });
-        return { posts: normalizeEnvelopes(resp.posts) };
+        // `total` is the real post count (server-computed, independent of
+        // the page `limit` above) — NOT posts.length, which is capped at 20.
+        return { posts: normalizeEnvelopes(resp.posts), total: resp.total ?? resp.posts.length };
       } catch {
-        // Fallback: filter global news feed by author
+        // Fallback: filter global news feed by author. No real total is
+        // available here — this only scans one page of the global feed, so
+        // the count is a lower bound, same as the posts list itself.
         try {
           const resp = await client.listNews(1, 100);
           const all = normalizeEnvelopes(resp.posts);
           const userPosts = all.filter((p) => p.author === profileAddress);
-          return { posts: userPosts };
+          return { posts: userPosts, total: userPosts.length };
         } catch {
-          return { posts: [] };
+          return { posts: [], total: 0 };
         }
       }
     },
@@ -112,6 +116,7 @@ export default function UserProfileScreen({ route, navigation }: Props) {
   );
 
   const userPosts = postsData?.posts ?? [];
+  const userPostsTotal = postsData?.total ?? userPosts.length;
   const displayName = isOwnProfile
     ? (myName || apiProfile?.display_name || null)
     : (apiProfile?.display_name || null);
@@ -180,7 +185,7 @@ export default function UserProfileScreen({ route, navigation }: Props) {
       {/* Stats header — tappable followers/following */}
       <View style={styles.statsRow}>
         <View style={styles.stat}>
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>{userPosts.length}</Text>
+          <Text style={[styles.statValue, { color: colors.textPrimary }]}>{userPostsTotal}</Text>
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{t('profile_posts')}</Text>
         </View>
         <TouchableOpacity
@@ -236,7 +241,7 @@ export default function UserProfileScreen({ route, navigation }: Props) {
 
       {/* Posts section header */}
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-        {t('profile_posts')} ({userPosts.length})
+        {t('profile_posts')} ({userPostsTotal})
       </Text>
     </View>
   );

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ogmara",
     "slug": "ogmara",
-    "version": "0.40.3",
+    "version": "0.40.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "org.ogmara.app",
-      "versionCode": 54,
+      "versionCode": 55,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0E1621"

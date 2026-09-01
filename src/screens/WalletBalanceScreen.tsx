@@ -33,6 +33,7 @@ import { debugLog } from '../lib/debug';
 import type { MoreStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
+import { formatDateTime } from '../lib/datetime';
 
 interface Asset { assetId: string; name: string; atomic: number; frozen: number; precision: number }
 
@@ -352,7 +353,7 @@ export default function WalletBalanceScreen() {
               <Text style={[styles.assetName, { color: colors.textPrimary }]}>{a.label}</Text>
               <Text style={[styles.assetSub, { color: colors.textSecondary }]} numberOfLines={1}>
                 {tx.counterparty ? `${tx.counterparty.slice(0, 14)}…` : tx.kind}
-                {tx.timestamp ? ` · ${new Date(tx.timestamp).toLocaleDateString()}` : ''}
+                {tx.timestamp ? ` · ${formatDateTime(tx.timestamp)}` : ''}
               </Text>
             </View>
             <Text style={{ color: colors.textSecondary, fontSize: fontSize.lg }}>›</Text>

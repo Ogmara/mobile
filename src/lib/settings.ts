@@ -39,6 +39,12 @@ const KEYS = {
   avatarLocalUri: 'ogmara.avatar_local_uri',
   mediaAutoload: 'ogmara.media_autoload',
   currency: 'ogmara.display_currency',
+  // News Feed resume position — hex msg_id of the topmost visible post per feed
+  // mode, plus a "last viewed" ms timestamp. Reopening within 24h restores the
+  // anchor; idle > 24h opens at the newest post.
+  newsLastReadAll: 'ogmara.news_last_read_all',
+  newsLastReadFollowing: 'ogmara.news_last_read_following',
+  newsLastViewedAt: 'ogmara.news_last_viewed_at',
   // E2E encryption (kept in a separate ogmara.e2e.* namespace so wallet-vault
   // migrations never touch these). deviceId/encKeyBound are public markers; the
   // device enc *private* key lives in SecureStore, not here.

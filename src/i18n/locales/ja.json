@@ -128,6 +128,7 @@
   "chat_no_messages": "まだメッセージがありません。最初の一言を！",
   "news_title": "ニュースフィード",
   "news_no_posts": "まだ投稿がありません",
+  "news_show_new_posts": "新しい投稿を表示",
   "news_new_post": "新規投稿",
   "news_comments": "コメント",
   "settings_title": "設定",

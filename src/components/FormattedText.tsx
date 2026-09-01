@@ -19,9 +19,12 @@ interface Props {
   attachments?: Attachment[];
   /** Base URL for fetching IPFS media via the node. */
   mediaBaseUrl?: string;
+  /** Override the base text colour (e.g. inverse on an own-message bubble).
+   *  Links keep the accent colour regardless. */
+  color?: string;
 }
 
-export default function FormattedText({ content, attachments, mediaBaseUrl }: Props) {
+export default function FormattedText({ content, attachments, mediaBaseUrl, color }: Props) {
   const { colors } = useTheme();
   const segments = useMemo(() => parseMessageContent(content), [content]);
 
@@ -64,7 +67,7 @@ export default function FormattedText({ content, attachments, mediaBaseUrl }: Pr
 
   return (
     <View>
-      <Text style={{ color: colors.textPrimary, fontSize: fontSize.md, lineHeight: 22 }}>
+      <Text style={{ color: color ?? colors.textPrimary, fontSize: fontSize.md, lineHeight: 22 }}>
         {segments.map(renderSegment)}
       </Text>
 

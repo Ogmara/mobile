@@ -17,6 +17,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
 import { NavigationContainer, type NavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { ThemeProvider, useTheme } from './src/theme';
@@ -53,7 +54,7 @@ function AppContent() {
       // Initialize debug mode and global error handler
       await initDebugMode().catch(() => {});
       installGlobalErrorHandler();
-      debugLog('info', 'App starting v0.4.6');
+      debugLog('info', `App starting v${Constants.expoConfig?.version ?? '?'}`);
 
       // Run vault migrations FIRST (safe on every launch)
       await runVaultMigrations().catch((e) => {

@@ -29,6 +29,7 @@ import type { DmConversation } from '@ogmara/sdk';
 import type { DmStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
+import { formatDateTime } from '../lib/datetime';
 
 type NavProp = NativeStackNavigationProp<DmStackParamList, 'DmList'>;
 
@@ -116,7 +117,7 @@ export default function DmListScreen() {
           {item.peer.slice(0, 16)}...
         </Text>
         <Text style={[styles.time, { color: colors.textSecondary }]}>
-          {new Date(item.last_message_at).toLocaleDateString()}
+          {formatDateTime(item.last_message_at)}
         </Text>
       </View>
       {item.unread_count > 0 && (

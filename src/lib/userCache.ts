@@ -14,6 +14,8 @@ export interface CachedUser {
   displayName: string | null;
   avatarCid: string | null;
   bio: string | null;
+  /** Wallet is registered on-chain (profile carries a non-empty public_key). */
+  verified?: boolean;
   lastUpdated: number;
 }
 
@@ -35,6 +37,7 @@ export async function setCachedUser(address: string, data: Partial<CachedUser>):
     displayName: data.displayName ?? existing?.displayName ?? null,
     avatarCid: data.avatarCid ?? existing?.avatarCid ?? null,
     bio: data.bio ?? existing?.bio ?? null,
+    verified: data.verified ?? existing?.verified ?? false,
     lastUpdated: Date.now(),
   };
   await AsyncStorage.setItem(PREFIX + address, JSON.stringify(merged));

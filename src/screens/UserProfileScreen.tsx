@@ -30,6 +30,8 @@ import { MSG_TYPE_NAME } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { SharedStackParams } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import VerifiedBadge from '../components/VerifiedBadge';
+import { formatDateTime } from '../lib/datetime';
 
 type Props = NativeStackScreenProps<SharedStackParams, 'UserProfile'>;
 
@@ -46,7 +48,13 @@ export default function UserProfileScreen({ route, navigation }: Props) {
   const [followingCount, setFollowingCount] = useState(0);
 
   const isOwnProfile = myAddress === profileAddress;
-  const [apiProfile, setApiProfile] = useState<{ display_name?: string; bio?: string; avatar_cid?: string } | null>(null);
+  const [apiProfile, setApiProfile] = useState<{
+    display_name?: string;
+    bio?: string;
+    avatar_cid?: string;
+    public_key?: string;
+  } | null>(null);
+  const verified = !!(apiProfile?.public_key && apiProfile.public_key.length > 0);
 
   // Load local profile data for own profile, API data for others
   useFocusEffect(
@@ -171,9 +179,12 @@ export default function UserProfileScreen({ route, navigation }: Props) {
       </View>
 
       {/* Name + address */}
-      <Text style={[styles.displayName, { color: colors.textPrimary }]}>
-        {displayName || profileAddress.slice(0, 20) + '...'}
-      </Text>
+      <View style={styles.nameRow}>
+        <Text style={[styles.displayName, { color: colors.textPrimary }]}>
+          {displayName || profileAddress.slice(0, 20) + '...'}
+        </Text>
+        <VerifiedBadge verified={verified} size={18} />
+      </View>
       <TouchableOpacity onPress={handleCopyAddress}>
         <Text style={[styles.address, { color: colors.textSecondary }]}>
           {copied ? 'Copied!' : profileAddress}
@@ -317,7 +328,7 @@ export default function UserProfileScreen({ route, navigation }: Props) {
           </>
         )}
         <Text style={[styles.postTime, { color: colors.textSecondary }]}>
-          {new Date(item.timestamp).toLocaleDateString()}
+          {formatDateTime(item.timestamp)}
         </Text>
       </TouchableOpacity>
     );
@@ -350,7 +361,13 @@ const styles = StyleSheet.create({
   },
   avatarImage: { width: 80, height: 80, borderRadius: radius.full },
   avatarText: { fontSize: fontSize.xxl, fontWeight: '700' },
-  displayName: { fontSize: fontSize.xl, fontWeight: '700', textAlign: 'center', marginTop: spacing.md },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.md,
+  },
+  displayName: { fontSize: fontSize.xl, fontWeight: '700', textAlign: 'center' },
   address: { fontSize: fontSize.xs, textAlign: 'center', marginTop: spacing.xs, paddingHorizontal: spacing.lg },
   bio: { fontSize: fontSize.md, textAlign: 'center', marginTop: spacing.md, paddingHorizontal: spacing.xl },
   statsRow: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg, gap: spacing.xl },

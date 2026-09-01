@@ -5,6 +5,52 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.0] - 2026-09-01
+
+### Added
+
+- **News Feed history + resume position.** The feed is now an accumulator, not
+  a fixed 20-post fetch. `onEndReached` autoloads the next-older page; pull-to-
+  refresh loads posts that arrived since (when resumed) or reloads the newest
+  page. Reopening the feed within 24h restores the post you were last looking at
+  as the scroll anchor (a page is fetched each side of it) and scrolls to it;
+  idle over 24h — or a first visit — opens at the newest post. Applies to both
+  the All and Following feeds. Needs l2-node 0.123.0+ / `@ogmara/sdk` 0.52.0+.
+- **Tip on news.** A `💰 Tip` action on every news card (and on the post detail
+  screen) opens the existing `TipDialog` → a KLV transfer to the author, hidden
+  on your own posts. Previously tipping was reachable only from channel chat.
+- **"Show new posts" banner** when a post arrives while you're scrolled into
+  history — tap to reload the newest page and jump to the top (parity with the
+  web/desktop pill).
+- **Verified badge** next to on-chain-registered authors — on news cards, the
+  post detail, chat message headers, and the profile screen (mirrors the web
+  client's `✓`; derived from the profile carrying a `public_key`).
+- **Clickable links.** External `http(s)://` URLs in a news post body and in
+  chat bubbles are now tappable (open in the system browser) via the shared
+  `FormattedText` component, which also renders `**bold**` / `*italic*` /
+  `` `code` `` inline.
+
+### Changed
+
+- News posts (and bookmarks, profile posts, DM list, notifications, wallet
+  history) now show **date and time**, not date only — via a new shared
+  `src/lib/datetime.ts` (`formatDateTime`), ported from the web client so a
+  timestamp reads identically across platforms.
+- Live news WebSocket envelopes are applied **in place** to the affected card
+  (reaction ±1, comment count, edited/deleted) instead of triggering a blanket
+  refresh — the feed no longer jumps to the top on a reaction, and the echo of
+  your own action is skipped.
+- The stale `App starting v0.4.6` debug log now reports the real app version.
+
+### Security
+
+- `npm audit` reports **24 transitive advisories (15 moderate, 9 high)**, all in
+  the Expo SDK / Metro build-and-dev toolchain — none in shipped runtime code.
+  No non-breaking fix exists; the only remedy is `npm audit fix --force` (a
+  breaking bump of the Expo toolchain) which cannot be build-verified in this
+  session. **Deferred to a build-capable session** per the repo's
+  "never fix-force blind" rule; this release adds no dependencies of its own.
+
 ## [0.40.4] - 2026-08-30
 
 ### Fixed

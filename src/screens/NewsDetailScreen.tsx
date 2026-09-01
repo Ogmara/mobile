@@ -17,12 +17,17 @@ import {
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import NewsReactionBar from '../components/NewsReactionBar';
 import PostImage from '../components/PostImage';
+import FormattedText from '../components/FormattedText';
+import VerifiedBadge from '../components/VerifiedBadge';
+import TipDialog from '../components/TipDialog';
 import { ImageViewerModal } from '../components/ImageViewerModal';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
+import { useUserDisplay } from '../hooks/useUserDisplay';
 import { decodeNewsPost } from '../lib/payloadDecoder';
 import { normalizeEnvelope } from '../lib/envelopeNormalizer';
+import { formatDateTime } from '../lib/datetime';
 import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
@@ -55,6 +60,8 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
   const [replySending, setReplySending] = useState(false);
   const [deleted, setDeleted] = useState(false);
   const [viewerImage, setViewerImage] = useState<string | null>(null);
+  const [showTip, setShowTip] = useState(false);
+  const { verified: authorVerified } = useUserDisplay(rawPost?.author);
 
   const post = rawPost ? normalizeEnvelope(rawPost) : null;
   // `Envelope.msg_type` is typed `number` (the signed wire envelope's
@@ -203,10 +210,14 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     >
       <ScrollView style={styles.scroll}>
         <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-          <TouchableOpacity onPress={() => navigation.navigate('UserProfile', { address: post.author })}>
+          <TouchableOpacity
+            style={styles.authorRow}
+            onPress={() => navigation.navigate('UserProfile', { address: post.author })}
+          >
             <Text style={[styles.author, { color: colors.accentPrimary }]}>
               {post.author.slice(0, 20)}...
             </Text>
+            <VerifiedBadge verified={authorVerified} />
           </TouchableOpacity>
 
           {isRepost ? (
@@ -255,7 +266,9 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
                 <Text style={[styles.title, { color: colors.textPrimary }]}>{decoded!.title}</Text>
               ) : null}
 
-              <Text style={[styles.content, { color: colors.textPrimary }]}>{decoded!.content}</Text>
+              <View style={styles.contentWrap}>
+                <FormattedText content={decoded!.content} />
+              </View>
 
               {/* Inline image attachments */}
               {decoded!.attachments && decoded!.attachments.length > 0 && client && (
@@ -275,7 +288,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
           )}
 
           <Text style={[styles.time, { color: colors.textSecondary }]}>
-            {new Date(post.timestamp).toLocaleDateString()}
+            {formatDateTime(post.timestamp)}
           </Text>
 
           {decoded?.tags && decoded.tags.length > 0 && (
@@ -309,6 +322,11 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
                 {bookmarked ? `★ ${t('news_bookmarked')}` : `☆ ${t('news_bookmark')}`}
               </Text>
             </TouchableOpacity>
+            {!isOwn && (
+              <TouchableOpacity style={styles.metaBtn} onPress={() => setShowTip(true)}>
+                <Text style={{ color: colors.textSecondary }}>💰 {t('chat_tip')}</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Owner actions: edit / delete */}
@@ -351,6 +369,11 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
         )}
       </ScrollView>
       <ImageViewerModal uri={viewerImage} onClose={() => setViewerImage(null)} />
+      <TipDialog
+        visible={showTip}
+        recipientAddress={post.author}
+        onClose={() => setShowTip(false)}
+      />
     </KeyboardAwareView>
   );
 }
@@ -360,9 +383,11 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   card: { margin: spacing.md, padding: spacing.md, borderRadius: radius.lg },
-  author: { fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.sm },
+  authorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
+  author: { fontSize: fontSize.sm, fontWeight: '600' },
   title: { fontSize: fontSize.xl, fontWeight: '700', lineHeight: 28, marginBottom: spacing.sm },
   content: { fontSize: fontSize.md, lineHeight: 24, marginBottom: spacing.md },
+  contentWrap: { marginBottom: spacing.md },
   attachRow: { gap: spacing.sm, marginBottom: spacing.md },
   repostQuote: {
     borderWidth: StyleSheet.hairlineWidth,

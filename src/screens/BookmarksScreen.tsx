@@ -24,6 +24,7 @@ import { normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import { debugLog } from '../lib/debug';
 import type { Envelope } from '@ogmara/sdk';
 import { MSG_TYPE_NAME } from '@ogmara/sdk';
+import { formatDateTime } from '../lib/datetime';
 
 export default function BookmarksScreen() {
   const { t } = useTranslation();
@@ -128,7 +129,7 @@ export default function BookmarksScreen() {
           </>
         )}
         <Text style={[styles.time, { color: colors.textSecondary }]}>
-          {new Date(item.timestamp).toLocaleDateString()}
+          {formatDateTime(item.timestamp)}
         </Text>
       </TouchableOpacity>
     );

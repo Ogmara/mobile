@@ -13,6 +13,9 @@ import { getSetting } from '../lib/settings';
 interface UserDisplay {
   displayName: string | null;
   avatarUri: string | null;
+  /** Wallet is registered on-chain — mirrors the web client's
+   *  `!!user.public_key` check. Drives the verified badge on post authors. */
+  verified: boolean;
 }
 
 /** Track which addresses we've already fetched from API to avoid re-fetching */
@@ -20,7 +23,11 @@ const apiFetched = new Set<string>();
 
 export function useUserDisplay(address: string | undefined): UserDisplay {
   const { address: myAddress, displayName: myName, client } = useConnection();
-  const [cached, setCached] = useState<UserDisplay>({ displayName: null, avatarUri: null });
+  const [cached, setCached] = useState<UserDisplay>({
+    displayName: null,
+    avatarUri: null,
+    verified: false,
+  });
 
   useEffect(() => {
     if (!address) return;
@@ -34,13 +41,14 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
     if (address === myAddress) {
       getSetting('avatarLocalUri').then((uri) => {
         if (uri) {
-          setCached({ displayName: myName, avatarUri: uri });
+          setCached((prev) => ({ displayName: myName, avatarUri: uri, verified: prev.verified }));
           return;
         }
         getCachedUser(address).then((user) => {
           setCached({
             displayName: myName ?? user?.displayName ?? null,
             avatarUri: user?.avatarCid && client ? client.getMediaUrl(user.avatarCid) : null,
+            verified: user?.verified ?? false,
           });
         });
       });
@@ -60,10 +68,11 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
     // feed effectively never showed avatars, while the profile screen — which
     // fetches directly — always did.
     getCachedUser(address).then((user) => {
-      if (user?.displayName || user?.avatarCid) {
+      if (user?.displayName || user?.avatarCid || user?.verified) {
         setCached({
           displayName: user.displayName ?? null,
           avatarUri: user.avatarCid && client ? client.getMediaUrl(user.avatarCid) : null,
+          verified: user.verified ?? false,
         });
       }
     });
@@ -80,14 +89,18 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
         if (!user) return;
         const name = user.display_name ?? null;
         const avatarCid = user.avatar_cid ?? null;
-        if (!name && !avatarCid) return; // nothing to show; leave any cache intact
+        // Registered on-chain when the profile carries a non-empty public_key
+        // (same rule as web `profile.ts` / `auth.ts`).
+        const verified = !!(user.public_key && String(user.public_key).length > 0);
+        if (!name && !avatarCid && !verified) return; // nothing to show; leave any cache intact
         setCached((prev) => ({
           // Keep our own context name rather than letting an empty server profile
           // blank it out.
           displayName: name ?? prev.displayName,
           avatarUri: avatarCid ? client.getMediaUrl(avatarCid) : prev.avatarUri,
+          verified,
         }));
-        setCachedUser(address, { displayName: name, avatarCid });
+        setCachedUser(address, { displayName: name, avatarCid, verified });
       }).catch(() => {
         // Allow a retry later in the session rather than marking this address
         // permanently fetched on a transient failure.
@@ -98,7 +111,7 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
 
   // Fast path: own address
   if (address === myAddress && myName) {
-    return { displayName: myName, avatarUri: cached.avatarUri };
+    return { displayName: myName, avatarUri: cached.avatarUri, verified: cached.verified };
   }
 
   return cached;

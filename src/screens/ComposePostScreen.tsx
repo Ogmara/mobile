@@ -179,7 +179,11 @@ export default function ComposePostScreen({ route, navigation }: Props) {
           attachments: uploadedAttachments.length > 0 ? uploadedAttachments : undefined,
         });
       }
-      navigation.goBack();
+      // Return to the feed AND tell it to reload — the WS echo of our own
+      // post/edit is intentionally dropped, and the feed screen stays mounted
+      // (ComposePost is a push on the same stack), so a plain goBack() would
+      // leave a stale list.
+      navigation.navigate('NewsFeed', { refresh: Date.now() });
     } catch (e) {
       showAlert(t('error_generic'), e instanceof Error ? e.message : '');
     } finally {

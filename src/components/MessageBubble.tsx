@@ -27,6 +27,9 @@ import { loadDecryptedMedia } from '../lib/mediaCrypto';
 import { shareFileFromUri } from '../lib/fileShare';
 import { ImageViewerModal } from './ImageViewerModal';
 import ConfirmModal from './ConfirmModal';
+import FormattedText from './FormattedText';
+import VerifiedBadge from './VerifiedBadge';
+import { useUserDisplay } from '../hooks/useUserDisplay';
 
 /** 30-minute edit window matching desktop */
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
@@ -176,6 +179,7 @@ export default function MessageBubble({
 }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const { verified: authorVerified } = useUserDisplay(isOwn ? undefined : message.author);
   const [viewerImage, setViewerImage] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [reactPickerOpen, setReactPickerOpen] = useState(false);
@@ -243,10 +247,14 @@ export default function MessageBubble({
     >
       {/* Author name (hidden for grouped messages or own messages) */}
       {!isOwn && !isGrouped && (
-        <TouchableOpacity onPress={() => onAuthorPress?.(message.author)}>
+        <TouchableOpacity
+          style={styles.authorRow}
+          onPress={() => onAuthorPress?.(message.author)}
+        >
           <Text style={[styles.author, { color: colors.accentPrimary }]}>
             {authorLabel}
           </Text>
+          <VerifiedBadge verified={authorVerified} size={12} />
         </TouchableOpacity>
       )}
 
@@ -273,9 +281,10 @@ export default function MessageBubble({
           : { backgroundColor: colors.bgSecondary, borderBottomLeftRadius: radius.sm },
       ]}>
         {content ? (
-          <Text style={{ color: isOwn ? colors.textInverse : colors.textPrimary, lineHeight: 22 }}>
-            {content}
-          </Text>
+          <FormattedText
+            content={content}
+            color={isOwn ? colors.textInverse : colors.textPrimary}
+          />
         ) : null}
         {/* Inline media attachments */}
         {attachments && attachments.length > 0 && mediaBaseUrl && (
@@ -435,6 +444,11 @@ const styles = StyleSheet.create({
   },
   containerOwn: {
     alignSelf: 'flex-end',
+  },
+  authorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
   },
   author: {
     fontSize: fontSize.xs,

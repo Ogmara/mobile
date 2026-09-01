@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
+import { formatDateTime } from '../lib/datetime';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 type Props = NativeStackScreenProps<any, 'Notifications'>;
@@ -110,7 +111,7 @@ export default function NotificationsScreen({ navigation }: Props) {
     if (diff < 60000) return t('notifications_just_now');
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
-    return new Date(ts).toLocaleDateString();
+    return formatDateTime(ts);
   };
 
   const getLabel = (type: string) => {

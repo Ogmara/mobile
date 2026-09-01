@@ -23,6 +23,7 @@ import * as Notifications from 'expo-notifications';
 import { ThemeProvider, useTheme } from './src/theme';
 import { ConnectionProvider, useConnection } from './src/context/ConnectionContext';
 import { removeJoinedChannel } from './src/lib/joinedChannels';
+import { downloadSyncedObjects } from './src/lib/settingsSync';
 import { getStartScreen, type StartScreen } from './src/lib/settings';
 import { isLockEnabled, getLockTimeout } from './src/lib/appLock';
 import { initDebugMode, installGlobalErrorHandler, debugLog } from './src/lib/debug';
@@ -129,7 +130,34 @@ function AppContent() {
   // screen), this fires regardless of what the user is currently viewing —
   // mirrors web/desktop's always-mounted Sidebar handling, made possible here by
   // the same navigationRef already used for notification-tap navigation above.
-  const { onWsEvent, walletAddress } = useConnection();
+  const { onWsEvent, walletAddress, status } = useConnection();
+
+  // Pull the user's synced objects (channel org, hidden DMs, followed topics)
+  // once the node connection is up, so a fresh device shows them without a
+  // manual restore. Mirrors web/desktop's on-login `pullSyncedObjects()`.
+  useEffect(() => {
+    if (status !== 'connected' || !walletAddress) return;
+    void downloadSyncedObjects();
+  }, [status, walletAddress]);
+
+  // `settings_changed` WS nudge: another device edited the synced settings blob.
+  // Re-pull the object-valued settings (debounced) so this device converges.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsub = onWsEvent((event) => {
+      if (event.type !== 'settings_changed') return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void downloadSyncedObjects();
+      }, 1000);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsub();
+    };
+  }, [onWsEvent]);
+
   useEffect(() => {
     const unsub = onWsEvent((event) => {
       let channelId: number | null = null;

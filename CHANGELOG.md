@@ -5,6 +5,46 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.0] - 2026-09-01
+
+### Added
+
+- **Follow news topics + Hot Topics.** A new **Topics** screen (reachable from
+  the "🔥 Hot topics · Topics" link above the News Feed toggle) lets you follow
+  specific hashtags and organize them into user-named subgroups. Followed
+  topics, groups, and their membership sync across web/desktop/mobile inside the
+  encrypted settings blob (LWW by `updatedAt`; `src/lib/topicGroups.ts`), and a
+  `settings_changed` WebSocket nudge re-pulls them when another device edits.
+  Tapping a single tag, a group, the "Followed Topics" union, or a Hot Topic
+  opens the News Feed as a filtered view over the global stream
+  (`listNews({ tags })`), with a "Filtered by …" bar to clear it. Hashtag chips
+  now render on news cards and are tappable.
+- **Hot Topics list** on the Topics screen — the network's most-used hashtags
+  over a rolling 24h window with per-tag post counts, from
+  `GET /api/v1/news/hot-topics` (l2-node 0.124.0+). Against an older node the
+  SDK degrades to an empty result and the section stays hidden; a node serving
+  only its local view is labelled as such.
+
+### Changed
+
+- On connect, and on every `settings_changed` event, the app now pulls the
+  synced *object* settings (channel organization, hidden DMs, followed topics)
+  via `downloadSyncedObjects()` without touching this device's theme/language.
+- Requires `@ogmara/sdk` 0.53.0+ (adds `getHotTopics`, `listNews({ tags })`,
+  `normalizeHashtag`).
+
+### Security
+
+- `npm audit`: 24 findings (15 moderate, 9 high), **all in dev/build tooling
+  only** — Metro/`@expo/cli`/`image-size`, `xcode`→`uuid` via
+  `@expo/config-plugins`, and `@react-navigation/*`→`query-string`→
+  `decode-uri-component`. None reach shipped app code. The count rose from 17
+  (0.40.3) purely through upstream advisory churn — this release adds no
+  dependencies. The only offered fix is `npm audit fix --force` → `expo@57`
+  (breaking, unverifiable without a full native build), so it stays deferred
+  per the "never fix-force blind" rule; `decode-uri-component` has no fix at
+  any version. Revisit with the Expo SDK 57 upgrade.
+
 ## [0.41.0] - 2026-09-01
 
 ### Added

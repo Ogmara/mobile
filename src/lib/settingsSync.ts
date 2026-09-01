@@ -17,6 +17,7 @@ import { vaultExportKey } from './vault';
 import { ensureChannelOrgLoaded, getChannelOrg, applyRemoteOrg } from './channelOrg';
 import { addJoinedChannels } from './joinedChannels';
 import { ensureHiddenDmsLoaded, getHiddenDms, applyRemoteHiddenDms } from './dmHide';
+import { ensureTopicGroupsLoaded, getTopicGroups, applyRemoteTopicGroups } from './topicGroups';
 
 /** Settings keys that are synced across devices. */
 const SYNC_KEYS = ['theme', 'lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
@@ -26,6 +27,8 @@ const SYNC_KEYS = ['theme', 'lang', 'notificationSound', 'compactLayout', 'fontS
 const CHANNEL_ORG_KEY = 'channelOrg';
 /** Hidden DM conversations (per-peer hide timestamp) — same object-valued pattern. */
 const HIDDEN_DMS_KEY = 'hiddenDms';
+/** Followed news hashtags + user-named subgroups — LWW by `updatedAt` on receipt. */
+const TOPIC_GROUPS_KEY = 'topicGroups';
 
 function fromHex(hex: string): Uint8Array {
   if (!hex || hex.length === 0) return new Uint8Array(0);
@@ -71,6 +74,11 @@ export async function encryptSettings(): Promise<{
   // Hidden DM conversations — per-peer hide timestamps, merged by max() on receipt.
   await ensureHiddenDmsLoaded();
   settings[HIDDEN_DMS_KEY] = getHiddenDms();
+  // Followed news topics — hashtags + subgroups, LWW by `updatedAt` on receipt.
+  // Hydrate first for the same reason channelOrg does: an un-loaded cache is the
+  // module-default emptyTopicGroups() and uploading it would wipe synced state.
+  await ensureTopicGroupsLoaded();
+  settings[TOPIC_GROUPS_KEY] = getTopicGroups();
 
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
   const key = deriveKey(hexKey);
@@ -134,6 +142,12 @@ export async function decryptAndApplySettings(
       await ensureHiddenDmsLoaded();
       applyRemoteHiddenDms(v);
     }
+    // Followed news topics: LWW by `updatedAt` (see topicGroups.ts). Hydrate
+    // first so the comparison runs against this device's real on-disk state.
+    if (k === TOPIC_GROUPS_KEY && v && typeof v === 'object') {
+      await ensureTopicGroupsLoaded();
+      applyRemoteTopicGroups(v);
+    }
   }
 }
 
@@ -142,6 +156,59 @@ export async function uploadSettings(): Promise<void> {
   const data = await encryptSettings();
   const client = await getClient();
   await client.syncSettings(data);
+}
+
+/**
+ * Download the synced blob and apply ONLY the device-local-but-synced object
+ * settings (channel organization, hidden DMs, followed topics) — not
+ * theme/lang/etc. Used for the automatic on-login pull and the `settings_changed`
+ * WS nudge, so a fresh device (or another device after a remote edit) picks up
+ * the user's groups, ordering, hidden conversations, and topic follows without
+ * overriding this device's other prefs. Best-effort: returns false on any failure.
+ */
+export async function downloadSyncedObjects(): Promise<boolean> {
+  try {
+    const client = await getClient();
+    const resp = await client.getSettings();
+    if (!resp) return false;
+    const encrypted = (resp as any).encrypted_settings;
+    const nonce = (resp as any).nonce;
+    if (!Array.isArray(encrypted) || !Array.isArray(nonce)) return false;
+
+    const hexKey = await vaultExportKey();
+    if (!hexKey) return false;
+    const key = deriveKey(hexKey);
+    const cipher = gcm(key, new Uint8Array(nonce));
+    const plaintext = cipher.decrypt(new Uint8Array(encrypted));
+    key.fill(0);
+
+    const settings = JSON.parse(new TextDecoder().decode(plaintext));
+    if (typeof settings !== 'object' || settings === null) return false;
+
+    let applied = false;
+    const org = settings[CHANNEL_ORG_KEY];
+    if (org && typeof org === 'object') {
+      await ensureChannelOrgLoaded();
+      const placedIds = applyRemoteOrg(org);
+      if (placedIds.length) await addJoinedChannels(placedIds);
+      applied = true;
+    }
+    const hidden = settings[HIDDEN_DMS_KEY];
+    if (hidden && typeof hidden === 'object') {
+      await ensureHiddenDmsLoaded();
+      applyRemoteHiddenDms(hidden);
+      applied = true;
+    }
+    const topics = settings[TOPIC_GROUPS_KEY];
+    if (topics && typeof topics === 'object') {
+      await ensureTopicGroupsLoaded();
+      applyRemoteTopicGroups(topics);
+      applied = true;
+    }
+    return applied;
+  } catch {
+    return false;
+  }
 }
 
 /** Download and apply settings from L2 node. Returns true if settings were applied. */

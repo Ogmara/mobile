@@ -6,7 +6,7 @@
  * Includes reaction buttons, repost, and bookmark per backport spec.
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -38,9 +38,15 @@ import { useUserDisplay } from '../hooks/useUserDisplay';
 import { formatDateTime } from '../lib/datetime';
 import { getSetting, setSetting } from '../lib/settings';
 import type { Envelope } from '@ogmara/sdk';
-import { isNewsEnvelope, MSG_TYPE_NAME } from '@ogmara/sdk';
+import { isNewsEnvelope, MSG_TYPE_NAME, normalizeHashtag } from '@ogmara/sdk';
 import type { NewsStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import {
+  ensureTopicGroupsLoaded,
+  getTopicGroups,
+  allFollowedTags,
+  tagsForGroup,
+} from '../lib/topicGroups';
 
 const PAGE = 20;
 const MAX_POSTS = 500;
@@ -61,6 +67,42 @@ export default function NewsFeedScreen() {
   const navigation = useNavigation<NavProp>();
   const route = useRoute<RouteProp<NewsStackParamList, 'NewsFeed'>>();
   const [feedMode, setFeedMode] = useState<FeedMode>('all');
+
+  // --- Topic filter (route params) -------------------------------------
+  // `?tag=` / `?group=` / `?topics=all` turn the feed into a filtered view over
+  // the global news stream (l2-node 0.124.0+ `listNews({ tags })`). The filter
+  // is orthogonal to the All/Following toggle — while it is active the toggle is
+  // hidden and a "Filtered by …" bar with a clear affordance takes its place.
+  const [tgTick, setTgTick] = useState(0);
+  useEffect(() => {
+    void ensureTopicGroupsLoaded().then(() => setTgTick((n) => n + 1));
+  }, []);
+
+  const tagFilter = useMemo<{ tags: string[]; label: string } | null>(() => {
+    const p = route.params ?? {};
+    if (p.tag) {
+      const n = normalizeHashtag(p.tag);
+      return n ? { tags: [n], label: `#${n}` } : null;
+    }
+    if (p.topics === 'all') {
+      return { tags: allFollowedTags(), label: t('news_topics_followed') };
+    }
+    if (p.group) {
+      const g = getTopicGroups().groups.find((x) => x.id === p.group);
+      return { tags: tagsForGroup(p.group), label: g?.name || t('news_topics_followed') };
+    }
+    return null;
+    // tgTick: re-resolve group/union tags once topicGroups has hydrated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.params?.tag, route.params?.group, route.params?.topics, tgTick, t]);
+
+  const tagKey = useMemo(() => tagFilter?.tags.join(',') ?? '', [tagFilter]);
+  const tagFilterRef = useRef(tagFilter);
+  tagFilterRef.current = tagFilter;
+
+  const clearFilter = useCallback(() => {
+    navigation.setParams({ tag: undefined, group: undefined, topics: undefined });
+  }, [navigation]);
 
   // --- Feed accumulator ---------------------------------------------------
   // The feed is a growing list, not a fixed page. `onEndReached` autoloads the
@@ -110,17 +152,30 @@ export default function NewsFeedScreen() {
   const fetchPage = useCallback(
     async (opts: { before?: string; after?: string }): Promise<{ posts: Envelope[]; hasMore: boolean }> => {
       if (!client) return { posts: [], hasMore: false };
-      const resp =
-        feedMode === 'following' && signer
-          ? await client.getFeed({ limit: PAGE, ...opts })
-          : await client.listNews({ limit: PAGE, ...opts });
+      const tf = tagFilterRef.current;
+      let resp: unknown;
+      if (tf) {
+        // An empty tag set (a group with no tags, or "followed" with no follows)
+        // has no possible matches — don't hit the network for it.
+        if (tf.tags.length === 0) return { posts: [], hasMore: false };
+        resp = await client.listNews({ limit: PAGE, tags: tf.tags, ...opts });
+      } else if (feedMode === 'following' && signer) {
+        resp = await client.getFeed({ limit: PAGE, ...opts });
+      } else {
+        resp = await client.listNews({ limit: PAGE, ...opts });
+      }
       const list = normalizeEnvelopes((resp as any).posts ?? []) as Envelope[];
       return { posts: list, hasMore: (resp as any).has_more ?? list.length >= PAGE };
     },
-    [client, feedMode, signer],
+    // tagKey: rebuild fetchPage when the filter's tag set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [client, feedMode, signer, tagKey],
   );
 
   const persistPosition = useCallback(() => {
+    // A filtered view has its own transient list — never let it overwrite the
+    // main feed's resume anchor.
+    if (tagFilterRef.current) return;
     if (postsRef.current.length === 0) return;
     const id = topVisibleRef.current || msgIdHex(postsRef.current[0]);
     if (id) void setSetting(lastReadKey(), id);
@@ -133,7 +188,7 @@ export default function NewsFeedScreen() {
     setNewPosts(0);
     setPosts([]);
     try {
-      if (feedMode === 'following' && !signer) {
+      if (feedMode === 'following' && !signer && !tagFilterRef.current) {
         setHasMoreOlder(false);
         setHasMoreNewer(false);
         atNewestRef.current = true;
@@ -144,7 +199,9 @@ export default function NewsFeedScreen() {
         getSetting('newsLastViewedAt'),
       ]);
       const viewedAt = Number(viewedAtRaw ?? 0);
-      const stale = !savedId || Date.now() - viewedAt > RESUME_WINDOW_MS;
+      // A filtered view never resumes from the saved anchor — it always loads
+      // its own newest page.
+      const stale = !!tagFilterRef.current || !savedId || Date.now() - viewedAt > RESUME_WINDOW_MS;
 
       if (stale) {
         const { posts: fresh, hasMore } = await fetchPage({});
@@ -307,6 +364,15 @@ export default function NewsFeedScreen() {
 
       if (type === 'NewsPost' || type === 'NewsRepost') {
         if (mine) return;
+        const tf = tagFilterRef.current;
+        if (tf) {
+          if (tf.tags.length === 0) return;
+          const raw = decodeNewsPost(env?.payload)?.tags ?? [];
+          const norm = new Set(
+            raw.map((x) => normalizeHashtag(x)).filter((x): x is string => !!x),
+          );
+          if (!tf.tags.some((x) => norm.has(x))) return;
+        }
         if (atNewestRef.current) void loadNewer();
         else setNewPosts((n) => n + 1);
         return;
@@ -351,11 +417,11 @@ export default function NewsFeedScreen() {
     return unsubscribe;
   }, [onWsEvent, applyNewsEnvelope]);
 
-  // Load on mount and whenever the feed mode / auth state changes.
+  // Load on mount and whenever the feed mode / auth state / topic filter changes.
   useEffect(() => {
     void initFeed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedMode, signer, client]);
+  }, [feedMode, signer, client, tagKey]);
 
   // After a resume load, scroll to the saved anchor once rows are laid out.
   // `scrollToIndex` on a far index with variable-height rows often can't
@@ -447,18 +513,43 @@ export default function NewsFeedScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
-      {/* Feed mode toggle */}
-      {signer && (
-        <View style={styles.feedToggle}>
-          <SegmentedControl
-            segments={[
-              { value: 'all', label: t('news_all') },
-              { value: 'following', label: t('news_following') },
-            ]}
-            value={feedMode}
-            onChange={setFeedMode}
-          />
+      {tagFilter ? (
+        /* Active topic filter — replaces the All/Following toggle. */
+        <View style={[styles.filterBar, { backgroundColor: colors.bgSecondary }]}>
+          <Text style={[styles.filterBarText, { color: colors.textPrimary }]} numberOfLines={1}>
+            {tagFilter.label}
+          </Text>
+          <TouchableOpacity onPress={clearFilter} hitSlop={8}>
+            <Text style={[styles.filterBarClear, { color: colors.accentPrimary }]}>
+              ✕ {t('news_filter_clear')}
+            </Text>
+          </TouchableOpacity>
         </View>
+      ) : (
+        <>
+          <TouchableOpacity
+            style={styles.topicsLink}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate('Topics')}
+          >
+            <Text style={[styles.topicsLinkText, { color: colors.accentPrimary }]}>
+              🔥 {t('news_hot_topics_title')}  ·  {t('news_topics_title')}
+            </Text>
+          </TouchableOpacity>
+          {/* Feed mode toggle */}
+          {signer && (
+            <View style={styles.feedToggle}>
+              <SegmentedControl
+                segments={[
+                  { value: 'all', label: t('news_all') },
+                  { value: 'following', label: t('news_following') },
+                ]}
+                value={feedMode}
+                onChange={setFeedMode}
+              />
+            </View>
+          )}
+        </>
       )}
       {newPosts > 0 && (
         <TouchableOpacity
@@ -728,6 +819,25 @@ function NewsCard({
               ))}
             </View>
           )}
+          {/* Hashtag chips — tap to open the feed filtered to that topic. */}
+          {decoded?.tags && decoded.tags.length > 0 && (
+            <View style={styles.tagRow}>
+              {decoded.tags.slice(0, 6).map((raw) => {
+                const n = normalizeHashtag(raw);
+                if (!n) return null;
+                return (
+                  <TouchableOpacity
+                    key={n}
+                    style={[styles.tagChip, { backgroundColor: colors.bgTertiary }]}
+                    activeOpacity={0.7}
+                    onPress={() => navigation.navigate('NewsFeed', { tag: n })}
+                  >
+                    <Text style={[styles.tagChipText, { color: colors.accentPrimary }]}>#{n}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
         </>
       )}
       <Text style={[styles.time, { color: colors.textSecondary }]}>
@@ -773,6 +883,30 @@ function NewsCard({
 const styles = StyleSheet.create({
   container: { flex: 1 },
   feedToggle: { marginHorizontal: spacing.md, marginTop: spacing.sm, marginBottom: spacing.xs },
+  topicsLink: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
+  topicsLinkText: { fontSize: fontSize.sm, fontWeight: '600' },
+  filterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
+  filterBarText: { flex: 1, fontSize: fontSize.md, fontWeight: '600', marginRight: spacing.sm },
+  filterBarClear: { fontSize: fontSize.sm, fontWeight: '600' },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: spacing.xs },
+  tagChip: {
+    borderRadius: radius.full,
+    paddingVertical: 2,
+    paddingHorizontal: spacing.sm,
+    marginRight: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  tagChipText: { fontSize: fontSize.xs, fontWeight: '600' },
   newPostsPill: {
     alignSelf: 'center',
     marginTop: spacing.xs,

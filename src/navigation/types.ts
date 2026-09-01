@@ -6,8 +6,9 @@ export type NewsStackParamList = {
   /** `refresh` (a fresh Date.now()) tells the feed to reload the newest page and
    *  jump to the top — set by ComposePost after a successful post/edit, since
    *  the WS echo of the user's own write is intentionally not applied. */
-  NewsFeed: { refresh?: number } | undefined;
+  NewsFeed: { refresh?: number; tag?: string; group?: string; topics?: 'all' } | undefined;
   NewsDetail: { msgId: string; post?: any };
+  Topics: undefined;
   ComposePost: {
     editMsgId?: string;
     editTitle?: string;

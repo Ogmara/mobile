@@ -33,6 +33,7 @@ import type {
 // Screens
 import NewsFeedScreen from '../screens/NewsFeedScreen';
 import NewsDetailScreen from '../screens/NewsDetailScreen';
+import TopicsScreen from '../screens/TopicsScreen';
 import ChatScreen from '../screens/ChatScreen';
 import ChannelMessagesScreen from '../screens/ChannelMessagesScreen';
 import DmListScreen from '../screens/DmListScreen';
@@ -67,6 +68,7 @@ function NewsTab() {
     <NewsStack.Navigator screenOptions={{ headerShown: false }}>
       <NewsStack.Screen name="NewsFeed" component={NewsFeedScreen} />
       <NewsStack.Screen name="NewsDetail" component={NewsDetailScreen} options={{ headerShown: true, title: '' }} />
+      <NewsStack.Screen name="Topics" component={TopicsScreen} options={{ headerShown: true, title: '' }} />
       <NewsStack.Screen name="ComposePost" component={ComposePostScreen} />
       <NewsStack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: true, title: 'Profile' }} />
       <NewsStack.Screen name="FollowList" component={FollowListScreen} options={{ headerShown: true, title: '' }} />
@@ -146,7 +148,7 @@ const MORE_STACK_SCREENS_WITH_OWN_HEADER = [
   'UserProfile',
   'FollowList',
 ];
-const NEWS_STACK_SCREENS_WITH_OWN_HEADER = ['NewsDetail', 'UserProfile', 'FollowList'];
+const NEWS_STACK_SCREENS_WITH_OWN_HEADER = ['NewsDetail', 'Topics', 'UserProfile', 'FollowList'];
 const CHAT_STACK_SCREENS_WITH_OWN_HEADER = ['UserProfile', 'FollowList'];
 const DM_STACK_SCREENS_WITH_OWN_HEADER = ['UserProfile', 'FollowList'];
 const SEARCH_STACK_SCREENS_WITH_OWN_HEADER = ['NewsDetail', 'UserProfile', 'FollowList'];

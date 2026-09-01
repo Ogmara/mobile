@@ -5,6 +5,24 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.0] - 2026-09-01
+
+### Fixed
+
+- **Followed topics, channel groups and hidden DMs now sync across nodes, not
+  just when every device happens to be on the same node.** Needs l2-node
+  0.125.0+ (gossips the encrypted settings blob on the profile topic) and
+  `@ogmara/sdk` 0.54.0. `encryptSettings` now sends a cleartext `updated_at`
+  (max `updatedAt` across the synced objects) as the node's last-writer-wins
+  key, and `downloadSyncedObjects()` (on connect + on `settings_changed`)
+  re-uploads this device's copy once when it is newer than the node's, or when
+  the node has none — seeding that node so the mesh converges.
+
+### Security
+
+- `npm audit`: unchanged from 0.42.0 (no dependencies added) — 24 findings, all
+  dev/build tooling, `expo@57`-gated, see the 0.42.0 note.
+
 ## [0.42.0] - 2026-09-01
 
 ### Added

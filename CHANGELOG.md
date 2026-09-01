@@ -5,6 +5,18 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.0] - 2026-09-01
+
+### Added
+
+- **Topic groups are selectable straight from the News Feed.** Once you follow a
+  topic or create a group, the All / Following toggle is replaced by a
+  horizontally-scrollable pill strip: `All · Following · 🏷️ Followed · 📁 <group>
+  …`, with a trailing `🔥 Topics` pill for the manage screen. Tapping a pill
+  filters the feed in place; the strip scrolls when there are more groups than
+  fit. Until the first follow/group exists nothing changes (plain All/Following
+  toggle), so the row only appears when it earns its space.
+
 ## [0.43.1] - 2026-09-01
 
 ### Fixed

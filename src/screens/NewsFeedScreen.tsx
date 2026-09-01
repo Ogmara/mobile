@@ -22,6 +22,7 @@ import {
 import NewsReactionBar from '../components/NewsReactionBar';
 import PostImage from '../components/PostImage';
 import SegmentedControl from '../components/SegmentedControl';
+import FeedScopeStrip, { type ScopePill } from '../components/FeedScopeStrip';
 import VerifiedBadge from '../components/VerifiedBadge';
 import TipDialog from '../components/TipDialog';
 import { ImageViewerModal } from '../components/ImageViewerModal';
@@ -43,6 +44,7 @@ import type { NewsStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
 import {
   ensureTopicGroupsLoaded,
+  subscribeTopicGroups,
   getTopicGroups,
   allFollowedTags,
   tagsForGroup,
@@ -76,6 +78,9 @@ export default function NewsFeedScreen() {
   const [tgTick, setTgTick] = useState(0);
   useEffect(() => {
     void ensureTopicGroupsLoaded().then(() => setTgTick((n) => n + 1));
+    // Re-render the scope strip when groups/follows change (managed on the
+    // Topics screen, or applied from a remote settings sync).
+    return subscribeTopicGroups(() => setTgTick((n) => n + 1));
   }, []);
 
   const tagFilter = useMemo<{ tags: string[]; label: string } | null>(() => {
@@ -99,6 +104,46 @@ export default function NewsFeedScreen() {
   const tagKey = useMemo(() => tagFilter?.tags.join(',') ?? '', [tagFilter]);
   const tagFilterRef = useRef(tagFilter);
   tagFilterRef.current = tagFilter;
+
+  // --- Scope strip (All / Following / Followed / groups) --------------
+  // tgTick makes this recompute after hydrate + on any topic-groups change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const tg = useMemo(() => getTopicGroups(), [tgTick]);
+  const useScopeStrip = tg.groups.length > 0 || tg.follows.length > 0;
+  // A bare `?tag=` (from an in-post hashtag chip) has no pill — keep the
+  // "Filtered by #tag ✕" bar for that; groups / Followed show as an active pill.
+  const adhocTagFilter =
+    !!route.params?.tag && !route.params?.group && route.params?.topics !== 'all';
+
+  const scopePills = useMemo<ScopePill[]>(() => {
+    const pills: ScopePill[] = [{ key: 'all', label: t('news_all') }];
+    if (signer) pills.push({ key: 'following', label: t('news_following') });
+    if (tg.follows.length > 0) {
+      pills.push({ key: 'followed', label: t('news_topics_followed'), icon: '🏷️' });
+    }
+    for (const g of tg.groups) pills.push({ key: g.id, label: g.name, icon: '📁' });
+    return pills;
+  }, [tg, signer, t]);
+
+  const activeScope = route.params?.group
+    ? route.params.group
+    : route.params?.topics === 'all'
+      ? 'followed'
+      : feedMode;
+
+  const handleScopeSelect = useCallback(
+    (key: string) => {
+      if (key === 'all' || key === 'following') {
+        navigation.setParams({ tag: undefined, group: undefined, topics: undefined });
+        setFeedMode(key);
+      } else if (key === 'followed') {
+        navigation.setParams({ tag: undefined, group: undefined, topics: 'all' });
+      } else {
+        navigation.setParams({ tag: undefined, topics: undefined, group: key });
+      }
+    },
+    [navigation],
+  );
 
   const clearFilter = useCallback(() => {
     navigation.setParams({ tag: undefined, group: undefined, topics: undefined });
@@ -513,11 +558,11 @@ export default function NewsFeedScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
-      {tagFilter ? (
-        /* Active topic filter — replaces the All/Following toggle. */
+      {adhocTagFilter ? (
+        /* Ad-hoc single-tag filter (in-post hashtag chip) — no matching pill. */
         <View style={[styles.filterBar, { backgroundColor: colors.bgSecondary }]}>
           <Text style={[styles.filterBarText, { color: colors.textPrimary }]} numberOfLines={1}>
-            {tagFilter.label}
+            {tagFilter?.label}
           </Text>
           <TouchableOpacity onPress={clearFilter} hitSlop={8}>
             <Text style={[styles.filterBarClear, { color: colors.accentPrimary }]}>
@@ -525,6 +570,16 @@ export default function NewsFeedScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+      ) : useScopeStrip ? (
+        /* All / Following / Followed / one pill per group, horizontally
+           scrollable — appears once the user has a group or a followed topic. */
+        <FeedScopeStrip
+          pills={scopePills}
+          activeKey={activeScope}
+          onSelect={handleScopeSelect}
+          onManage={() => navigation.navigate('Topics')}
+          manageLabel={t('news_topics_title')}
+        />
       ) : (
         <>
           <TouchableOpacity
@@ -536,7 +591,7 @@ export default function NewsFeedScreen() {
               🔥 {t('news_hot_topics_title')}  ·  {t('news_topics_title')}
             </Text>
           </TouchableOpacity>
-          {/* Feed mode toggle */}
+          {/* Feed mode toggle (until the user creates a topic group) */}
           {signer && (
             <View style={styles.feedToggle}>
               <SegmentedControl

@@ -12,7 +12,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { gcm } from '@noble/ciphers/aes';
 import { randomBytes } from '@noble/ciphers/webcrypto';
 import { getSetting, setSetting } from './settings';
-import { getClient } from './api';
+import { getCryptoClient } from './cryptoEnv';
 import { vaultExportKey } from './vault';
 import { ensureChannelOrgLoaded, getChannelOrg, applyRemoteOrg } from './channelOrg';
 import { addJoinedChannels } from './joinedChannels';
@@ -54,6 +54,19 @@ function remoteContentTimestamp(settings: Record<string, unknown>): number {
     ? Object.values(hidden).reduce((m, v) => (typeof v === 'number' && v > m ? v : m), 0)
     : 0;
   return Math.max(org?.updatedAt ?? 0, tg?.updatedAt ?? 0, hiddenMax);
+}
+
+/**
+ * The signer-bound SDK client. `GET /api/v1/settings` and `syncSettings` are
+ * authenticated, so they MUST use the client ConnectionContext calls
+ * `.withSigner()` on — NOT the signer-less singleton in `api.ts`, which throws
+ * "Signer required" (and can surface as "undefined is not a function" when an
+ * older bundle lacks `syncSettings`). Same pattern as `dmCrypto` / `channelCrypto`.
+ */
+function authedClient(): NonNullable<ReturnType<typeof getCryptoClient>> {
+  const c = getCryptoClient();
+  if (!c) throw new Error('Not connected — sign in first');
+  return c;
 }
 
 function fromHex(hex: string): Uint8Array {
@@ -185,7 +198,7 @@ export async function decryptAndApplySettings(
 /** Upload current settings to L2 node. */
 export async function uploadSettings(): Promise<void> {
   const data = await encryptSettings();
-  const client = await getClient();
+  const client = authedClient();
   await client.syncSettings(data);
 }
 
@@ -203,7 +216,7 @@ export async function downloadSyncedObjects(): Promise<boolean> {
     // re-seed upload run against this device's real on-disk state.
     await Promise.all([ensureChannelOrgLoaded(), ensureHiddenDmsLoaded(), ensureTopicGroupsLoaded()]);
 
-    const client = await getClient();
+    const client = authedClient();
     const resp = await client.getSettings();
     if (!resp) {
       // Fresh node with nothing for this wallet. If THIS device holds real
@@ -258,7 +271,7 @@ export async function downloadSyncedObjects(): Promise<boolean> {
 
 /** Download and apply settings from L2 node. Returns true if settings were applied. */
 export async function downloadSettings(): Promise<boolean> {
-  const client = await getClient();
+  const client = authedClient();
   const resp = await client.getSettings();
   if (!resp) return false;
   const encrypted = (resp as any).encrypted_settings;

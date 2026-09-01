@@ -5,6 +5,19 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.1] - 2026-09-01
+
+### Fixed
+
+- **Settings sync never worked on mobile at all** — "Upload Settings" /
+  "Download Settings" (and the automatic on-connect / `settings_changed` pull)
+  errored with "Signer required" / "undefined is not a function". `settingsSync.ts`
+  was calling the **signer-less** `getClient()` singleton from `lib/api.ts`
+  instead of the signer-bound client `ConnectionContext` attaches the wallet to.
+  Now uses `getCryptoClient()` from `lib/cryptoEnv.ts`, the same
+  authenticated-client accessor `dmCrypto` / `channelCrypto` use. This is why
+  mobile was the one client not receiving cross-device settings.
+
 ## [0.43.0] - 2026-09-01
 
 ### Fixed

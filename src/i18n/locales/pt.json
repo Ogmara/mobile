@@ -118,7 +118,7 @@
   "tip_failed": "Gorjeta falhou",
   "tip_view_tx": "Ver transação",
   "register_title": "Registro na blockchain",
-  "register_confirm": "Registre sua identidade na blockchain Klever. Isso custa aproximadamente 4,4 KLV em taxas.",
+  "register_confirm": "Regista a tua identidade na blockchain Klever. Custa cerca de 4,4 KLV em taxas de rede, mais a taxa de verificação on-chain, se estiver definida.",
   "register_proceed": "Registrar",
   "register_button": "Registrar na blockchain",
   "register_success": "Registro enviado",
@@ -315,5 +315,6 @@
   "tx_contract": "Chamada de contrato",
   "e2e_decrypting": "🔒 Descriptografando…",
   "e2e_attachment": "anexo criptografado",
-  "wallet_currency": "Moeda de exibição"
+  "wallet_currency": "Moeda de exibição",
+  "register_confirm_fee": "Verificar a tua carteira on-chain custa {fee} KLV, mais cerca de 4,4 KLV em taxas de rede. Uma parte da taxa vai para o operador do nó através do qual te verificas. Verificar desbloqueia a edição das tuas publicações e mensagens, a criação e gestão de canais, e a moderação."
 }

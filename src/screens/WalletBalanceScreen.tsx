@@ -22,6 +22,7 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
 import { fetchAccountData, formatTokenAmount, fetchAssetMeta } from '../lib/klever';
+import { loadRegistrationCost } from '../lib/registration';
 import { sendTransfer, registerUser, getExplorerTxUrl, getExplorerAddressUrl, getExplorerStakingUrl } from '../lib/kleverTx';
 import { vaultExportKey } from '../lib/vault';
 import { loadPrices, loadForex, fiatValue, formatFiat, SUPPORTED_CURRENCIES, type Currency, type TokenPrice } from '../lib/prices';
@@ -148,16 +149,33 @@ export default function WalletBalanceScreen() {
     showAlert(t('wallet_copy_address'), t('channel_invite_link_copied'));
   };
 
-  const handleRegister = useCallback(() => {
+  const handleRegister = useCallback(async () => {
     if (!signer) return;
-    showAlert(t('register_title'), t('register_confirm'), [
+    // Guard BEFORE the await: the lookup is a network round-trip, and an
+    // unguarded button lets repeated taps queue duplicate lookups and stack
+    // confirmation dialogs on a slow node.
+    setBusy(true);
+    // Read the live cost first so the confirmation states what will actually
+    // be charged. A failed lookup falls back to the generic message rather
+    // than blocking verification.
+    const cost = await loadRegistrationCost();
+    setBusy(false);
+    showAlert(
+      t('register_title'),
+      cost.known && cost.feeAtomic > 0
+        ? t('register_confirm_fee').replace('{fee}', cost.feeKlv)
+        : t('register_confirm'),
+      [
       { text: t('cancel'), style: 'cancel' },
       {
         text: t('register_proceed'),
         onPress: async () => {
           setBusy(true);
           try {
-            const txHash = await registerUser(signer.publicKeyHex);
+            const txHash = await registerUser(signer.publicKeyHex, {
+              feeAtomic: cost.known ? cost.feeAtomic : undefined,
+              viaNode: cost.operatorAddress ?? undefined,
+            });
             const url = await getExplorerTxUrl(txHash);
             showAlert(t('register_success'), t('register_tx_sent'), [
               { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },

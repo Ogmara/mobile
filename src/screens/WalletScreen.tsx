@@ -25,6 +25,7 @@ import type { MoreStackParamList } from '../navigation/types';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { vaultExportKey } from '../lib/vault';
+import { loadRegistrationCost } from '../lib/registration';
 import { registerUser, getExplorerTxUrl } from '../lib/kleverTx';
 import { debugLog } from '../lib/debug';
 import * as Clipboard from 'expo-clipboard';
@@ -137,9 +138,20 @@ export default function WalletScreen() {
 
   const handleRegister = async () => {
     if (!signer) return;
+    // Guard BEFORE the await: the lookup is a network round-trip, and an
+    // unguarded button lets repeated taps queue duplicate lookups and stack
+    // confirmation dialogs on a slow node.
+    setRegistering(true);
+    // Read the live cost first so the confirmation states what will actually
+    // be charged. A failed lookup degrades to the generic message rather than
+    // blocking verification — the wallet still shows the real amount.
+    const cost = await loadRegistrationCost();
+    setRegistering(false);
     showAlert(
       t('register_title'),
-      t('register_confirm'),
+      cost.known && cost.feeAtomic > 0
+        ? t('register_confirm_fee').replace('{fee}', cost.feeKlv)
+        : t('register_confirm'),
       [
         { text: t('cancel'), style: 'cancel' },
         {
@@ -147,7 +159,10 @@ export default function WalletScreen() {
           onPress: async () => {
             setRegistering(true);
             try {
-              const txHash = await registerUser(signer.publicKeyHex);
+              const txHash = await registerUser(signer.publicKeyHex, {
+                feeAtomic: cost.known ? cost.feeAtomic : undefined,
+                viaNode: cost.operatorAddress ?? undefined,
+              });
               const url = await getExplorerTxUrl(txHash);
               showAlert(
                 t('register_success'),

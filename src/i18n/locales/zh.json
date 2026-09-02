@@ -118,7 +118,7 @@
   "tip_failed": "打赏失败",
   "tip_view_tx": "查看交易",
   "register_title": "链上注册",
-  "register_confirm": "在Klever区块链上注册您的身份。交易手续费约4.4 KLV。",
+  "register_confirm": "在 Klever 区块链上注册你的身份。需支付约 4.4 KLV 的网络费用，以及已设置的链上验证费用（如有）。",
   "register_proceed": "注册",
   "register_button": "链上注册",
   "register_success": "注册已提交",
@@ -315,5 +315,6 @@
   "tx_contract": "合约调用",
   "e2e_decrypting": "🔒 正在解密…",
   "e2e_attachment": "加密附件",
-  "wallet_currency": "显示货币"
+  "wallet_currency": "显示货币",
+  "register_confirm_fee": "链上验证钱包需要 {fee} KLV，另加约 4.4 KLV 的网络费用。部分费用将支付给你所使用的节点运营者。完成验证后即可编辑你的帖子和消息、创建和管理频道，以及进行管理操作。"
 }

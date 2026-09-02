@@ -118,7 +118,7 @@
   "tip_failed": "Trinkgeld fehlgeschlagen",
   "tip_view_tx": "Transaktion anzeigen",
   "register_title": "On-Chain-Registrierung",
-  "register_confirm": "Registriere deine Identität auf der Klever-Blockchain. Dies kostet ca. 4,4 KLV an Transaktionsgebühren.",
+  "register_confirm": "Registriere deine Identität in der Klever-Blockchain. Das kostet etwa 4,4 KLV Netzwerkgebühren zuzüglich der On-Chain-Verifizierungsgebühr, sofern eine festgelegt ist.",
   "register_proceed": "Registrieren",
   "register_button": "On-Chain registrieren",
   "register_success": "Registrierung eingereicht",
@@ -315,5 +315,6 @@
   "tx_contract": "Contract-Aufruf",
   "e2e_decrypting": "🔒 Wird entschlüsselt…",
   "e2e_attachment": "verschlüsselter Anhang",
-  "wallet_currency": "Anzeigewährung"
+  "wallet_currency": "Anzeigewährung",
+  "register_confirm_fee": "Die On-Chain-Verifizierung deiner Wallet kostet {fee} KLV zuzüglich etwa 4,4 KLV Netzwerkgebühren. Ein Teil der Gebühr geht an den Betreiber der Node, über die du dich verifizierst. Die Verifizierung schaltet das Bearbeiten deiner Beiträge und Nachrichten, das Erstellen und Verwalten von Kanälen sowie Moderation frei."
 }

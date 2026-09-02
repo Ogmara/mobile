@@ -118,7 +118,7 @@
   "tip_failed": "Propina fallida",
   "tip_view_tx": "Ver transacción",
   "register_title": "Registro en cadena",
-  "register_confirm": "Registra tu identidad en la blockchain Klever. Esto cuesta aproximadamente 4,4 KLV en comisiones.",
+  "register_confirm": "Registra tu identidad en la cadena de bloques Klever. Cuesta unos 4,4 KLV en tarifas de red, más la tarifa de verificación en cadena si hay alguna establecida.",
   "register_proceed": "Registrar",
   "register_button": "Registrar en cadena",
   "register_success": "Registro enviado",
@@ -315,5 +315,6 @@
   "tx_contract": "Llamada a contrato",
   "e2e_decrypting": "🔒 Descifrando…",
   "e2e_attachment": "adjunto cifrado",
-  "wallet_currency": "Moneda de visualización"
+  "wallet_currency": "Moneda de visualización",
+  "register_confirm_fee": "Verificar tu monedero en cadena cuesta {fee} KLV, más unos 4,4 KLV de tarifas de red. Una parte de la tarifa va al operador del nodo a través del cual te verificas. Verificar desbloquea la edición de tus publicaciones y mensajes, la creación y gestión de canales, y la moderación."
 }

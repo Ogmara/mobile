@@ -9,6 +9,7 @@
  * token transfers, device delegation, governance voting, key rotation.
  */
 
+import { addressToPubkey } from '@ogmara/sdk';
 import { vaultGetSigner } from './vault';
 import { getKleverNetwork } from './klever';
 import type { KleverNetwork } from './klever';
@@ -31,14 +32,46 @@ const PROVIDERS: Record<KleverNetwork, KleverProvider> = {
   },
 };
 
-/** Ogmara KApp smart contract address. Set via setContractAddress(). */
-let scAddress = '';
+/**
+ * The canonical Ogmara KApp address per network, PINNED in the app.
+ *
+ * Never taken on the connected node's word. The node is user-chosen and anyone
+ * may run one, so trusting it to name the contract lets a hostile operator
+ * point `register` at a contract they control — and that call now carries a
+ * real KLV payment, so the fee would go to them with no refund.
+ */
+const PINNED_CONTRACTS: Record<string, string> = {
+  testnet: 'klv1qqqqqqqqqqqqqpgq0ja2j7xwz843ryfsk9vlz6xzsaak590h6pgq7nwr02',
+  mainnet: 'klv1qqqqqqqqqqqqqpgq8c9yag9vuc2pe64fwvqsq9e8ul8w5zuglf5qfgh7z3',
+};
 
-/** Set the smart contract address (called after fetching node stats). */
+/** Ogmara KApp smart contract address (client-pinned per network). */
+let scAddress = '';
+/** True when `scAddress` is client-pinned rather than node-supplied. */
+let scAddressPinned = false;
+
+/**
+ * Record the contract address the connected node reports.
+ *
+ * ADVISORY ONLY: a mismatch against the pin for the node's network is refused.
+ * The node does not get to choose where the user's money goes. Async because
+ * the network itself is resolved asynchronously on mobile.
+ */
 export function setContractAddress(address: string): void {
-  if (address && address.startsWith('klv1') && address.length >= 40) {
-    scAddress = address;
+  if (!address || !address.startsWith('klv1') || address.length < 40) return;
+  // Accept only one of the addresses this app ships with. Checking membership
+  // rather than the pin for the *current* network keeps this synchronous (the
+  // network resolves asynchronously on mobile, and the caller is
+  // fire-and-forget) while giving the same protection: an attacker's own
+  // contract is never adopted. A cross-network mismatch is not a theft vector
+  // — both are our contracts — and fails safely on-chain, since the provider
+  // URLs are derived separately and the contract will not exist there.
+  if (!Object.values(PINNED_CONTRACTS).includes(address)) {
+    console.warn('[Klever SC] node reported a non-pinned contract address; ignoring it.');
+    return;
   }
+  scAddress = address;
+  scAddressPinned = true;
 }
 
 /** Ogmara's own Klever block explorer (kleverchain.org). */
@@ -288,11 +321,23 @@ async function invokeContract(params: {
   if (!scAddress) {
     throw new Error('Smart contract address not configured');
   }
+  // Never send money to a contract address the app did not pin.
+  if (params.value && !scAddressPinned) {
+    throw new Error(
+      'Refusing to send a payment to a contract address supplied by the node.',
+    );
+  }
   const callData = [params.functionName, ...params.args].join('@');
   const payload: Record<string, unknown> = {
     scType: 0,
     address: scAddress,
-    callValue: params.value ? { KLV: params.value.toString() } : {},
+    // MUST be a JSON number. The Klever node refuses a string at JSON decode
+    // ("cannot unmarshal string into Go struct field
+    // SmartContractRequest.callValue of type int64") — verified against live
+    // testnet on BOTH the extension and direct-RPC signing paths. An empty
+    // `{}` is correct when no value is attached, which is why this went
+    // unnoticed: no payable SC call had ever shipped.
+    callValue: params.value ? { KLV: params.value } : {},
   };
   return buildSignBroadcast(
     [{ type: 63, payload }],
@@ -302,11 +347,47 @@ async function invokeContract(params: {
 
 // --- On-Chain Operations ---
 
-/** Register user on the Ogmara smart contract. Cost: ~4.4 KLV. */
-export async function registerUser(publicKeyHex: string): Promise<string> {
+/** Options for {@link registerUser}. */
+export interface RegisterOptions {
+  /**
+   * On-chain registration fee in atomic units, read live from
+   * `GET /api/v1/registration/info`. Never hard-code it — the fee is
+   * node-governance controlled and changes with no app release.
+   */
+  feeAtomic?: number;
+  /**
+   * The node operator's wallet (`operator_address`), credited a share of the
+   * fee. Omit when the node reports `null`; the contract then routes the whole
+   * fee to the treasury.
+   */
+  viaNode?: string;
+}
+
+/**
+ * Register ("verify") a wallet on the Ogmara smart contract.
+ *
+ * Costs the Klever network fee (~4.4 KLV) PLUS the on-chain registration fee,
+ * if governance has set one.
+ */
+export async function registerUser(
+  publicKeyHex: string,
+  opts: RegisterOptions = {},
+): Promise<string> {
+  const args = [stringToHex(publicKeyHex)];
+  // `via_node` is an OptionalValue tail argument, encoded by PRESENCE.
+  // The SDK's decoder verifies the bech32 checksum, so a malformed operator
+  // address fails here rather than silently crediting the wrong account.
+  if (opts.viaNode) {
+    args.push(
+      Array.from(addressToPubkey(opts.viaNode))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(''),
+    );
+  }
   return invokeContract({
     functionName: 'register',
-    args: [stringToHex(publicKeyHex)],
+    args,
+    value: opts.feeAtomic || undefined,
   });
 }
 

@@ -118,7 +118,7 @@
   "tip_failed": "チップ送信失敗",
   "tip_view_tx": "トランザクションを表示",
   "register_title": "オンチェーン登録",
-  "register_confirm": "Kleverブロックチェーンにあなたの身元を登録します。トランザクション手数料として約4.4 KLVが必要です。",
+  "register_confirm": "Klever ブロックチェーンに ID を登録します。ネットワーク手数料 約4.4 KLV に加え、設定されている場合はオンチェーン認証手数料がかかります。",
   "register_proceed": "登録する",
   "register_button": "オンチェーン登録",
   "register_success": "登録を送信しました",
@@ -315,5 +315,6 @@
   "tx_contract": "コントラクト呼び出し",
   "e2e_decrypting": "🔒 復号しています…",
   "e2e_attachment": "暗号化された添付ファイル",
-  "wallet_currency": "表示通貨"
+  "wallet_currency": "表示通貨",
+  "register_confirm_fee": "ウォレットのオンチェーン認証には {fee} KLV と、ネットワーク手数料 約4.4 KLV がかかります。手数料の一部は認証に使用したノードの運営者に支払われます。認証すると、投稿やメッセージの編集、チャンネルの作成と管理、モデレーションが利用できます。"
 }

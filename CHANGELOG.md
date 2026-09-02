@@ -184,6 +184,43 @@ it cannot switch to, the WebSocket closes during teardown instead of
 delivering the old account's frames into the new account's screens, debounced
 uploads are cancelled before activation, and the wipe enumerates `SS.active`.
 
+### Security — dependency audit
+
+`npm audit` reports 25 findings, up from the 17 last recorded: new advisories
+have landed upstream since the August pass. They come from four roots. Only
+one had a fix:
+
+- **browserslist** (high, unbounded memory growth → OOM) — **fixed**, pinned
+  to `^4.28.8` via `overrides`. Every consumer already accepted `^4`, so this
+  is a patch-level move with no semver pressure. Build tooling only.
+
+The other three have no fix available today. Verified against upstream this
+pass rather than carried over from the earlier note, because `npm audit`'s own
+`fixAvailable` hint is wrong on two of them — it proposes a major `expo@57`
+bump that does not resolve either:
+
+- **image-size** (high, ICNS infinite loop) — affected range is `*`. There is
+  no patched release at ANY version; latest (2.0.2) is inside the vulnerable
+  set. Reached only by `metro` when hashing image assets at bundle time, from
+  files in our own repo. Nothing to adopt, at any version.
+- **@xmldom/xmldom** (moderate) and **uuid** (moderate) — patched versions
+  exist (0.9.x, ≥11.1.1) but are unreachable: `@expo/plist` and `plist` pin
+  `^0.8.8`, and `xcode` pins `^7.0.3`. Forcing either across the pin means
+  running parents against an API they were never tested on, and `uuid` ≥11 is
+  ESM-only against a CommonJS consumer. Both are iOS prebuild tooling and do
+  not execute in the Android build at all.
+- **decode-uri-component** (moderate, DoS on malformed percent-encoding) is
+  the one that gave pause: it is reached at RUNTIME, by `query-string` inside
+  `@react-navigation/core`, so it parses deep-link URLs. The sole patched
+  release, 0.5.0, is `"type": "module"` — pure ESM — while `query-string@7` is
+  CommonJS and `require()`s it. Overriding would trade a parsing DoS for a
+  hard crash on every deep link. Closing condition: a CJS-compatible patched
+  release, or `@react-navigation` moving to `query-string@9`.
+
+The version was not bumped for this: 0.47.0 has not shipped an artifact yet,
+so the dependency change is folded into it rather than pretending a release
+happened between the two.
+
 ## [0.46.0] - 2026-09-02
 
 Switching wallets left the previous account's data on screen. Reported after

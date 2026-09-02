@@ -49,6 +49,8 @@ export type MoreStackParamList = {
   Settings: undefined;
   Bookmarks: undefined;
   Addressbook: undefined;
+  Accounts: undefined;
+  AddAccount: undefined;
   Wallet: undefined;
   WalletBalance: undefined;
   Receive: undefined;

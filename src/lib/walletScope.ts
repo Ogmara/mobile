@@ -31,6 +31,20 @@ let activeWallet: string | null = null;
  * Must be called BEFORE any per-wallet read, so the boot path sets it as soon
  * as the persisted wallet address is known.
  */
+/**
+ * Caches that must be dropped the instant the active wallet changes.
+ *
+ * A REGISTRY rather than direct imports, because those stores import
+ * `scopedGet`/`scopedSet` from here — calling back into them directly would be
+ * a cycle. Each store registers itself at module load.
+ */
+const switchResets = new Set<() => void>();
+
+/** Register a cache to be cleared on every wallet-scope change. */
+export function registerWalletSwitchReset(fn: () => void): void {
+  switchResets.add(fn);
+}
+
 export function setWalletScope(address: string | null): void {
   const next = address && address.length > 0 ? address : null;
   const changed = next !== activeWallet;
@@ -38,14 +52,23 @@ export function setWalletScope(address: string | null): void {
   // Namespacing storage is not enough on its own: the stores that cache in
   // memory memoize for the life of the PROCESS, so after a switch the previous
   // account's data would still render — and the first edit would persist it
-  // under the new wallet and sync it to the node. Reset them on every change.
+  // under the new wallet and sync it to the node.
   //
-  // Imported lazily to keep this module free of cycles (those stores import
-  // scopedGet/scopedSet from here).
+  // These run SYNCHRONOUSLY, in the same tick as the scope flip. An earlier
+  // version used `void import(...).then(...)`, which left a window of at least
+  // one microtask where `activeWallet` was already the new account while the
+  // caches still held the old one — any read in that window returned the wrong
+  // account's data, and any write persisted it under the new wallet and synced
+  // it to the node. Harmless while the only callers were boot and sign-out;
+  // fatal once accounts can be switched at runtime.
   if (changed) {
-    void import('./topicGroups').then((m) => m.resetForWalletSwitch()).catch(() => {});
-    void import('./dmHide').then((m) => m.resetForWalletSwitch()).catch(() => {});
-    void import('./channelOrg').then((m) => m.resetForWalletSwitch()).catch(() => {});
+    for (const reset of switchResets) {
+      try {
+        reset();
+      } catch {
+        /* one bad reset must not block the rest of the switch */
+      }
+    }
   }
 }
 
@@ -183,5 +206,32 @@ export async function runWalletScopeMigrationOnce(): Promise<void> {
     await AsyncStorage.setItem(MIGRATED_MARKER, '1');
   } catch {
     // Never block startup. The marker stays unset, so a later boot retries.
+  }
+}
+
+/**
+ * Read/write another account's namespace without switching scope.
+ *
+ * The account list has to show every account's label and display name at once;
+ * `scopedGet` can only ever see the active one. Deliberately narrow — anything
+ * that mutates the CURRENT account must go through `scopedSet` so it cannot
+ * accidentally target the wrong namespace.
+ */
+export async function scopedGetFor(address: string, base: string): Promise<string | null> {
+  if (!address) return null;
+  try {
+    return await AsyncStorage.getItem(`${base}${SEP}${address}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Write into a specific account's namespace. */
+export async function scopedSetFor(address: string, base: string, value: string): Promise<void> {
+  if (!address) return;
+  try {
+    await AsyncStorage.setItem(`${base}${SEP}${address}`, value);
+  } catch {
+    /* best-effort */
   }
 }

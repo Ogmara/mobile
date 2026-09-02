@@ -46,6 +46,8 @@ import PinSetupScreen from '../screens/PinSetupScreen';
 import DebugScreen from '../screens/DebugScreen';
 import BookmarksScreen from '../screens/BookmarksScreen';
 import AddressbookScreen from '../screens/AddressbookScreen';
+import AccountsScreen from '../screens/AccountsScreen';
+import AddAccountScreen from '../screens/AddAccountScreen';
 import WalletBalanceScreen from '../screens/WalletBalanceScreen';
 import ReceiveScreen from '../screens/ReceiveScreen';
 import TokenDetailScreen from '../screens/TokenDetailScreen';
@@ -120,6 +122,8 @@ function MoreTab() {
       <MoreStack.Screen name="Settings" component={SettingsScreen} />
       <MoreStack.Screen name="Bookmarks" component={BookmarksScreen} options={{ headerShown: true, title: 'Bookmarks' }} />
       <MoreStack.Screen name="Addressbook" component={AddressbookScreen} options={{ headerShown: true, title: 'Addressbook' }} />
+      <MoreStack.Screen name="Accounts" component={AccountsScreen} options={{ headerShown: true, title: 'Accounts' }} />
+      <MoreStack.Screen name="AddAccount" component={AddAccountScreen} options={{ headerShown: true, title: 'Add account' }} />
       <MoreStack.Screen name="Wallet" component={WalletScreen} />
       <MoreStack.Screen name="WalletBalance" component={WalletBalanceScreen} options={{ headerShown: true, title: 'Wallet' }} />
       <MoreStack.Screen name="Receive" component={ReceiveScreen} options={{ headerShown: true, title: 'Receive' }} />
@@ -184,6 +188,7 @@ export default function TabNavigator({ startScreen }: Props) {
     { icon: 'notifications-outline' as const, label: t('nav_notifications'), onPress: () => nav.navigate('MoreTab', { screen: 'Notifications' }) },
     { icon: 'bookmarks-outline' as const, label: t('news_bookmark'), onPress: () => nav.navigate('MoreTab', { screen: 'Bookmarks' }) },
     { icon: 'book-outline' as const, label: t('nav_addressbook'), onPress: () => nav.navigate('MoreTab', { screen: 'Addressbook' }) },
+    { icon: 'people-outline' as const, label: t('accounts_title'), onPress: () => nav.navigate('MoreTab', { screen: 'Accounts' }) },
     { icon: 'wallet-outline' as const, label: t('settings_wallet'), onPress: () => nav.navigate('MoreTab', { screen: 'WalletBalance' }) },
   ];
 

@@ -11,7 +11,18 @@ import { OgmaraClient, WsSubscription, subscribe, buildDeviceClaim, type WsEvent
 import type { WalletSigner } from '@ogmara/sdk';
 import { getSetting, setSetting } from '../lib/settings';
 import { bootstrapNodeSelection, rememberNetwork, recordKnownNode, getAvailableNodes } from '../lib/api';
-import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultWipe } from '../lib/vault';
+import {
+  vaultInit,
+  vaultStore,
+  vaultGenerate,
+  vaultGetSigner,
+  vaultWipe,
+  vaultActivate,
+  vaultAddAccount,
+  vaultRemoveAccount,
+  vaultListAccounts,
+} from '../lib/vault';
+import type { AccountEntry } from '../lib/vaultAccounts';
 import { debugLog } from '../lib/debug';
 import {
   setWalletScope,
@@ -47,6 +58,18 @@ interface ConnectionContextValue {
   setWallet: (privateKeyHex: string | null) => Promise<void>;
   /** Generate a new random wallet in the vault. */
   generateWallet: () => Promise<void>;
+  /** Every account held on this device. */
+  accounts: AccountEntry[];
+  /** Reload the account list (after add/remove/rename). */
+  refreshAccounts: () => Promise<void>;
+  /** Switch to another held account. Keeps both accounts' data. */
+  switchAccount: (address: string) => Promise<void>;
+  /** Create a new account additively and switch to it. */
+  createAccount: () => Promise<string>;
+  /** Import a key as a new account and switch to it. */
+  addAccount: (privateKeyHex: string) => Promise<string>;
+  /** Permanently remove an account and its local data. Unrecoverable. */
+  removeAccount: (address: string) => Promise<void>;
   /**
    * Register a device key under an external wallet (K5).
    * Requires the wallet signature over the device claim string.
@@ -73,6 +96,12 @@ const ConnectionContext = createContext<ConnectionContextValue>({
   connectToNode: async () => {},
   setWallet: async () => {},
   generateWallet: async () => {},
+  accounts: [],
+  refreshAccounts: async () => {},
+  switchAccount: async () => {},
+  createAccount: async () => '',
+  addAccount: async () => '',
+  removeAccount: async () => {},
   registerExternalWallet: async () => {},
   onWsEvent: () => () => {},
 });
@@ -87,6 +116,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const [walletSource, setWalletSource] = useState<WalletSource>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [peers, setPeers] = useState(0);
+  const [accounts, setAccounts] = useState<AccountEntry[]>([]);
 
   const wsRef = useRef<WsSubscription | null>(null);
   const eventHandlersRef = useRef<Set<(event: WsEvent) => void>>(new Set());
@@ -217,6 +247,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       // left the drawer header blank for anyone whose name is local-only.
       const savedName = await getSetting('displayName').catch(() => null);
       if (savedName) setDisplayName(savedName);
+      // Populate the account picker once the scope is known.
+      void refreshAccounts();
 
       if (await confirmAndWire(newClient, url, savedName)) {
         // Connected to the saved node fast; now upgrade to the fastest in the
@@ -394,6 +426,147 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     connectWs(nodeUrlRef.current);
   }, [client]);
 
+  /**
+   * Drop every trace of the current account from memory.
+   *
+   * AWAITED, not fire-and-forget: `clearKeyVaultSession` also cancels the
+   * debounced key-vault backup, and an armed timer surviving a switch would
+   * seal account A's keyring under account B's backup key. The same applies to
+   * the settings-sync uploads cancelled by the scope resets.
+   */
+  const refreshAccounts = useCallback(async () => {
+    setAccounts(await vaultListAccounts().catch(() => [] as AccountEntry[]));
+  }, []);
+
+  const tearDownAccountSession = useCallback(async () => {
+    clearCryptoEnv();
+    await Promise.all([
+      import('../lib/dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
+      import('../lib/channelCrypto').then(({ clearChannelKeyCache }) => clearChannelKeyCache()),
+      import('../lib/keyVault').then(({ clearKeyVaultSession }) => clearKeyVaultSession()),
+      import('../lib/mediaCrypto').then(({ clearMediaCache }) => clearMediaCache()),
+    ]).catch(() => {});
+  }, []);
+
+  /**
+   * Switch to another account already held on this device.
+   *
+   * Explicitly does NOT wipe: that is what makes this different from signing
+   * out. Each account's preferences, channels and topic follows stay on disk
+   * under its own namespace and come back when it is selected again.
+   *
+   * Ordering is load-bearing. The scope flip and `setCryptoEnv` must land in
+   * the SAME synchronous block, because anything reading between them would
+   * see one account's scope with another account's signer.
+   */
+  const switchAccount = useCallback(async (addr: string) => {
+    if (!addr || addr === walletAddress) return;
+
+    // A K5 entry's indexed address is the local DEVICE key, while the identity
+    // and all stored data live under the EXTERNAL wallet. Activating it as a
+    // built-in wallet would persist the device address as the wallet address,
+    // destroy the delegation, and orphan every `::<external>` namespace.
+    // Refuse rather than corrupt it.
+    const entry = (await vaultListAccounts().catch(() => [] as AccountEntry[]))
+      .find((e: AccountEntry) => e.a === addr);
+    if (entry?.source === 'k5-delegation') throw new Error('K5_NOT_SWITCHABLE');
+
+    // Load the key BEFORE tearing anything down. Tearing down first and then
+    // failing to activate left cryptoEnv cleared and every key cache dropped
+    // while the scope still pointed at the old account — E2E dead for the rest
+    // of the session, recoverable only by restarting.
+    const loaded = await vaultActivate(addr);
+    if (!loaded) throw new Error('That account could not be unlocked on this device');
+    await tearDownAccountSession();
+    const s = vaultGetSigner();
+
+    // Scope, signer and cryptoEnv land together. `setWalletAddress` remounts
+    // the whole tree (App.tsx keys on it), so an await between the scope flip
+    // and `withSigner` would let remounted screens fetch — signed as the
+    // PREVIOUS account — while the UI already shows the new one.
+    setWalletScope(loaded);          // synchronous; also resets the caches
+    signerRef.current = s;
+    if (client && s) client.withSigner(s);
+    setCryptoEnv({ signer: s, walletAddress: loaded, client, walletSource: 'builtin' });
+    setSignerState(s);
+    setAddress(loaded);
+    setWalletAddress(loaded);
+    setWalletSource('builtin');
+    // Persistence trails; it does not gate correctness of the live session.
+    await setSetting('walletSource', 'builtin');
+    await setSetting('walletAddress', loaded);
+
+    // The display name is per-account, so re-read it under the new scope.
+    setDisplayName(await getSetting('displayName').catch(() => null));
+    void ensureDeviceEncBinding().catch((e) => debugLog('warn', 'enc binding failed', e));
+    connectWs(nodeUrlRef.current);
+    void refreshAccounts();
+  }, [client, walletAddress, tearDownAccountSession, refreshAccounts]);
+
+  /** Add an account from an existing key and switch to it. */
+  const addAccount = useCallback(async (privateKeyHex: string) => {
+    const addr = await vaultAddAccount(privateKeyHex);
+    await switchAccount(addr);
+    return addr;
+  }, [switchAccount]);
+
+  /**
+   * Create a brand-new account ADDITIVELY and switch to it.
+   *
+   * Deliberately not `generateWallet`, which is the single-wallet onboarding
+   * path: it overwrites the legacy anchor and — critically — skips
+   * `tearDownAccountSession`, so the previous account's DM/channel key caches
+   * and any armed key-vault backup would survive into the new account. The
+   * next backup would then seal the PREVIOUS account's keyring under the NEW
+   * account's key and upload it to the node.
+   */
+  const createAccount = useCallback(async () => {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    return addAccount(hex);
+  }, [addAccount]);
+
+  /**
+   * Permanently remove one account from this device.
+   *
+   * Destructive and unrecoverable without a key backup — the caller is
+   * responsible for the export gate.
+   */
+  const removeAccount = useCallback(async (addr: string) => {
+    const others = (await vaultListAccounts()).filter((e: AccountEntry) => e.a !== addr);
+    if (addr === walletAddress) {
+      await tearDownAccountSession();
+      setWalletScope(addr);          // scope the wipe at the right account
+      // Order matters: `wipeDeviceEncKey` WRITES empty markers
+      // (`ogmara.e2e.device_id::<addr>` etc.), so running it after the scope
+      // wipe would recreate the very breadcrumbs the wipe just removed — and
+      // the recovery scan would then resurrect the removed address.
+      await wipeDeviceEncKey().catch(() => {});
+      await wipeWalletScope();
+    } else {
+      await wipeWalletScope(addr);
+    }
+    await vaultRemoveAccount(addr);
+    await refreshAccounts();
+    if (addr === walletAddress) {
+      if (others.length > 0) {
+        await switchAccount(others[0].a);
+      } else {
+        setWalletScope(null);
+        signerRef.current = null;
+        setSignerState(null);
+        setAddress(null);
+        setWalletAddress(null);
+        setWalletSource(null);
+        setDisplayName(null);
+        await setSetting('walletSource', '');
+        await setSetting('walletAddress', '');
+        connectWs(nodeUrlRef.current);
+      }
+    }
+  }, [walletAddress, switchAccount, tearDownAccountSession, refreshAccounts]);
+
   const generateWallet = useCallback(async () => {
     const addr = await vaultGenerate();
     const s = vaultGetSigner();
@@ -456,7 +629,12 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   return (
     <ConnectionContext.Provider
-      value={{ client, status, nodeUrl, signer, address, walletAddress, walletSource, displayName, peers, connectToNode, setWallet, generateWallet, registerExternalWallet, onWsEvent }}
+      value={{
+        client, status, nodeUrl, signer, address, walletAddress, walletSource,
+        displayName, peers, connectToNode, setWallet, generateWallet,
+        registerExternalWallet, onWsEvent,
+        accounts, refreshAccounts, switchAccount, createAccount, addAccount, removeAccount,
+      }}
     >
       {children}
     </ConnectionContext.Provider>

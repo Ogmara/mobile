@@ -27,7 +27,7 @@ import { downloadSyncedObjects } from './src/lib/settingsSync';
 import { getStartScreen, type StartScreen } from './src/lib/settings';
 import { isLockEnabled, getLockTimeout } from './src/lib/appLock';
 import { initDebugMode, installGlobalErrorHandler, debugLog } from './src/lib/debug';
-import { runVaultMigrations, verifyVaultIntegrity } from './src/lib/vaultMigration';
+import { vaultMigrationsReady, verifyVaultIntegrity } from './src/lib/vaultMigration';
 import { setupNotificationChannel, parseNotificationData } from './src/lib/push';
 import { getLinkingConfig } from './src/lib/deepLinks';
 import TabNavigator from './src/navigation/TabNavigator';
@@ -58,7 +58,7 @@ function AppContent() {
       debugLog('info', `App starting v${Constants.expoConfig?.version ?? '?'}`);
 
       // Run vault migrations FIRST (safe on every launch)
-      await runVaultMigrations().catch((e) => {
+      await vaultMigrationsReady().catch((e) => {
         debugLog('error', 'Vault migration failed', e);
       });
 
@@ -231,7 +231,12 @@ function AppContent() {
 
   return (
     <NavigationContainer ref={navigationRef} theme={navTheme} linking={getLinkingConfig()}>
-      <TabNavigator startScreen={startScreen} />
+      {/* Keyed on the active account so a switch remounts the whole tree.
+          Most screens fetch on mount without `walletAddress` in their deps, so
+          without this they would keep showing the previous account's channels,
+          feed and profile until manually refreshed. Remounting also resets
+          navigation position, which is the right behaviour on a switch. */}
+      <TabNavigator key={walletAddress ?? 'no-account'} startScreen={startScreen} />
       <StatusBar style={isDark ? 'light' : 'dark'} />
     </NavigationContainer>
   );

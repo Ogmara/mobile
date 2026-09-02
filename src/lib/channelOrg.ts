@@ -20,7 +20,7 @@
  * shape so callers don't need to await every mutation.
  */
 
-import { scopedGet, scopedSet } from './walletScope';
+import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
 
 /** A user-created group. Render order = position in `ChannelOrg.groups`. */
 export interface ChannelGroup {
@@ -479,3 +479,6 @@ export function resetForWalletSwitch(): void {
     uploadTimer = null;
   }
 }
+
+// Cleared synchronously whenever the active wallet changes.
+registerWalletSwitchReset(resetForWalletSwitch);

@@ -22,11 +22,45 @@ import {
   type WalletSignFn,
 } from '@ogmara/sdk';
 import * as SecureStore from 'expo-secure-store';
+import { getWalletScope } from './walletScope';
+import { isValidAddress } from './vaultAccounts';
 import { getSetting, setSetting } from './settings';
 import { walletAddress, signClaim, getCryptoClient, e2eAvailable } from './cryptoEnv';
 import { e2elog, withRetry } from './e2eDebug';
 
-const ENC_PRIV_KEY = 'ogmara.e2e.enc_private_key';
+/**
+ * The device's X25519 private key, PER ACCOUNT.
+ *
+ * Sharing one keypair across accounts would be protocol-legal but wrong on two
+ * counts. It would publish the SAME `enc_pub` for every wallet on this device,
+ * proving to the node and to every peer that they are the same person —
+ * defeating the point of holding separate accounts. And a shared private key
+ * means a ciphertext wrapped to account A is decryptable with the key account
+ * B holds, so "one account can never read another's keys" would rest on
+ * argument rather than construction.
+ *
+ * Note `.` as the separator: SecureStore validates keys against
+ * `/^[\w.-]+$/` and THROWS on `:`, so the `::` used for AsyncStorage scopes
+ * cannot be used here.
+ */
+const ENC_PRIV_KEY_BASE = 'ogmara.e2e.enc_private_key';
+
+/**
+ * Resolve this account's key slot.
+ *
+ * Falls back to the legacy device-global slot only when no wallet is active —
+ * never as a substitute for a missing per-account key, which would hand one
+ * account another's identity.
+ */
+function encPrivKey(): string {
+  const addr = getWalletScope();
+  // Validate before interpolating: SecureStore rejects anything outside
+  // `/^[\w.-]+$/` by THROWING, and the scope ultimately originates from
+  // unencrypted AsyncStorage and from the K5 handshake. An unchecked value
+  // containing a colon would make every device-enc read and write throw,
+  // permanently breaking encryption binding for that account.
+  return addr && isValidAddress(addr) ? `${ENC_PRIV_KEY_BASE}.${addr}` : ENC_PRIV_KEY_BASE;
+}
 
 const bytesToHex = (b: Uint8Array): string =>
   Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
@@ -56,13 +90,13 @@ export async function getOrCreateDeviceId(): Promise<string> {
 
 /** Load or create the device X25519 encryption keypair, persisting the secret. */
 export async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array; publicKeyHex: string }> {
-  const stored = await SecureStore.getItemAsync(ENC_PRIV_KEY).catch(() => null);
+  const stored = await SecureStore.getItemAsync(encPrivKey()).catch(() => null);
   if (stored) {
     const privateKey = hexToBytes(stored);
     return { privateKey, publicKeyHex: encPublicKeyHex(privateKey) };
   }
   const kp = generateDeviceEncKeypair();
-  await SecureStore.setItemAsync(ENC_PRIV_KEY, bytesToHex(kp.privateKey), {
+  await SecureStore.setItemAsync(encPrivKey(), bytesToHex(kp.privateKey), {
     keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
   });
   return kp;
@@ -121,6 +155,13 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   if (!wallet || !client) return;
 
   const kp = await getOrCreateEncKeypair();
+  // The keypair is resolved from the CURRENT scope, which may have changed
+  // while that await was outstanding — this function is fired un-awaited on
+  // connect, and an account switch can land in the middle. Publishing then
+  // binds the NEW account's enc_pub to the OLD account's wallet and
+  // `revokeStaleEncKeys` below revokes the old account's real key, making
+  // every envelope already wrapped to it permanently undecryptable.
+  if (walletAddress() !== wallet) return;
   const marker = `v2:${wallet}:${kp.publicKeyHex}`;
   const deviceId = await getOrCreateDeviceId();
 
@@ -151,14 +192,24 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   });
   await withRetry(() => client.publishEncKeyEnvelope(wallet, envelope), 'publish binding');
   e2elog('published binding', { deviceId, encPub: kp.publicKeyHex });
+  // Re-check once more before the DESTRUCTIVE step: revocation is not
+  // reversible, and the publish above may itself have taken a while.
+  if (walletAddress() !== wallet) return;
   // Retire any stale enc_pub AFTER the new key is registered (never a zero-key window).
   await revokeStaleEncKeys(wallet, deviceId, kp.publicKeyHex, sign);
   await setSetting('encKeyBound', marker);
 }
 
 /** Wipe the device encryption key + binding markers (on wallet disconnect). */
+/**
+ * Destroy THIS account's device encryption identity.
+ *
+ * Scoped deliberately: before multi-account this wiped the single shared key,
+ * which with per-account keys would have broken E2E for every other account on
+ * the device when one was removed.
+ */
 export async function wipeDeviceEncKey(): Promise<void> {
-  await SecureStore.deleteItemAsync(ENC_PRIV_KEY).catch(() => {});
+  await SecureStore.deleteItemAsync(encPrivKey()).catch(() => {});
   await setSetting('encKeyBound', '');
   await setSetting('deviceId', '');
 }

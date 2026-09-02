@@ -17,7 +17,7 @@
  * protocol §3.5) — a follow that normalizes differently would match nothing.
  */
 
-import { scopedGet, scopedSet } from './walletScope';
+import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
 import { normalizeHashtag } from '@ogmara/sdk';
 
 export interface TopicGroup {
@@ -281,3 +281,6 @@ export function resetForWalletSwitch(): void {
     uploadTimer = null;
   }
 }
+
+// Cleared synchronously whenever the active wallet changes.
+registerWalletSwitchReset(resetForWalletSwitch);

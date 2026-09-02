@@ -62,9 +62,11 @@ const KEYS = {
  * install and stays global, so switching accounts does not reset the user's
  * app preferences.
  *
- * `walletAddress` / `walletSource` / `deviceRegistered` are deliberately NOT
- * here: they identify WHICH wallet is active, so scoping them to that wallet
- * would be circular.
+ * `walletAddress` and `walletSource` are deliberately NOT here: they identify
+ * WHICH wallet is active, so scoping them to that wallet would be circular.
+ * (`deviceRegistered` used to be excluded on the same grounds, wrongly — its
+ * value is per-account registration state, not an identity pointer, so with
+ * several accounts it was simply clobbered on each registration.)
  */
 const PER_WALLET: ReadonlySet<keyof typeof KEYS> = new Set([
   'displayName',
@@ -77,6 +79,14 @@ const PER_WALLET: ReadonlySet<keyof typeof KEYS> = new Set([
   'newsLastReadAll',
   'newsLastReadFollowing',
   'newsLastViewedAt',
+  // The device E2E identity is per ACCOUNT (see deviceEnc.ts): a shared
+  // enc_pub would publicly link every wallet on this device to one person.
+  'deviceId',
+  'encKeyBound',
+  // Value is `${externalAddress}:${deviceAddr}` — per-account state, despite
+  // sitting next to walletAddress/walletSource, which genuinely are global
+  // because they identify WHICH account is active.
+  'deviceRegistered',
 ]);
 
 /** Whether a key is account-scoped rather than device-scoped. */

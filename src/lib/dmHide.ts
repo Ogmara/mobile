@@ -17,7 +17,7 @@
  * `ensureHiddenDmsLoaded()` — same pattern as `channelOrg.ts`.
  */
 
-import { scopedGet, scopedSet } from './walletScope';
+import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
 
 /** peer wallet address → ms epoch when it was hidden. */
 export type HiddenDms = Record<string, number>;
@@ -156,3 +156,6 @@ export function resetForWalletSwitch(): void {
     uploadTimer = null;
   }
 }
+
+// Cleared synchronously whenever the active wallet changes.
+registerWalletSwitchReset(resetForWalletSwitch);

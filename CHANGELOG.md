@@ -5,6 +5,118 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47.0] - 2026-09-02
+
+Multi-account: hold several wallets on one device and switch between them.
+**VAULT_VERSION 2 → 3.**
+
+### Added
+
+- **Accounts screen** (burger menu → Accounts) — switch, add and remove
+  accounts. Switching is not a sign-out: each account keeps its own profile,
+  channels, topic follows, contacts and mutes, and they come back when it is
+  selected again. Built on the per-wallet namespacing added in 0.46.0.
+- **Add account** — create a fresh wallet or import a 64-hex private key. Both
+  add and switch without touching the current account.
+- 20 new strings across all 7 locales.
+
+### Changed
+
+- **The vault holds N accounts.** Per-address SecureStore slots
+  (`ogmara.vault.private_key.<addr>`) plus an account index. Note `.`, not
+  `::` — SecureStore validates keys against `/^[\w.-]+$/` and THROWS on a
+  colon, so the AsyncStorage scope separator cannot be reused there.
+- **The device E2E identity is now per account.** A shared X25519 keypair
+  would publish the same `enc_pub` for every wallet on the device, proving to
+  the node and to every peer that they are the same person — which defeats the
+  point of separate accounts. It also means a ciphertext wrapped to one
+  account would be decryptable with another's key.
+- `deviceRegistered` moved to per-account storage; it was excluded before on
+  the grounds that it identifies the active wallet, which was wrong — it is
+  per-account registration state and was clobbered on each registration.
+- `vaultExportKey()` reads the ACTIVE account's slot. It previously read the
+  single legacy slot, which with several accounts would have had
+  `settingsSync` encrypt one account's settings with another's key.
+- `runVaultMigrations()` is a loop. It returned after a single step, so a
+  device two versions behind needed one launch per version.
+
+### Security
+
+- The account index is **triple-redundant** — an AsyncStorage primary, a
+  SecureStore mirror, and a recovery scan of `<base>::<address>` preference
+  keys. SecureStore has no key-enumeration API, so a lost index means a key
+  slot nobody can find: an unreachable wallet. No single source can lose an
+  account.
+- **The legacy key slot is never deleted** while the account exists. It is the
+  only slot findable without an index, so it stays as the anchor that keeps
+  the pre-existing wallet reachable even after a failed migration or a
+  downgrade.
+- The v3 migration writes the new slot, **verifies it by re-deriving the
+  address from a read-back**, and only then indexes it. The version tag is
+  written last and is the commit point, so any crash leaves a pristine,
+  working v2 that simply retries.
+- An **encrypted-only vault defers**: the address cannot be derived without
+  the PIN, and guessing it from the persisted wallet address would
+  mis-attribute the slot for a K5 delegation. The tag stays at 2 and the
+  legacy vault keeps working until the PIN is entered.
+- The v3 migration **claims the existing device E2E identity** for the
+  migrating account. Without it `ensureDeviceEncBinding` would mint a fresh
+  keypair, publish a new binding and revoke the old `enc_pub`, making any
+  channel-key envelope wrapped to it permanently undecryptable.
+- Account removal deletes key slots **before** the index entry. That is the
+  inverse of the intuitive order and is deliberate: a crash between the two
+  leaves a visible, self-healing index entry rather than an orphaned slot of
+  private key material that nothing can enumerate and no UI can remove.
+- Removal is gated behind an explicit key-export step.
+- Cache resets on a wallet switch are now **synchronous**. They were dispatched
+  via `void import(...)`, leaving a window where the scope had already flipped
+  while the caches still held the previous account — reads in that window
+  returned the wrong account's data and writes persisted it under the new
+  wallet and synced it to the node. Harmless when only boot and sign-out
+  changed the scope; fatal once accounts can be switched at runtime.
+- 25 unit tests over the index core, including that no SecureStore key can
+  contain a colon and that each redundancy source alone keeps an account
+  reachable.
+
+### Fixed before release (audit pipeline)
+
+The Code and Security audits both blocked the first cut of this work. Each of
+these was a genuine key-loss or key-exposure path, found before any build:
+
+- **`vaultWipe()` did not wipe the vault.** It deleted only the three legacy
+  slots, so every `ogmara.vault.private_key.<addr>` survived a sign-out — and
+  because `vaultInit` now prefers the recorded active account, the "removed"
+  wallet came back with a full spending signer on the next launch. It now
+  enumerates the index union and deletes every account's slots, the indexes,
+  and the retained device-global E2E key.
+- **A failed slot read could delete the index.** `vaultListAccounts` persisted
+  the PROBED set, and probing cannot distinguish "absent" from "unreadable" —
+  vault items are `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, so one read while the
+  device is locked (or an Android Keystore fault) would have overwritten both
+  indexes with `[]` while the key slots still existed. With no enumeration
+  API, those wallets would have been unreachable forever. The persisted value
+  is now always the union; probing only affects what is displayed.
+- **"Create new" ran the single-wallet onboarding path**, which overwrites the
+  legacy anchor and deletes the encrypted slot — for a PIN user whose
+  migration had deferred, that was their only key copy. It also skipped the
+  session teardown, so the previous account's DM and channel keys would have
+  been sealed under the new account's backup key and uploaded to the node.
+  Creation is now additive and goes through the same teardown as a switch.
+- **K5 delegations are no longer switchable or removable.** Their indexed
+  address is the local device key while the identity and all data live under
+  the external wallet, so either action destroyed the delegation and orphaned
+  its data.
+- **`vaultExportKey` could return another account's key** on a transient read
+  failure, which would have had `settingsSync` encrypt one account's settings
+  with another's key.
+- Restoring the key vault, and publishing an encryption binding, are now
+  guarded against an account switch landing mid-flight — the latter would
+  otherwise have revoked the previous account's real `enc_pub`.
+- Private-key export before removal is now optional (an "I already have a
+  backup" path) and the clipboard is cleared after 60s, matching the existing
+  wallet screen. Forcing a raw key onto the clipboard was a worse exposure
+  than the one it guarded against.
+
 ## [0.46.0] - 2026-09-02
 
 Switching wallets left the previous account's data on screen. Reported after

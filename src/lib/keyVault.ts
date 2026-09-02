@@ -144,6 +144,14 @@ export function tryRestoreKeyVault(): void {
   if (restoreState !== 'idle') return;
   restoreState = 'inflight';
   void (async () => {
+    // Capture the wallet this restore is FOR. `clearKeyVaultSession` can reset
+    // the state but cannot cancel an in-flight restore, so without this an
+    // account switch mid-flight would import the PREVIOUS account's DM and
+    // channel keys into the new account's caches — and the resulting
+    // keyring-change would then seal them under the new account's backup key
+    // and upload them to the node. `publishBackup` already guards this way;
+    // this path did not.
+    const restoreWallet = walletAddress();
     try {
       const client = getCryptoClient();
       if (!client) {
@@ -165,6 +173,11 @@ export function tryRestoreKeyVault(): void {
       }
       if (resp) {
         try {
+          // Re-check before writing anything into the key caches.
+          if (walletAddress() !== restoreWallet) {
+            restoreState = 'idle';
+            return;
+          }
           const keyring = openKeyVault(key, resp);
           const conv = importConvKeysFromVault(keyring.conv);
           const chan = importChannelKeysFromVault(keyring.chan);

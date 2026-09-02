@@ -28,6 +28,7 @@ import {
   setWalletScope,
   wipeWalletScope,
   runWalletScopeMigrationOnce,
+  runWalletSwitchResets,
 } from '../lib/walletScope';
 import { setCryptoEnv, setCryptoClient, clearCryptoEnv } from '../lib/cryptoEnv';
 import { setContractAddress } from '../lib/kleverTx';
@@ -119,6 +120,12 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [peers, setPeers] = useState(0);
   const [accounts, setAccounts] = useState<AccountEntry[]>([]);
+  /**
+   * Indirection so `setWallet` can hand over to another account.
+   * `switchAccount` is declared after it, so a direct reference would be a
+   * use-before-initialization inside that callback's closure.
+   */
+  const switchAccountRef = useRef<((addr: string) => Promise<void>) | null>(null);
 
   const wsRef = useRef<WsSubscription | null>(null);
   const eventHandlersRef = useRef<Set<(event: WsEvent) => void>>(new Set());
@@ -398,14 +405,34 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       // alone would keep the data addressable on the device forever; wiping
       // here means a deliberate sign-out leaves nothing behind, while merely
       // SWITCHING wallets still preserves each account's own data.
-      // Order matters, and is deliberate. If the process dies between these
-      // two, wiping prefs FIRST leaves a still-usable wallet with reset
-      // preferences; wiping the vault first would leave an unreachable
-      // account's data on the device. The vault is the thing that must never
-      // break, so it goes last.
+      // Disconnect removes THIS account, not every wallet on the device.
+      //
+      // `vaultWipe()` became total when multi-account landed — it deletes every
+      // account's key slots. The two callers still say "the wallet", singular,
+      // and are two taps with no per-account export gate, so a user holding
+      // several wallets would have lost all of them here. Scope it to the
+      // active account and hand over to the next held one, matching what the
+      // Accounts screen's remove already does.
+      const heldNow = await vaultListAccounts().catch(() => [] as AccountEntry[]);
+      const active = walletAddress;
+      const survivors = heldNow.filter(
+        (e: AccountEntry) => e.a !== active && e.source !== 'k5-delegation',
+      );
+
+      // Order matters. If the process dies mid-way, wiping prefs FIRST leaves a
+      // still-usable wallet with reset preferences; wiping key material first
+      // would leave an unreachable account's data behind. Key material goes
+      // last. `wipeDeviceEncKey` WRITES empty markers, so it must precede the
+      // scope wipe or it recreates the breadcrumbs the wipe just removed.
+      await wipeDeviceEncKey().catch(() => {});
       await wipeWalletScope();
+      if (active) {
+        await vaultRemoveAccount(active);
+      } else {
+        // No active account to scope to — fall back to the total wipe.
+        await vaultWipe();
+      }
       setWalletScope(null);
-      await vaultWipe();
       await wipeDeviceEncKey().catch(() => {});
       signerRef.current = null;
       setSignerState(null);
@@ -417,6 +444,18 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       await setSetting('deviceRegistered', '');
       // Clear all E2E session state so a different account can't read this one's keys.
       clearCryptoEnv();
+      if (survivors.length > 0) {
+        // Another wallet is still held — activate it instead of leaving the
+        // app signed out, which would misrepresent what just happened.
+        try {
+          await switchAccountRef.current?.(survivors[0].a);
+          void refreshAccounts();
+          return;
+        } catch {
+          /* fall through to the signed-out state */
+        }
+      }
+      void refreshAccounts();
       Promise.all([
         import('../lib/dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
         import('../lib/channelCrypto').then(({ clearChannelKeyCache }) => clearChannelKeyCache()),
@@ -441,6 +480,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const tearDownAccountSession = useCallback(async () => {
+    // Close the socket first. `setWalletAddress` remounts the whole tree, so a
+    // socket left open would deliver the PREVIOUS account's frames into the
+    // new account's freshly mounted screens.
+    wsRef.current?.close();
+    wsRef.current = null;
     clearCryptoEnv();
     await Promise.all([
       import('../lib/dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
@@ -472,6 +516,12 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     const entry = (await vaultListAccounts().catch(() => [] as AccountEntry[]))
       .find((e: AccountEntry) => e.a === addr);
     if (entry?.source === 'k5-delegation') throw new Error('K5_NOT_SWITCHABLE');
+
+    // Cancel any armed settings/key-vault upload BEFORE activating: activation
+    // moves the vault's active account, and a timer firing between that and
+    // the scope flip would encrypt the old account's data with the new
+    // account's key.
+    runWalletSwitchResets();
 
     // Load the key BEFORE tearing anything down. Tearing down first and then
     // failing to activate left cryptoEnv cleared and every key cache dropped
@@ -505,6 +555,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     void refreshAccounts();
   }, [client, walletAddress, tearDownAccountSession, refreshAccounts]);
 
+  switchAccountRef.current = switchAccount;
+
   /** Add an account from an existing key and switch to it. */
   const addAccount = useCallback(async (privateKeyHex: string) => {
     const addr = await vaultAddAccount(privateKeyHex);
@@ -536,7 +588,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
    * responsible for the export gate.
    */
   const removeAccount = useCallback(async (addr: string) => {
-    const others = (await vaultListAccounts()).filter((e: AccountEntry) => e.a !== addr);
+    // Exclude K5 rows: `switchAccount` refuses them, and it would throw AFTER
+    // the removal had already committed — leaving the app with no signer.
+    const others = (await vaultListAccounts()).filter(
+      (e: AccountEntry) => e.a !== addr && e.source !== 'k5-delegation',
+    );
     if (addr === walletAddress) {
       await tearDownAccountSession();
       setWalletScope(addr);          // scope the wipe at the right account

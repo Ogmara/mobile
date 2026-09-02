@@ -62,7 +62,11 @@ export async function vaultListAccounts(): Promise<AccountEntry[]> {
   const primary = parseIndex(await AsyncStorage.getItem(AS.primaryIndex).catch(() => null));
   const mirror = parseMirror(await SecureStore.getItemAsync(SS.mirror).catch(() => null));
   const allKeys = await AsyncStorage.getAllKeys().catch(() => [] as string[]);
-  const recovered = parseAddressesFromScopedKeys(allKeys);
+  // Bound the scan CANDIDATES, not the merged result. Capping after the merge
+  // let a flood of slot-less orphans push real accounts out of the list — and
+  // out of the persisted index. Indexed accounts are already bounded by
+  // `vaultAddAccount`, so only this untrusted input needs a limit.
+  const recovered = parseAddressesFromScopedKeys(allKeys).slice(0, MAX_ACCOUNTS);
 
   // BOUND the candidate set before probing. `parseAddressesFromScopedKeys`
   // scans every AsyncStorage key, and each surviving candidate costs up to
@@ -71,7 +75,7 @@ export async function vaultListAccounts(): Promise<AccountEntry[]> {
   // seeded with them — would do that work on every boot and every account
   // create, to the point of not starting at all. Real accounts are capped at
   // MAX_ACCOUNTS anyway, so anything beyond that cannot be legitimate.
-  const merged = mergeIndexes(primary, mirror, recovered).slice(0, MAX_ACCOUNTS);
+  const merged = mergeIndexes(primary, mirror, recovered);
 
   // PERSIST THE UNION, NEVER THE PRUNED SET.
   //
@@ -108,6 +112,26 @@ async function hasSlot(addr: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Read the persisted index union without probing slots. */
+async function readPersistedIndex(): Promise<AccountEntry[]> {
+  const primary = parseIndex(await AsyncStorage.getItem(AS.primaryIndex).catch(() => null));
+  const mirror = parseMirror(await SecureStore.getItemAsync(SS.mirror).catch(() => null));
+  return mergeIndexes(primary, mirror, []);
+}
+
+/** Add one entry to the persisted index, preserving everything already there. */
+async function persistIndexAdding(entry: AccountEntry): Promise<void> {
+  const current = await readPersistedIndex();
+  if (current.some((e) => e.a === entry.a)) return;
+  await persistIndex([...current, entry]);
+}
+
+/** Remove exactly one address from the persisted index, touching nothing else. */
+async function persistIndexRemoving(addr: string): Promise<void> {
+  const current = await readPersistedIndex();
+  await persistIndex(current.filter((e) => e.a !== addr));
 }
 
 async function persistIndex(entries: AccountEntry[]): Promise<void> {
@@ -188,7 +212,11 @@ export async function vaultAddAccount(privateKeyHex: string): Promise<string> {
   const back = await SecureStore.getItemAsync(SS.rawFor(addr)).catch(() => null);
   if (back !== privateKeyHex) throw new Error('Vault write could not be verified');
 
-  await persistIndex([...existing, { a: addr, label: null, source: 'builtin', added: Date.now() }]);
+  // Merge into what is CURRENTLY PERSISTED, never into the probed list.
+  // `existing` is the confirmed subset, so writing it back would drop any
+  // account whose slot happened to read null a moment ago — reintroducing the
+  // exact index-shrinking bug the union write in `vaultListAccounts` fixes.
+  await persistIndexAdding({ a: addr, label: null, source: 'builtin', added: Date.now() });
   cachedSigner = signer;
   activeAddress = addr;
   await SecureStore.setItemAsync(SS.active, addr, SS_OPTS).catch(() => {});
@@ -224,8 +252,9 @@ export async function vaultRemoveAccount(addr: string): Promise<void> {
       /* unparsable legacy key — leave it, it cannot resurrect anything */
     }
   }
-  const remaining = (await vaultListAccounts()).filter((e) => e.a !== addr);
-  await persistIndex(remaining);
+  // Remove from the PERSISTED set, not from the probed one — otherwise
+  // removing account A also drops any account whose slot read null just then.
+  await persistIndexRemoving(addr);
   if (activeAddress === addr) {
     cachedSigner = null;
     activeAddress = null;
@@ -386,10 +415,7 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
   const addr = signer.address;
   await SecureStore.setItemAsync(SS.rawFor(addr), privateKeyHex, SS_OPTS);
   await SecureStore.setItemAsync(SS.modeFor(addr), 'raw', SS_OPTS);
-  const known = await vaultListAccounts().catch(() => [] as AccountEntry[]);
-  if (!known.some((e) => e.a === addr)) {
-    await persistIndex([...known, { a: addr, label: null, source: 'builtin', added: Date.now() }]);
-  }
+  await persistIndexAdding({ a: addr, label: null, source: 'builtin', added: Date.now() });
   await SecureStore.setItemAsync(SS.active, addr, SS_OPTS).catch(() => {});
 
   cachedSigner = signer;
@@ -402,72 +428,8 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
  * Migrates from raw → encrypted storage. Call after PIN setup.
  * The raw key is deleted after successful encryption.
  */
-/**
- * Encrypt EVERY account's key at rest with the PIN-derived key.
- *
- * Encrypting only the legacy slot would be worse than doing nothing: after the
- * v3 migration the active account's key lives in a per-account slot, so a PIN
- * would delete the legacy plaintext copy, leave `ogmara.vault.private_key.<addr>`
- * in the clear, and report success. A device-backup or forensics attacker
- * would then get raw hex where they previously got an AES-GCM blob.
- *
- * Still has no callers (App Lock currently gates the UI only) — but it must be
- * correct before it gets one, which is exactly why it is fixed here rather
- * than left as a trap.
- */
-export async function vaultEncryptAllWithPin(pinKey: Uint8Array): Promise<void> {
-  await vaultMigrationsReady();
-  const held = await vaultListAccounts().catch(() => [] as AccountEntry[]);
-  for (const e of held) {
-    const hex = await readKeyFor(e.a);
-    if (!hex) continue;
-    const blob = await encryptWithKey(pinKey, hex);
-    await SecureStore.setItemAsync(SS.encFor(e.a), blob, SS_OPTS);
-    // Verify the ciphertext round-trips BEFORE destroying the plaintext.
-    const back = await SecureStore.getItemAsync(SS.encFor(e.a)).catch(() => null);
-    if (!back || (await decryptWithKey(pinKey, back)) !== hex) continue;
-    await SecureStore.setItemAsync(SS.modeFor(e.a), 'encrypted', SS_OPTS);
-    await SecureStore.deleteItemAsync(SS.rawFor(e.a)).catch(() => {});
-  }
-}
 
-export async function vaultEncryptWithPin(pinKey: Uint8Array): Promise<void> {
-  // Get the raw key (either from memory or storage)
-  let hex: string | null = null;
 
-  const storedRaw = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
-  if (storedRaw) {
-    hex = storedRaw;
-  }
-
-  if (!hex) throw new Error('No wallet to encrypt');
-
-  const encrypted = await encryptWithKey(pinKey, hex);
-  await SecureStore.setItemAsync(VAULT_ENCRYPTED_KEY, encrypted, {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-  });
-  await SecureStore.setItemAsync(VAULT_MODE_KEY, 'encrypted');
-
-  // Delete the raw key — it's now only stored encrypted
-  await SecureStore.deleteItemAsync(VAULT_RAW_KEY);
-}
-
-/**
- * Decrypt vault and switch back to raw storage (when PIN is removed).
- * Requires the PIN-derived key to decrypt first.
- */
-export async function vaultDecryptToRaw(pinKey: Uint8Array): Promise<void> {
-  const encrypted = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY);
-  if (!encrypted) return;
-
-  const hex = await decryptWithKey(pinKey, encrypted);
-
-  await SecureStore.setItemAsync(VAULT_RAW_KEY, hex, {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-  });
-  await SecureStore.setItemAsync(VAULT_MODE_KEY, 'raw');
-  await SecureStore.deleteItemAsync(VAULT_ENCRYPTED_KEY);
-}
 
 /**
  * Generate a new random wallet in the vault (raw mode).
@@ -542,7 +504,15 @@ export async function vaultWipe(): Promise<void> {
     const primary = parseIndex(await AsyncStorage.getItem(AS.primaryIndex).catch(() => null));
     const mirror = parseMirror(await SecureStore.getItemAsync(SS.mirror).catch(() => null));
     const allKeys = await AsyncStorage.getAllKeys().catch(() => [] as string[]);
-    const every = mergeIndexes(primary, mirror, parseAddressesFromScopedKeys(allKeys));
+    // Include the recorded active account. A freshly added account may have no
+    // scoped preference keys yet and, if `persistIndex` had failed, no index
+    // entry either — leaving `SS.active` as the only reference to its slot.
+    const activeRecorded = await SecureStore.getItemAsync(SS.active).catch(() => null);
+    const scanned = parseAddressesFromScopedKeys(allKeys);
+    if (activeRecorded && isValidAddress(activeRecorded)) scanned.push(activeRecorded);
+    // NOT capped: a wipe must reach every account, including any beyond the
+    // display cap.
+    const every = mergeIndexes(primary, mirror, scanned);
     for (const e of every) {
       for (const k of [SS.rawFor(e.a), SS.encFor(e.a), SS.modeFor(e.a), SS.encPrivFor(e.a)]) {
         await SecureStore.deleteItemAsync(k).catch(() => {});
@@ -576,3 +546,21 @@ export async function vaultSignRequest(
   const headers = await cachedSigner.signRequest(method, path, binding);
   return { ...headers };
 }
+
+/*
+ * PIN-at-rest encryption was REMOVED in 0.47.0 rather than carried forward.
+ *
+ * `vaultEncryptWithPin` / `vaultDecryptToRaw` had never had a caller since the
+ * app shipped — App Lock gates the UI only, and the private key has always sat
+ * raw in SecureStore. With per-account slots they became actively unsafe:
+ * encrypting only the legacy slot left every `ogmara.vault.private_key.<addr>`
+ * in plaintext while reporting success, and a version that encrypted the
+ * per-account slots would have made those accounts permanently unloadable,
+ * because `readKeyFor` has no decrypt path and `vaultUnlockWithPin` reads only
+ * the legacy slot.
+ *
+ * Shipping a dead function that would lock a user out of every wallet if
+ * anyone wired it is worse than not having the feature. Implement PIN-at-rest
+ * properly — per-slot encrypt AND a matching decrypt in `readKeyFor` — when
+ * App Lock actually needs it.
+ */

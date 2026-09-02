@@ -12,7 +12,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { gcm } from '@noble/ciphers/aes';
 import { randomBytes } from '@noble/ciphers/webcrypto';
 import { getSetting, setSetting } from './settings';
-import { getCryptoClient } from './cryptoEnv';
+import { getCryptoClient, walletAddress } from './cryptoEnv';
 import { vaultExportKey } from './vault';
 import { ensureChannelOrgLoaded, getChannelOrg, applyRemoteOrg } from './channelOrg';
 import { addJoinedChannels } from './joinedChannels';
@@ -212,6 +212,17 @@ export async function uploadSettings(): Promise<void> {
  */
 export async function downloadSyncedObjects(): Promise<boolean> {
   try {
+    // Capture the account this download is FOR. It is fired on every
+    // `walletAddress` change and on every `settings_changed` nudge, so an
+    // account switch can land mid-flight. The decrypt itself fails safe (the
+    // GCM tag check throws under the wrong key), but AFTER a successful
+    // decrypt the `applyRemote*` calls below would write the previous
+    // account's channel memberships, hidden-DM peers and followed topics into
+    // the new account's caches — which then persist under its namespace and
+    // upload to the node under its key, linking the two accounts' interest
+    // graphs server-side. That is exactly the unlinkability multi-account
+    // exists to provide.
+    const forWallet = walletAddress();
     // Hydrate the three caches up front so both the LWW comparison and any
     // re-seed upload run against this device's real on-disk state.
     await Promise.all([ensureChannelOrgLoaded(), ensureHiddenDmsLoaded(), ensureTopicGroupsLoaded()]);
@@ -233,6 +244,9 @@ export async function downloadSyncedObjects(): Promise<boolean> {
 
     const hexKey = await vaultExportKey();
     if (!hexKey) return false;
+    // Re-check after the awaits above: the key just read belongs to whoever is
+    // active NOW, which may no longer be who this download was started for.
+    if (walletAddress() !== forWallet) return false;
     const key = deriveKey(hexKey);
     const cipher = gcm(key, new Uint8Array(nonce));
     const plaintext = cipher.decrypt(new Uint8Array(encrypted));
@@ -240,6 +254,9 @@ export async function downloadSyncedObjects(): Promise<boolean> {
 
     const settings = JSON.parse(new TextDecoder().decode(plaintext));
     if (typeof settings !== 'object' || settings === null) return false;
+
+    // Final check before writing anything into the in-memory caches.
+    if (walletAddress() !== forWallet) return false;
 
     let applied = false;
     const org = settings[CHANNEL_ORG_KEY];

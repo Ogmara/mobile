@@ -127,7 +127,17 @@ export async function deviceCtx(): Promise<DeviceCtx | null> {
   const signer = getSigner();
   const wallet = walletAddress();
   if (!signer || !wallet) return null;
-  const kp = await getOrCreateEncKeypair();
+  // `getOrCreateEncKeypair` now THROWS when no account is scoped, rather than
+  // minting a keypair into the shared legacy slot. `deviceCtx` is awaited bare
+  // from decrypt paths inside render effects, so letting that escape would
+  // reject the effect and stop the rest of the message batch decrypting.
+  // `null` is this function's documented "not ready" signal — use it.
+  let kp;
+  try {
+    kp = await getOrCreateEncKeypair();
+  } catch {
+    return null;
+  }
   return { signer, encPriv: kp.privateKey, deviceId: await getOrCreateDeviceId(), wallet };
 }
 

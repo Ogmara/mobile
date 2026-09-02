@@ -145,8 +145,20 @@ export function mergeIndexes(
       byAddr.set(a, { a, label: null, source: 'builtin', added: 0 });
     }
   }
-  // Stable order: oldest first, then address, so the picker does not reshuffle.
-  return [...byAddr.values()].sort((x, y) => x.added - y.added || x.a.localeCompare(y.a));
+  // Order matters for more than the picker: callers CAP this list, so whatever
+  // sorts last is what gets evicted.
+  //
+  // Entries recovered from the scan or the mirror have no timestamp
+  // (`added: 0`). Sorting purely ascending therefore put those FIRST and
+  // evicted every real, indexed account — turning a cap meant to bound work
+  // into a way to lose accounts. Real entries (added > 0) now sort ahead of
+  // timestamp-less ones, so a cap sheds unconfirmed candidates first.
+  return [...byAddr.values()].sort((x, y) => {
+    const xReal = x.added > 0 ? 0 : 1;
+    const yReal = y.added > 0 ? 0 : 1;
+    if (xReal !== yReal) return xReal - yReal;
+    return x.added - y.added || x.a.localeCompare(y.a);
+  });
 }
 
 /** Serialize the mirror, enforcing the size cap. */

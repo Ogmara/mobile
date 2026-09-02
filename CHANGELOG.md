@@ -148,6 +148,42 @@ them were shipped-blocking despite the label:
   coverage that does not exist) were removed, and the doc claiming an
   account-rename feature was corrected — `label` is reserved but unwritten.
 
+A second audit round was then run against the fixed tree, on the principle
+that fixes are where regressions come from. It found four, three of them
+caused by the first round's own fixes:
+
+- **"Disconnect" would have destroyed every wallet on the device.** Making
+  `vaultWipe` total (so sign-out stopped leaving keys behind) turned a
+  two-tap path whose confirmation still says "the wallet", singular, into a
+  multi-wallet erase with no per-account export gate. Disconnect now removes
+  only the ACTIVE account and hands over to another held wallet, matching what
+  the Accounts screen already does.
+- **The `MAX_ACCOUNTS` cap evicted real accounts first.** Entries recovered
+  from the scan carry no timestamp and sorted ahead of genuinely added ones,
+  so the cap added to bound work would have dropped real accounts from both
+  indexes. The cap now applies to the untrusted scan input only, and real
+  entries sort ahead of unconfirmed ones.
+- **Three index mutations still wrote the pruned set**, undoing the union
+  guarantee microseconds after it was written. They now merge into what is
+  persisted rather than into the probed list.
+- **`downloadSyncedObjects` had no wallet guard** — the same class as the key
+  vault fix, in a file the first round did not touch. After a successful
+  decrypt, an account switch mid-flight would have written one account's
+  channel memberships, hidden-DM peers and followed topics into another's
+  caches, then uploaded them under that account's key — linking two accounts'
+  interest graphs on the server, which is precisely the unlinkability
+  multi-account exists to provide.
+
+Also: PIN-at-rest encryption was **removed** rather than carried forward. It
+had never had a caller, and with per-account slots it would have made every
+account it touched permanently unloadable — `readKeyFor` has no decrypt path.
+A dead function that would lock a user out of every wallet if anyone wired it
+is worse than not having the feature. Plus: the DM decrypt path no longer
+propagates the new unscoped-keypair throw, the removal fallback skips K5 rows
+it cannot switch to, the WebSocket closes during teardown instead of
+delivering the old account's frames into the new account's screens, debounced
+uploads are cancelled before activation, and the wipe enumerates `SS.active`.
+
 ## [0.46.0] - 2026-09-02
 
 Switching wallets left the previous account's data on screen. Reported after

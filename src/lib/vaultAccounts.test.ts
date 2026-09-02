@@ -144,3 +144,25 @@ test('every per-account SecureStore key derives only from a validated address', 
     assert.ok(!isValidAddress(hostile), `must reject: ${hostile}`);
   }
 });
+
+test('a cap sheds unconfirmed candidates, never real accounts', () => {
+  // Callers cap this list, so sort order decides what is evicted. Entries
+  // recovered from the scan or mirror have `added: 0`; a plain ascending sort
+  // put those FIRST and evicted every real account — turning a cap meant to
+  // bound work into a way to lose accounts from the persisted index.
+  const real = entry(A, { added: Date.now() });
+  const ghosts = ['klv1' + 'q'.repeat(58)];   // shape-valid, slot-less
+  const merged = mergeIndexes([real], [], ghosts.filter(isValidAddress));
+  assert.equal(merged[0].a, A, 'a real, indexed account must sort ahead of a ghost');
+  assert.ok(merged.slice(0, 1).some((e) => e.a === A), 'and must survive a cap of 1');
+});
+
+test('merge is not itself capped — a wipe must be able to reach every account', () => {
+  // `vaultWipe` enumerates through mergeIndexes. Capping inside it would leave
+  // key material for accounts past the limit that nothing could ever remove.
+  const many = Array.from({ length: MAX_ACCOUNTS + 5 }, (_, i) =>
+    entry(i % 2 ? A : B, { added: i + 1 }));
+  assert.ok(mergeIndexes(many, [], []).length <= 2, 'dedupes by address');
+  const distinct = mergeIndexes([entry(A, { added: 1 }), entry(B, { added: 2 })], [], []);
+  assert.equal(distinct.length, 2, 'mergeIndexes applies no cap of its own');
+});

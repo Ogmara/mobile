@@ -45,6 +45,25 @@ export function registerWalletSwitchReset(fn: () => void): void {
   switchResets.add(fn);
 }
 
+/**
+ * Fire the switch resets WITHOUT changing scope.
+ *
+ * Needed because `vaultActivate` mutates the vault's notion of the active
+ * account before the scope flips. An upload timer armed for the old account
+ * that fires in that window would read the NEW account's key (via
+ * `vaultExportKey`) while still resolving the OLD account's data — writing an
+ * unopenable blob. Cancel first, activate second.
+ */
+export function runWalletSwitchResets(): void {
+  for (const reset of switchResets) {
+    try {
+      reset();
+    } catch {
+      /* one bad reset must not block the switch */
+    }
+  }
+}
+
 export function setWalletScope(address: string | null): void {
   const next = address && address.length > 0 ? address : null;
   const changed = next !== activeWallet;

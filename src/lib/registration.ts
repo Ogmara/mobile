@@ -11,6 +11,15 @@ import { getClient } from './api';
 /** Atomic units per KLV (6 decimals). */
 const KLV = 1_000_000;
 
+/**
+ * The contract's own ceiling on `registration_fee`: 10,000 KLV
+ * (`MAX_REGISTRATION_FEE` in smart-contract/src/registry.rs, enforced on every
+ * write path). Anything above it is provably not a legitimate fee, so a value
+ * that large means the node is broken or hostile — treat it as UNKNOWN rather
+ * than asking the user to sign it.
+ */
+const MAX_FEE_ATOMIC = 10_000_000_000;
+
 export interface RegistrationCost {
   /**
    * `true` when we have an authoritative fee from the node.
@@ -58,12 +67,23 @@ export async function loadRegistrationCost(): Promise<RegistrationCost> {
     }
     // A decimal STRING of raw units. Parse via BigInt so a large value cannot
     // silently round, then narrow only once it is known to be safe.
-    const raw = BigInt(info.registration_fee);
-    if (raw > BigInt(Number.MAX_SAFE_INTEGER)) return UNKNOWN;
+    let raw: bigint;
+    try {
+      raw = BigInt(info.registration_fee);
+    } catch {
+      // Not a decimal string — a broken or hostile node.
+      return UNKNOWN;
+    }
+    if (raw < 0n || raw > BigInt(MAX_FEE_ATOMIC)) return UNKNOWN;
+    const feeAtomic = Number(raw);
     return {
       known: true,
-      feeAtomic: Number(raw),
-      feeKlv: info.registration_fee_klv ?? formatKlv(Number(raw)),
+      feeAtomic,
+      // Derived from the amount we will actually SIGN, never from the node's
+      // own display string. A node returning registration_fee "10000000000"
+      // alongside registration_fee_klv "100" would otherwise show "100 KLV"
+      // and charge 10,000.
+      feeKlv: formatKlv(feeAtomic),
       shareBps: Number(info.node_fee_share_bps ?? 0),
       // Validated HERE, in the one place all three clients share, so a
       // malformed operator address never reaches calldata. Web/desktop would

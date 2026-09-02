@@ -316,5 +316,6 @@
   "action_failed": "Action failed",
   "verify_wallet_required": "This action requires a verified wallet. Register your identity on-chain (Settings → Wallet) first.",
   "pow_busy": "The node is busy verifying your wallet (proof-of-work). Please try again in a moment.",
-  "register_confirm_fee": "Verifying your wallet on-chain costs {fee} KLV, plus roughly 4.4 KLV in network fees. A share of the fee goes to the node operator you verify through. Verifying unlocks editing your posts and messages, creating and managing channels, and moderation."
+  "register_confirm_fee": "Verifying your wallet on-chain costs {fee} KLV, plus roughly 4.4 KLV in network fees. A share of the fee goes to the node operator you verify through. Verifying unlocks editing your posts and messages, creating and managing channels, and moderation.",
+  "register_confirm_fee_unknown": "Could not read the current verification fee from this node, so the transaction may be rejected. Registering costs roughly 4.4 KLV in network fees plus the on-chain verification fee, if one is set. Try again, or switch nodes."
 }

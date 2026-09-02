@@ -149,9 +149,15 @@ export default function WalletScreen() {
     setRegistering(false);
     showAlert(
       t('register_title'),
-      cost.known && cost.feeAtomic > 0
-        ? t('register_confirm_fee').replace('{fee}', cost.feeKlv)
-        : t('register_confirm'),
+      // Three distinct cases. The unknown one matters most on mobile: the
+      // vault signs locally, so this dialog is the ONLY place the user ever
+      // sees an amount — there is no wallet prompt to fall back on, and a
+      // zero-value call against a live fee is a guaranteed on-chain revert.
+      !cost.known
+        ? t('register_confirm_fee_unknown')
+        : cost.feeAtomic > 0
+          ? t('register_confirm_fee').replace('{fee}', cost.feeKlv)
+          : t('register_confirm'),
       [
         { text: t('cancel'), style: 'cancel' },
         {

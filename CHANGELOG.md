@@ -5,6 +5,49 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45.1] - 2026-09-02
+
+Found by the pre-build audit, before any APK was produced. 0.45.0 was
+committed but never built or installed, so no device ever ran the gap below.
+
+### Security
+
+- **Three of the security fixes 0.45.0's changelog claimed were missing from
+  this client.** `src/lib/registration.ts` was copied from the web client
+  BEFORE those fixes were applied and never re-synced, so mobile shipped with:
+  the displayed fee taken from the node's own `registration_fee_klv` string
+  rather than derived from the amount actually signed; no upper bound against
+  the contract's 10,000 KLV ceiling (only `MAX_SAFE_INTEGER`, six orders of
+  magnitude higher); and no rejection of negative fees.
+  **Mobile was the worst client to have this gap.** Web and desktop route
+  through the Klever extension, which shows the real value in its own prompt;
+  mobile signs locally with the vault, so the confirmation dialog is the only
+  place a user ever sees an amount. A node could have displayed "100 KLV" and
+  had 10,000 KLV signed. The file is now byte-identical to the web version
+  apart from its async client call.
+- The node's `registration_fee_klv` was also being pasted through
+  `String.replace('{fee}', …)`, where `$&` and similar sequences expand — an
+  injection surface into the confirmation text. Deriving the display from the
+  signed amount closes it.
+
+### Fixed
+
+- **A single failed `networkStats()` call disabled every on-chain action for
+  the session.** The contract address was cached from that one response, so a
+  transient failure left it empty and register/createChannel/delegation all
+  threw "Smart contract address not configured" — despite the correct address
+  being compiled in. It is now resolved from the pin on every call.
+- The same caching went stale across a node switch: moving from a mainnet node
+  to a testnet one could sign a payable call against the other network's
+  contract address. Resolving per call fixes both.
+- The confirmation dialog now says plainly when the fee could not be read,
+  instead of showing generic text that implies success. On mobile there is no
+  second wallet prompt, and a zero-value call against a live fee is a
+  guaranteed on-chain revert that burns the network fee.
+- 0.45.0's changelog named a `verification_fee_*` i18n key that does not exist
+  in this client; the actual keys are `register_confirm_fee` and now
+  `register_confirm_fee_unknown`.
+
 ## [0.45.0] - 2026-09-02
 
 Verification now pays the on-chain registration fee and credits the node the
@@ -31,7 +74,8 @@ user verified through (smart-contract 0.10.0, l2-node 0.126.0+).
   so omitting it routes the whole fee to the protocol treasury.
 - Cost disclosure before the user commits: the fee, the operator's share, the
   network fee, and what verification unlocks. Folded into the existing confirmation dialog rather than a new screen.
-- New `verification_fee_*` strings in all 7 locales.
+- New `register_confirm_fee` / `register_confirm_fee_unknown` strings in all
+  7 locales.
 
 ### Changed
 

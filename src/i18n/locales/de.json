@@ -316,5 +316,6 @@
   "e2e_decrypting": "🔒 Wird entschlüsselt…",
   "e2e_attachment": "verschlüsselter Anhang",
   "wallet_currency": "Anzeigewährung",
-  "register_confirm_fee": "Die On-Chain-Verifizierung deiner Wallet kostet {fee} KLV zuzüglich etwa 4,4 KLV Netzwerkgebühren. Ein Teil der Gebühr geht an den Betreiber der Node, über die du dich verifizierst. Die Verifizierung schaltet das Bearbeiten deiner Beiträge und Nachrichten, das Erstellen und Verwalten von Kanälen sowie Moderation frei."
+  "register_confirm_fee": "Die On-Chain-Verifizierung deiner Wallet kostet {fee} KLV zuzüglich etwa 4,4 KLV Netzwerkgebühren. Ein Teil der Gebühr geht an den Betreiber der Node, über die du dich verifizierst. Die Verifizierung schaltet das Bearbeiten deiner Beiträge und Nachrichten, das Erstellen und Verwalten von Kanälen sowie Moderation frei.",
+  "register_confirm_fee_unknown": "Die aktuelle Verifizierungsgebühr konnte von dieser Node nicht gelesen werden, daher kann die Transaktion abgelehnt werden. Die Registrierung kostet etwa 4,4 KLV Netzwerkgebühren zuzüglich der On-Chain-Verifizierungsgebühr, sofern eine festgelegt ist. Versuche es erneut oder wechsle die Node."
 }

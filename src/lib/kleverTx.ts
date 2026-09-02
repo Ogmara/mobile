@@ -45,10 +45,20 @@ const PINNED_CONTRACTS: Record<string, string> = {
   mainnet: 'klv1qqqqqqqqqqqqqpgq8c9yag9vuc2pe64fwvqsq9e8ul8w5zuglf5qfgh7z3',
 };
 
-/** Ogmara KApp smart contract address (client-pinned per network). */
-let scAddress = '';
-/** True when `scAddress` is client-pinned rather than node-supplied. */
-let scAddressPinned = false;
+/**
+ * Resolve the pinned contract for the CURRENT network, every time it is
+ * needed.
+ *
+ * Deliberately not a cached module variable. A cached value would (a) stay
+ * empty for the whole session if the one `networkStats()` call that set it
+ * happened to fail — disabling every on-chain action even though the correct
+ * address is compiled in — and (b) go stale across a node switch, so a user
+ * moving from a mainnet node to a testnet one could sign a payable call
+ * against the wrong network's contract.
+ */
+async function resolveContractAddress(): Promise<string> {
+  return PINNED_CONTRACTS[await getKleverNetwork()] || '';
+}
 
 /**
  * Record the contract address the connected node reports.
@@ -58,20 +68,15 @@ let scAddressPinned = false;
  * the network itself is resolved asynchronously on mobile.
  */
 export function setContractAddress(address: string): void {
-  if (!address || !address.startsWith('klv1') || address.length < 40) return;
-  // Accept only one of the addresses this app ships with. Checking membership
-  // rather than the pin for the *current* network keeps this synchronous (the
-  // network resolves asynchronously on mobile, and the caller is
-  // fire-and-forget) while giving the same protection: an attacker's own
-  // contract is never adopted. A cross-network mismatch is not a theft vector
-  // — both are our contracts — and fails safely on-chain, since the provider
-  // URLs are derived separately and the contract will not exist there.
+  // Purely advisory now: the address actually used is always resolved from
+  // the pin for the current network (see `resolveContractAddress`). This only
+  // reports a node that disagrees, which is worth surfacing but must never
+  // change where the user's money goes — nor disable on-chain actions when
+  // the node is simply unreachable.
+  if (!address) return;
   if (!Object.values(PINNED_CONTRACTS).includes(address)) {
     console.warn('[Klever SC] node reported a non-pinned contract address; ignoring it.');
-    return;
   }
-  scAddress = address;
-  scAddressPinned = true;
 }
 
 /** Ogmara's own Klever block explorer (kleverchain.org). */
@@ -318,14 +323,11 @@ async function invokeContract(params: {
   args: string[];
   value?: number;
 }): Promise<string> {
+  // Always the pin for the network we are actually on — never a node-supplied
+  // or cached value.
+  const scAddress = await resolveContractAddress();
   if (!scAddress) {
     throw new Error('Smart contract address not configured');
-  }
-  // Never send money to a contract address the app did not pin.
-  if (params.value && !scAddressPinned) {
-    throw new Error(
-      'Refusing to send a payment to a contract address supplied by the node.',
-    );
   }
   const callData = [params.functionName, ...params.args].join('@');
   const payload: Record<string, unknown> = {
@@ -427,7 +429,11 @@ export async function getChannelIdFromTx(txHash: string, slug: string): Promise<
   const vmResp = await fetchWithTimeout(`${provider.node}/vm/hex`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scAddress, funcName: 'getChannelBySlug', args: [slugHex] }),
+    body: JSON.stringify({
+      scAddress: await resolveContractAddress(),
+      funcName: 'getChannelBySlug',
+      args: [slugHex],
+    }),
   });
   if (!vmResp.ok) throw new Error('Failed to query SC for channel ID');
   const vmData = await vmResp.json();

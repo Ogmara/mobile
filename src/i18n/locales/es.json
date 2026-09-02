@@ -316,5 +316,6 @@
   "e2e_decrypting": "🔒 Descifrando…",
   "e2e_attachment": "adjunto cifrado",
   "wallet_currency": "Moneda de visualización",
-  "register_confirm_fee": "Verificar tu monedero en cadena cuesta {fee} KLV, más unos 4,4 KLV de tarifas de red. Una parte de la tarifa va al operador del nodo a través del cual te verificas. Verificar desbloquea la edición de tus publicaciones y mensajes, la creación y gestión de canales, y la moderación."
+  "register_confirm_fee": "Verificar tu monedero en cadena cuesta {fee} KLV, más unos 4,4 KLV de tarifas de red. Una parte de la tarifa va al operador del nodo a través del cual te verificas. Verificar desbloquea la edición de tus publicaciones y mensajes, la creación y gestión de canales, y la moderación.",
+  "register_confirm_fee_unknown": "No se pudo leer la tarifa de verificación actual de este nodo, por lo que la transacción puede ser rechazada. Registrarse cuesta unos 4,4 KLV de tarifas de red más la tarifa de verificación en cadena, si hay alguna establecida. Inténtalo de nuevo o cambia de nodo."
 }

@@ -117,6 +117,37 @@ these was a genuine key-loss or key-exposure path, found before any build:
   wallet screen. Forcing a raw key onto the clipboard was a worse exposure
   than the one it guarded against.
 
+The audits' *warning* and *note* findings were then worked as well, and two of
+them were shipped-blocking despite the label:
+
+- **The account recovery scan was unbounded.** It read every AsyncStorage key
+  and, for each candidate, did up to three SecureStore reads plus an ed25519
+  derivation — on every boot and every account create. A device carrying many
+  stale scoped keys could have failed to start. Capped at `MAX_ACCOUNTS`,
+  which no legitimate install exceeds.
+- **Enabling a PIN protected nothing.** `vaultEncryptWithPin` encrypted only
+  the legacy slot, so after migration it deleted the plaintext anchor, left
+  every `ogmara.vault.private_key.<addr>` in the clear, and reported success —
+  handing a backup or forensics attacker raw hex where they previously got an
+  AES-GCM blob. Replaced by `vaultEncryptAllWithPin`, which encrypts every
+  account and verifies each ciphertext round-trips before destroying the
+  plaintext. Still unwired (App Lock remains a UI gate), but correct before it
+  gets a caller.
+- **Encrypted-vault users were stranded at v2 forever.** The deferral wrote a
+  `v3_pending` marker that nothing read, so PIN users would have kept an empty
+  Accounts list and a null `vaultExportKey()` — breaking settings sync. The
+  migration now completes on a successful PIN unlock, which is the first
+  moment the address is knowable.
+- `vaultHasWallet` counts per-account slots, so removing the pre-migration
+  account no longer makes App Lock permanently un-enableable.
+- No device encryption keypair is created while no account is scoped; it would
+  have been minted into the shared legacy slot and inherited by whichever
+  account was activated next.
+- `vaultAddAccount` validates the key format; `deviceRegistered` was added to
+  the legacy claim list; the unused `KVStore` exports (which implied test
+  coverage that does not exist) were removed, and the doc claiming an
+  account-rename feature was corrected — `label` is reserved but unwritten.
+
 ## [0.46.0] - 2026-09-02
 
 Switching wallets left the previous account's data on screen. Reported after

@@ -60,7 +60,9 @@ interface ConnectionContextValue {
   generateWallet: () => Promise<void>;
   /** Every account held on this device. */
   accounts: AccountEntry[];
-  /** Reload the account list (after add/remove/rename). */
+  /** Reload the account list (after add or remove). Renaming is not
+   *  implemented — `AccountEntry.label` is reserved but never written, so the
+   *  list falls back to each account's display name. */
   refreshAccounts: () => Promise<void>;
   /** Switch to another held account. Keeps both accounts' data. */
   switchAccount: (address: string) => Promise<void>;

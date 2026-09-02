@@ -64,7 +64,14 @@ export async function vaultListAccounts(): Promise<AccountEntry[]> {
   const allKeys = await AsyncStorage.getAllKeys().catch(() => [] as string[]);
   const recovered = parseAddressesFromScopedKeys(allKeys);
 
-  const merged = mergeIndexes(primary, mirror, recovered);
+  // BOUND the candidate set before probing. `parseAddressesFromScopedKeys`
+  // scans every AsyncStorage key, and each surviving candidate costs up to
+  // three SecureStore reads plus an ed25519 derivation in `hasSlot`. Left
+  // uncapped, a device with many stale `::<addr>` preference keys — or one
+  // seeded with them — would do that work on every boot and every account
+  // create, to the point of not starting at all. Real accounts are capped at
+  // MAX_ACCOUNTS anyway, so anything beyond that cannot be legitimate.
+  const merged = mergeIndexes(primary, mirror, recovered).slice(0, MAX_ACCOUNTS);
 
   // PERSIST THE UNION, NEVER THE PRUNED SET.
   //
@@ -156,6 +163,11 @@ export async function vaultActivate(addr: string): Promise<string | null> {
 
 /** Add an account from an existing private key, and make it active. */
 export async function vaultAddAccount(privateKeyHex: string): Promise<string> {
+  // Validate the shape here as well as in the UI: this is a public entry point
+  // that writes key material to SecureStore.
+  if (!/^[0-9a-fA-F]{64}$/.test(privateKeyHex)) {
+    throw new Error('Invalid private key format');
+  }
   await vaultMigrationsReady();
   const signer = await WalletSigner.fromHex(privateKeyHex);
   const addr = signer.address;
@@ -271,7 +283,12 @@ export async function vaultInit(): Promise<string | null> {
 export async function vaultHasWallet(): Promise<boolean> {
   const raw = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
   const enc = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY).catch(() => null);
-  return !!(raw || enc);
+  if (raw || enc) return true;
+  // Per-account slots count too. Checking only the legacy anchor meant that
+  // once the pre-migration account was removed this returned false while
+  // other accounts were still held — and `vaultEncryptWithPin` refuses on
+  // that basis, so App Lock could never be enabled again.
+  return (await vaultListAccounts().catch(() => [] as AccountEntry[])).length > 0;
 }
 
 /**
@@ -286,9 +303,51 @@ export async function vaultUnlockWithPin(pinKey: Uint8Array): Promise<string | n
 
     const hex = await decryptWithKey(pinKey, encrypted);
     cachedSigner = await WalletSigner.fromHex(hex);
-    return cachedSigner.address;
+    // Set the ACTIVE address. Leaving it null meant `vaultExportKey()`
+    // returned null after a PIN unlock, which breaks settings sync.
+    activeAddress = cachedSigner.address;
+
+    // Complete the deferred v3 migration. `migrateV2toV3` cannot run for an
+    // encrypted-only vault because the address is not derivable without the
+    // PIN — it records `SS.pending` and leaves the tag at 2. Nothing read that
+    // marker, so PIN users would have stayed at v2 forever with an empty
+    // account list. Now we know the address, so finish the job here.
+    await completeDeferredV3(activeAddress, encrypted);
+    return activeAddress;
   } catch {
     return null; // wrong PIN or corrupted data
+  }
+}
+
+/**
+ * Finish the v3 migration for an encrypted vault, once a successful unlock has
+ * revealed the address. Best-effort and idempotent: a failure just leaves the
+ * marker in place to retry on the next unlock.
+ */
+async function completeDeferredV3(addr: string, encryptedBlob: string): Promise<void> {
+  try {
+    const pending = await SecureStore.getItemAsync(SS.pending).catch(() => null);
+    if (pending !== 'encrypted') return;
+    if (!isValidAddress(addr)) return;
+
+    await SecureStore.setItemAsync(SS.encFor(addr), encryptedBlob, SS_OPTS);
+    await SecureStore.setItemAsync(SS.modeFor(addr), 'encrypted', SS_OPTS);
+    // Verify before indexing — an indexed account with no readable slot would
+    // look present and be unusable.
+    const back = await SecureStore.getItemAsync(SS.encFor(addr)).catch(() => null);
+    if (back !== encryptedBlob) return;
+
+    const existing = parseIndex(await AsyncStorage.getItem(AS.primaryIndex).catch(() => null));
+    if (!existing.some((e) => e.a === addr)) {
+      existing.push({ a: addr, label: null, source: 'builtin', added: Date.now() });
+    }
+    await persistIndex(existing);
+    await SecureStore.setItemAsync(SS.active, addr, SS_OPTS).catch(() => {});
+    await SecureStore.deleteItemAsync(SS.pending).catch(() => {});
+    // Only now is the vault genuinely at v3.
+    await SecureStore.setItemAsync('ogmara.vault.version', '3').catch(() => {});
+  } catch {
+    /* retry on the next unlock */
   }
 }
 
@@ -343,6 +402,35 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
  * Migrates from raw → encrypted storage. Call after PIN setup.
  * The raw key is deleted after successful encryption.
  */
+/**
+ * Encrypt EVERY account's key at rest with the PIN-derived key.
+ *
+ * Encrypting only the legacy slot would be worse than doing nothing: after the
+ * v3 migration the active account's key lives in a per-account slot, so a PIN
+ * would delete the legacy plaintext copy, leave `ogmara.vault.private_key.<addr>`
+ * in the clear, and report success. A device-backup or forensics attacker
+ * would then get raw hex where they previously got an AES-GCM blob.
+ *
+ * Still has no callers (App Lock currently gates the UI only) — but it must be
+ * correct before it gets one, which is exactly why it is fixed here rather
+ * than left as a trap.
+ */
+export async function vaultEncryptAllWithPin(pinKey: Uint8Array): Promise<void> {
+  await vaultMigrationsReady();
+  const held = await vaultListAccounts().catch(() => [] as AccountEntry[]);
+  for (const e of held) {
+    const hex = await readKeyFor(e.a);
+    if (!hex) continue;
+    const blob = await encryptWithKey(pinKey, hex);
+    await SecureStore.setItemAsync(SS.encFor(e.a), blob, SS_OPTS);
+    // Verify the ciphertext round-trips BEFORE destroying the plaintext.
+    const back = await SecureStore.getItemAsync(SS.encFor(e.a)).catch(() => null);
+    if (!back || (await decryptWithKey(pinKey, back)) !== hex) continue;
+    await SecureStore.setItemAsync(SS.modeFor(e.a), 'encrypted', SS_OPTS);
+    await SecureStore.deleteItemAsync(SS.rawFor(e.a)).catch(() => {});
+  }
+}
+
 export async function vaultEncryptWithPin(pinKey: Uint8Array): Promise<void> {
   // Get the raw key (either from memory or storage)
   let hex: string | null = null;

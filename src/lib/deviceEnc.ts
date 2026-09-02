@@ -90,13 +90,22 @@ export async function getOrCreateDeviceId(): Promise<string> {
 
 /** Load or create the device X25519 encryption keypair, persisting the secret. */
 export async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array; publicKeyHex: string }> {
-  const stored = await SecureStore.getItemAsync(encPrivKey()).catch(() => null);
+  const slot = encPrivKey();
+  const stored = await SecureStore.getItemAsync(slot).catch(() => null);
   if (stored) {
     const privateKey = hexToBytes(stored);
     return { privateKey, publicKeyHex: encPublicKeyHex(privateKey) };
   }
+  // Reading the device-global legacy slot is fine — it is the pre-0.47 key and
+  // the migration's retained copy. CREATING into it is not: with no account
+  // scoped there is no account to own the key, and minting one there would
+  // hand a shared identity to whichever account is activated next. Refuse
+  // instead; the caller re-runs once an account is active.
+  if (slot === ENC_PRIV_KEY_BASE) {
+    throw new Error('No account is active — refusing to create a device encryption key');
+  }
   const kp = generateDeviceEncKeypair();
-  await SecureStore.setItemAsync(encPrivKey(), bytesToHex(kp.privateKey), {
+  await SecureStore.setItemAsync(slot, bytesToHex(kp.privateKey), {
     keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
   });
   return kp;

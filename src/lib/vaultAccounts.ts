@@ -7,22 +7,15 @@
  * rule here is unit-testable against in-memory fakes, including crash
  * injection, without pulling in React Native.
  *
+ * The pure functions here are unit-tested directly; the storage-touching
+ * logic that consumes them lives in `vault.ts` and is not.
+ *
  * Defence in depth against a lost index:
  *   1. a primary index in AsyncStorage (carries labels),
  *   2. a mirror in SecureStore (addresses only, size-capped),
  *   3. a RECOVERY SCAN over `<base>::<address>` preference keys.
  * `mergeIndexes` unions all three and never silently drops an entry.
  */
-
-/** Storage shapes injected by the caller, so this module stays testable. */
-export interface KVStore {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
-  removeItem(key: string): Promise<void>;
-}
-export interface EnumerableKVStore extends KVStore {
-  getAllKeys(): Promise<readonly string[]>;
-}
 
 /** One account as recorded in the index. */
 export interface AccountEntry {

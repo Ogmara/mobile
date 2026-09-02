@@ -167,6 +167,10 @@ const ALL_LEGACY_BASES = [
   'ogmara.channelOrg',
   'ogmara.groupCollapsed',
   'ogmara.addressbook',
+  // Became per-wallet in 0.47.0. Devices upgrading from 0.46.0 already have
+  // MIGRATED_MARKER set, so this only helps installs that skip 0.46 — the
+  // cost of missing it is one redundant device registration, not data loss.
+  'ogmara.device_registered',
 ] as const;
 
 /**

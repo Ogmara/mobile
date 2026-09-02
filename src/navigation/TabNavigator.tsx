@@ -183,7 +183,7 @@ export default function TabNavigator({ startScreen }: Props) {
   const menuItems = [
     { icon: 'notifications-outline' as const, label: t('nav_notifications'), onPress: () => nav.navigate('MoreTab', { screen: 'Notifications' }) },
     { icon: 'bookmarks-outline' as const, label: t('news_bookmark'), onPress: () => nav.navigate('MoreTab', { screen: 'Bookmarks' }) },
-    { icon: 'book-outline' as const, label: t('nav_more'), onPress: () => nav.navigate('MoreTab', { screen: 'Addressbook' }) },
+    { icon: 'book-outline' as const, label: t('nav_addressbook'), onPress: () => nav.navigate('MoreTab', { screen: 'Addressbook' }) },
     { icon: 'wallet-outline' as const, label: t('settings_wallet'), onPress: () => nav.navigate('MoreTab', { screen: 'WalletBalance' }) },
   ];
 

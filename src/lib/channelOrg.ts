@@ -20,7 +20,7 @@
  * shape so callers don't need to await every mutation.
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scopedGet, scopedSet } from './walletScope';
 
 /** A user-created group. Render order = position in `ChannelOrg.groups`. */
 export interface ChannelGroup {
@@ -61,7 +61,14 @@ export interface OrgChannel {
 
 export const CHANNEL_ORG_VERSION = 1;
 
+// Namespaced per wallet (walletScope.ts). This is the third object in the
+// cross-device settings blob alongside hiddenDms and topicGroups; leaving it
+// global meant one account's channel groups and ordering rendered for the
+// next, and settingsSync would then re-upload them under the new wallet.
 const STORAGE_KEY = 'ogmara.channelOrg';
+// Scoped too: the collapsed-group view state is device-local, but it
+// references group ids that are per-account, so a global key would apply one
+// account's collapse state to another's groups.
 const COLLAPSE_KEY = 'ogmara.groupCollapsed';
 
 /** Default channel always pinned at the top of the list, never grouped. */
@@ -136,13 +143,13 @@ function normalizeOrg(raw: unknown): ChannelOrg {
 let cache: ChannelOrg = emptyOrg();
 let loadPromise: Promise<ChannelOrg> | null = null;
 
-/** Hydrate the in-memory cache from AsyncStorage. Safe to call repeatedly —
+/** Hydrate the in-memory cache from per-wallet storage. Safe to call repeatedly —
  *  only reads storage once. Call before the first `getChannelOrg()` read. */
 export function ensureChannelOrgLoaded(): Promise<ChannelOrg> {
   if (!loadPromise) {
     loadPromise = (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const raw = await scopedGet(STORAGE_KEY);
         cache = raw ? normalizeOrg(JSON.parse(raw)) : emptyOrg();
       } catch {
         cache = emptyOrg();
@@ -172,7 +179,7 @@ function commitOrg(next: ChannelOrg, fromRemote = false): void {
     placements: next.placements,
   };
   cache = org;
-  AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(org)).catch(() => { /* best-effort */ });
+  scopedSet(STORAGE_KEY, JSON.stringify(org)).catch(() => { /* best-effort */ });
   if (!fromRemote) scheduleUpload();
 }
 
@@ -350,7 +357,7 @@ function ensureCollapsedLoaded(): Promise<Record<string, boolean>> {
   if (!collapsedLoadPromise) {
     collapsedLoadPromise = (async () => {
       try {
-        const raw = await AsyncStorage.getItem(COLLAPSE_KEY);
+        const raw = await scopedGet(COLLAPSE_KEY);
         const v = raw ? JSON.parse(raw) : {};
         collapsedCache = v && typeof v === 'object' ? v : {};
       } catch {
@@ -376,7 +383,7 @@ export function isGroupCollapsed(id: string): boolean {
 export function toggleGroupCollapsed(id: string): void {
   const next = { ...collapsedCache, [id]: !isGroupCollapsed(id) };
   collapsedCache = next;
-  AsyncStorage.setItem(COLLAPSE_KEY, JSON.stringify(next)).catch(() => { /* ignore */ });
+  scopedSet(COLLAPSE_KEY, JSON.stringify(next)).catch(() => { /* ignore */ });
 }
 
 // --- Layout resolver ---------------------------------------------------------
@@ -449,4 +456,26 @@ export function resolveChannelLayout<C extends OrgChannel>(channels: C[], org: C
     groups,
     ungrouped: [...ungroupedPinned.map((x) => x.ch), ...ungroupedAuto],
   };
+}
+
+/**
+ * Drop all in-memory state for the current account.
+ *
+ * Namespacing the STORAGE was not enough on its own: `loadPromise` memoizes
+ * for the life of the process, so after a wallet switch the previous
+ * account's channel organization would still render — and the first edit would
+ * persist it under the NEW wallet and sync it to the node. Called from
+ * `setWalletScope` on every scope change.
+
+ * Also cancels any debounced upload: a timer armed just before a switch would
+ * otherwise fire afterwards and encrypt the old account's data with the new
+ * account's key.
+ */
+export function resetForWalletSwitch(): void {
+  cache = emptyOrg();
+  loadPromise = null;
+  if (uploadTimer) {
+    clearTimeout(uploadTimer);
+    uploadTimer = null;
+  }
 }

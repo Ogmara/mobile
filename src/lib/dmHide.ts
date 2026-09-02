@@ -17,11 +17,14 @@
  * `ensureHiddenDmsLoaded()` — same pattern as `channelOrg.ts`.
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scopedGet, scopedSet } from './walletScope';
 
 /** peer wallet address → ms epoch when it was hidden. */
 export type HiddenDms = Record<string, number>;
 
+// Namespaced per wallet (walletScope.ts) — this is account state, and a
+// global key meant the previous account's data stayed on screen after a
+// wallet switch.
 const STORAGE_KEY = 'ogmara.hiddenDms';
 
 // Bounds — keep the synced blob small. Far above any realistic count of
@@ -53,13 +56,13 @@ function normalize(raw: unknown): HiddenDms {
 let cache: HiddenDms = emptyHidden();
 let loadPromise: Promise<HiddenDms> | null = null;
 
-/** Hydrate the in-memory cache from AsyncStorage. Safe to call repeatedly —
+/** Hydrate the in-memory cache from per-wallet storage. Safe to call repeatedly —
  *  only reads storage once. Call before the first `getHiddenDms()` read. */
 export function ensureHiddenDmsLoaded(): Promise<HiddenDms> {
   if (!loadPromise) {
     loadPromise = (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const raw = await scopedGet(STORAGE_KEY);
         cache = raw ? normalize(JSON.parse(raw)) : emptyHidden();
       } catch {
         cache = emptyHidden();
@@ -85,7 +88,7 @@ function commit(next: HiddenDms, fromRemote = false): void {
       .slice(0, MAX_HIDDEN_DMS),
   );
   cache = capped;
-  AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(capped)).catch(() => { /* best-effort */ });
+  scopedSet(STORAGE_KEY, JSON.stringify(capped)).catch(() => { /* best-effort */ });
   if (!fromRemote) scheduleUpload();
 }
 
@@ -130,4 +133,26 @@ function scheduleUpload(): void {
       await uploadSettings();
     } catch { /* best-effort; local copy already persisted */ }
   }, 2500);
+}
+
+/**
+ * Drop all in-memory state for the current account.
+ *
+ * Namespacing the STORAGE was not enough on its own: `loadPromise` memoizes
+ * for the life of the process, so after a wallet switch the previous
+ * account's hidden DMs would still render — and the first edit would
+ * persist it under the NEW wallet and sync it to the node. Called from
+ * `setWalletScope` on every scope change.
+
+ * Also cancels any debounced upload: a timer armed just before a switch would
+ * otherwise fire afterwards and encrypt the old account's data with the new
+ * account's key.
+ */
+export function resetForWalletSwitch(): void {
+  cache = emptyHidden();
+  loadPromise = null;
+  if (uploadTimer) {
+    clearTimeout(uploadTimer);
+    uploadTimer = null;
+  }
 }

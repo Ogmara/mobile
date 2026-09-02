@@ -17,7 +17,7 @@
  * protocol §3.5) — a follow that normalizes differently would match nothing.
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scopedGet, scopedSet } from './walletScope';
 import { normalizeHashtag } from '@ogmara/sdk';
 
 export interface TopicGroup {
@@ -35,6 +35,9 @@ export interface TopicGroups {
 }
 
 export const TOPIC_GROUPS_VERSION = 1;
+// Namespaced per wallet (walletScope.ts) — this is account state, and a
+// global key meant the previous account's data stayed on screen after a
+// wallet switch.
 const STORAGE_KEY = 'ogmara.topicGroups';
 
 const MAX_FOLLOWS = 200;
@@ -101,7 +104,7 @@ export function ensureTopicGroupsLoaded(): Promise<TopicGroups> {
   if (!loadPromise) {
     loadPromise = (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const raw = await scopedGet(STORAGE_KEY);
         cache = raw ? normalize(JSON.parse(raw)) : emptyTopicGroups();
       } catch {
         cache = emptyTopicGroups();
@@ -137,7 +140,7 @@ function commit(next: TopicGroups, fromRemote = false): void {
     follows: next.follows.slice(0, MAX_FOLLOWS),
     groups: next.groups.slice(0, MAX_GROUPS),
   };
-  AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cache)).catch(() => {});
+  scopedSet(STORAGE_KEY, JSON.stringify(cache)).catch(() => {});
   for (const fn of listeners) {
     try {
       fn();
@@ -255,4 +258,26 @@ function scheduleUpload(): void {
       /* best-effort; local copy already persisted */
     }
   }, 2500);
+}
+
+/**
+ * Drop all in-memory state for the current account.
+ *
+ * Namespacing the STORAGE was not enough on its own: `loadPromise` memoizes
+ * for the life of the process, so after a wallet switch the previous
+ * account's topic groups would still render — and the first edit would
+ * persist it under the NEW wallet and sync it to the node. Called from
+ * `setWalletScope` on every scope change.
+
+ * Also cancels any debounced upload: a timer armed just before a switch would
+ * otherwise fire afterwards and encrypt the old account's data with the new
+ * account's key.
+ */
+export function resetForWalletSwitch(): void {
+  cache = emptyTopicGroups();
+  loadPromise = null;
+  if (uploadTimer) {
+    clearTimeout(uploadTimer);
+    uploadTimer = null;
+  }
 }

@@ -1,7 +1,7 @@
 /**
  * Addressbook — saved contacts list.
  *
- * Stores klv1 addresses with optional display names in AsyncStorage.
+ * Stores klv1 addresses with optional display names, per wallet.
  * Tap a contact to open DM conversation.
  */
 
@@ -15,12 +15,15 @@ import {
   Modal,
   TextInput,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scopedGet, scopedSet } from '../lib/walletScope';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
 
+// Namespaced per wallet (walletScope.ts): saved contacts are account data,
+// and a global key meant one account's addressbook was visible to the next
+// and survived sign-out.
 const STORAGE_KEY = 'ogmara.addressbook';
 
 interface Contact {
@@ -29,13 +32,13 @@ interface Contact {
 }
 
 async function loadContacts(): Promise<Contact[]> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
+  const raw = await scopedGet(STORAGE_KEY).catch(() => null);
   if (!raw) return [];
   try { return JSON.parse(raw); } catch { return []; }
 }
 
 async function saveContacts(contacts: Contact[]): Promise<void> {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(contacts));
+  await scopedSet(STORAGE_KEY, JSON.stringify(contacts));
 }
 
 export default function AddressbookScreen() {

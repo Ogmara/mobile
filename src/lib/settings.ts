@@ -6,6 +6,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scopedKey } from './walletScope';
 
 /** Default start screen options. */
 export type StartScreen = 'news' | 'chat' | 'channels';
@@ -53,15 +54,61 @@ const KEYS = {
   e2eDebug: 'ogmara.e2e.debug',
 } as const;
 
-/** Read a string setting. */
-export async function getSetting(key: keyof typeof KEYS): Promise<string | null> {
-  return AsyncStorage.getItem(KEYS[key]);
+/**
+ * Settings that belong to the ACCOUNT, not the device.
+ *
+ * These are namespaced per wallet (see `walletScope.ts`). Everything else —
+ * language, theme, node URL, font size, push, currency — belongs to the
+ * install and stays global, so switching accounts does not reset the user's
+ * app preferences.
+ *
+ * `walletAddress` / `walletSource` / `deviceRegistered` are deliberately NOT
+ * here: they identify WHICH wallet is active, so scoping them to that wallet
+ * would be circular.
+ */
+const PER_WALLET: ReadonlySet<keyof typeof KEYS> = new Set([
+  'displayName',
+  'bio',
+  'avatarCid',
+  'avatarLocalUri',
+  'pinnedChannels',
+  'mutedChannels',
+  'mutedUsers',
+  'newsLastReadAll',
+  'newsLastReadFollowing',
+  'newsLastViewedAt',
+]);
+
+/** Whether a key is account-scoped rather than device-scoped. */
+export function isPerWalletSetting(key: keyof typeof KEYS): boolean {
+  return PER_WALLET.has(key);
 }
 
-/** Write a string setting. */
-export async function setSetting(key: keyof typeof KEYS, value: string): Promise<void> {
-  await AsyncStorage.setItem(KEYS[key], value);
+/**
+ * Resolve a key to its actual storage location.
+ *
+ * Per-wallet keys resolve to `<base>::<address>`; with no active wallet they
+ * resolve to `null`, meaning "no data" — never a fallback to the global key,
+ * which is exactly how one account's profile used to leak into the next.
+ */
+function resolveKey(key: keyof typeof KEYS): string | null {
+  return PER_WALLET.has(key) ? scopedKey(KEYS[key]) : KEYS[key];
 }
+
+/** Read a string setting. */
+export async function getSetting(key: keyof typeof KEYS): Promise<string | null> {
+  const k = resolveKey(key);
+  if (!k) return null;
+  return AsyncStorage.getItem(k);
+}
+
+/** Write a string setting. A per-wallet write with no active wallet is a no-op. */
+export async function setSetting(key: keyof typeof KEYS, value: string): Promise<void> {
+  const k = resolveKey(key);
+  if (!k) return;
+  await AsyncStorage.setItem(k, value);
+}
+
 
 /** Read the default start screen (defaults to 'news'). */
 export async function getStartScreen(): Promise<StartScreen> {
@@ -77,7 +124,7 @@ export async function setStartScreen(screen: StartScreen): Promise<void> {
 
 /** Read a JSON array setting. */
 export async function getArraySetting(key: 'pinnedChannels' | 'mutedChannels' | 'mutedUsers'): Promise<string[]> {
-  const raw = await AsyncStorage.getItem(KEYS[key]);
+  const raw = await AsyncStorage.getItem(resolveKey(key) ?? KEYS[key]);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -92,5 +139,5 @@ export async function setArraySetting(
   key: 'pinnedChannels' | 'mutedChannels' | 'mutedUsers',
   value: string[],
 ): Promise<void> {
-  await AsyncStorage.setItem(KEYS[key], JSON.stringify(value));
+  await AsyncStorage.setItem(resolveKey(key) ?? KEYS[key], JSON.stringify(value));
 }

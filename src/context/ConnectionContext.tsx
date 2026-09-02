@@ -13,6 +13,11 @@ import { getSetting, setSetting } from '../lib/settings';
 import { bootstrapNodeSelection, rememberNetwork, recordKnownNode, getAvailableNodes } from '../lib/api';
 import { vaultInit, vaultStore, vaultGenerate, vaultGetSigner, vaultWipe } from '../lib/vault';
 import { debugLog } from '../lib/debug';
+import {
+  setWalletScope,
+  wipeWalletScope,
+  runWalletScopeMigrationOnce,
+} from '../lib/walletScope';
 import { setCryptoEnv, setCryptoClient, clearCryptoEnv } from '../lib/cryptoEnv';
 import { setContractAddress } from '../lib/kleverTx';
 import { ensureDeviceEncBinding, wipeDeviceEncKey } from '../lib/deviceEnc';
@@ -182,7 +187,12 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   async function initClient() {
     try {
-      const savedName = await getSetting('displayName').catch(() => null);
+      // Claim the pre-namespacing global keys for whoever owned them, once,
+      // BEFORE any wallet is restored or created this session. Doing it later
+      // would let a freshly created wallet inherit the previous account's data.
+      await runWalletScopeMigrationOnce();
+      // NOTE: `displayName` is per-wallet, so it cannot be read until
+      // `restoreWallet` has set the scope — it is loaded further down.
       let url = (await getSetting('nodeUrl').catch(() => null)) || '';
 
       // No node yet (fresh install) → discover one from the on-chain SC registry
@@ -192,7 +202,6 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       }
       nodeUrlRef.current = url;
       setNodeUrl(url);
-      if (savedName) setDisplayName(savedName);
       debugLog('info', `Connecting to node: ${url || '(none discovered)'}`);
 
       let newClient = new OgmaraClient({ nodeUrl: url, timeout: 15000 });
@@ -202,6 +211,12 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       await restoreWallet(newClient).catch((e) => {
         debugLog('warn', 'Wallet restore failed', e);
       });
+
+      // Only NOW is the per-wallet scope set, so the display name is readable.
+      // Reading it before `restoreWallet` returned null on every launch and
+      // left the drawer header blank for anyone whose name is local-only.
+      const savedName = await getSetting('displayName').catch(() => null);
+      if (savedName) setDisplayName(savedName);
 
       if (await confirmAndWire(newClient, url, savedName)) {
         // Connected to the saved node fast; now upgrade to the fastest in the
@@ -276,6 +291,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       const isK5 = savedSource === 'k5-delegation' && !!savedWallet;
       const wAddr = isK5 ? (savedWallet as string) : addr;
       const src: WalletSource = isK5 ? 'k5-delegation' : 'builtin';
+      // Point per-wallet storage at this account BEFORE anything reads it —
+      // profile, channels, topic groups and mutes all resolve through it, and
+      // an unscoped read returns nothing rather than the previous account's
+      // data. Then adopt any pre-namespacing values into this wallet, once.
+      setWalletScope(wAddr);
       if (isK5) {
         setWalletSource('k5-delegation');
         setWalletAddress(savedWallet);
@@ -326,6 +346,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     if (privateKeyHex) {
       const addr = await vaultStore(privateKeyHex);
       const s = vaultGetSigner();
+      // Re-point per-wallet storage before any read for the new account.
+      setWalletScope(addr);
       signerRef.current = s;
       setSignerState(s);
       setAddress(addr);
@@ -337,6 +359,18 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       setCryptoEnv({ signer: s, walletAddress: addr, client, walletSource: 'builtin' });
       void ensureDeviceEncBinding().catch((e) => debugLog('warn', 'enc binding failed', e));
     } else {
+      // Wipe this account's locally cached state BEFORE dropping the scope —
+      // afterwards there is no address to resolve the keys from. Namespacing
+      // alone would keep the data addressable on the device forever; wiping
+      // here means a deliberate sign-out leaves nothing behind, while merely
+      // SWITCHING wallets still preserves each account's own data.
+      // Order matters, and is deliberate. If the process dies between these
+      // two, wiping prefs FIRST leaves a still-usable wallet with reset
+      // preferences; wiping the vault first would leave an unreachable
+      // account's data on the device. The vault is the thing that must never
+      // break, so it goes last.
+      await wipeWalletScope();
+      setWalletScope(null);
       await vaultWipe();
       await wipeDeviceEncKey().catch(() => {});
       signerRef.current = null;
@@ -363,6 +397,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const generateWallet = useCallback(async () => {
     const addr = await vaultGenerate();
     const s = vaultGetSigner();
+    // A brand-new account starts with an empty namespace — nothing to migrate.
+    setWalletScope(addr);
     signerRef.current = s;
     setSignerState(s);
     setAddress(addr);
@@ -383,6 +419,14 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   ) => {
     const s = signerRef.current;
     if (!s || !client) throw new Error('Signer required');
+
+    // Point per-wallet storage at the EXTERNAL address, before the first
+    // per-wallet write below. Without this the live session keeps writing
+    // under the built-in device address while `restoreWallet` scopes to the
+    // external one — so everything configured in this session would vanish on
+    // the next launch (unreachable, not deleted) and be left behind forever by
+    // a later disconnect, which wipes only the external address's namespace.
+    setWalletScope(externalAddress);
 
     // Check cache to avoid re-registration (use ogd1 device address for consistency)
     const deviceAddr = s.deviceAddress;

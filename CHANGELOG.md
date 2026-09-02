@@ -5,6 +5,59 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.46.0] - 2026-09-02
+
+Switching wallets left the previous account's data on screen. Reported after
+disconnecting a verified wallet and creating a new one: the old display name,
+joined channels and news topic groups all persisted. DMs were correctly clean.
+
+### Fixed
+
+- **Account state is now namespaced per wallet** (`walletScope.ts`, keys become
+  `<base>::<address>`) and **wiped on disconnect**. The project rule is that
+  all data is indexed under the wallet address; the vault and E2E layers
+  already honoured it, the profile/preference layer never did. Affected:
+  display name, bio, avatar, joined channels, news topic groups, hidden DMs,
+  channel organization and group ordering, the addressbook, pinned/muted
+  channels and users, and news resume anchors. Namespacing means switching
+  back restores that account's data; wiping means a deliberate sign-out leaves
+  nothing behind on the device.
+- **In-memory caches are reset on every wallet change.** Namespacing storage
+  alone was not enough: `topicGroups`, `dmHide` and `channelOrg` memoize for
+  the life of the process, so the previous account's data still rendered — and
+  the first edit would have written it under the NEW wallet and synced it to
+  the node. Pending debounced uploads are cancelled too, so a timer armed
+  before a switch cannot encrypt the old account's data with the new account's
+  key.
+- **The K5-delegation path now sets the scope** when the external wallet is
+  registered. It previously kept writing under the built-in device address
+  while a restart scoped to the external one, so anything configured in that
+  session became unreachable on the next launch and was left behind by a later
+  disconnect.
+- **The display name is read after the wallet scope is set.** It is a
+  per-wallet key read during init, before the scope existed, so it returned
+  null on every launch and left the drawer header blank for anyone whose name
+  is local-only.
+
+### Changed
+
+- The burger-menu entry that opens the Addressbook now says "Addressbook"
+  instead of "More" (`nav_addressbook`, all 7 locales). The bottom tab keeps
+  "More" — that tab holds Settings and Bookmarks too, not just contacts.
+
+### Notes
+
+- **Migration is one-shot and claims the legacy data for the wallet that owned
+  it.** The obvious approach — migrate on each boot into whatever wallet is
+  active — is actively dangerous on exactly the devices this fixes: a user who
+  creates a NEW wallet and restarts would have had the OLD account's data
+  permanently adopted into it. A global marker makes it run once, ever, and
+  ownership comes from the persisted wallet address at upgrade time. Orphaned
+  data (owner already disconnected) is discarded rather than handed to the next
+  account. Existing per-wallet values are never overwritten.
+- No SecureStore, `vault.ts`, `appLock.ts` or `VAULT_VERSION` changes — wallet
+  storage is untouched.
+
 ## [0.45.1] - 2026-09-02
 
 Found by the pre-build audit, before any APK was produced. 0.45.0 was

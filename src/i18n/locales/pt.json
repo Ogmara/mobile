@@ -317,5 +317,6 @@
   "e2e_attachment": "anexo criptografado",
   "wallet_currency": "Moeda de exibição",
   "register_confirm_fee": "Verificar a tua carteira on-chain custa {fee} KLV, mais cerca de 4,4 KLV em taxas de rede. Uma parte da taxa vai para o operador do nó através do qual te verificas. Verificar desbloqueia a edição das tuas publicações e mensagens, a criação e gestão de canais, e a moderação.",
-  "register_confirm_fee_unknown": "Não foi possível ler a taxa de verificação atual deste nó, pelo que a transação pode ser rejeitada. Registar custa cerca de 4,4 KLV em taxas de rede, mais a taxa de verificação on-chain, se estiver definida. Tenta novamente ou muda de nó."
+  "register_confirm_fee_unknown": "Não foi possível ler a taxa de verificação atual deste nó, pelo que a transação pode ser rejeitada. Registar custa cerca de 4,4 KLV em taxas de rede, mais a taxa de verificação on-chain, se estiver definida. Tenta novamente ou muda de nó.",
+  "nav_addressbook": "Livro de endereços"
 }

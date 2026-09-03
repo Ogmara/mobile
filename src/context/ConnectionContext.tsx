@@ -29,6 +29,8 @@ import {
   wipeWalletScope,
   runWalletScopeMigrationOnce,
   runWalletSwitchResets,
+  scopedSetFor,
+  scopedGetFor,
 } from '../lib/walletScope';
 import { setCryptoEnv, setCryptoClient, clearCryptoEnv } from '../lib/cryptoEnv';
 import { setContractAddress } from '../lib/kleverTx';
@@ -129,11 +131,19 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
    * use-before-initialization inside that callback's closure.
    */
   const switchAccountRef = useRef<((addr: string) => Promise<void>) | null>(null);
+  /** Set below; `connectToNode` and `switchAccount` are both defined before
+   *  the resolver itself and would otherwise capture it undefined. */
+  const resolveDisplayNameRef = useRef<((addr: string, c?: OgmaraClient | null) => Promise<void>) | null>(null);
 
   const wsRef = useRef<WsSubscription | null>(null);
   const eventHandlersRef = useRef<Set<(event: WsEvent) => void>>(new Set());
   const nodeUrlRef = useRef<string>('');
   const signerRef = useRef<WalletSigner | null>(null);
+  /** Mirrors `walletAddress` for async guards — state would be captured stale
+   *  inside a callback that must survive an account switch. */
+  const walletAddressRef = useRef<string | null>(null);
+  /** Mirrors `client` for the same reason. */
+  const clientRef = useRef<OgmaraClient | null>(null);
   /** True once health check confirms the node is reachable. WS state
    *  should not downgrade to 'reconnecting' while this is set. */
   const healthConfirmedRef = useRef(false);
@@ -194,10 +204,10 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
       const addr = signerRef.current?.walletAddress || signerRef.current?.address;
       if (addr && !savedName) {
-        c.getUserProfile(addr).then((resp: any) => {
-          const name = resp?.user?.display_name;
-          if (name) { setDisplayName(name); setSetting('displayName', name); }
-        }).catch(() => {});
+        // Routed through the shared resolver: it writes scoped and re-checks
+        // the active account, where this used to write through the unscoped
+        // setter with no guard at all.
+        void resolveDisplayNameRef.current?.(addr, c);
       }
       return true;
     } catch (e) {
@@ -551,13 +561,19 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     setSignerState(s);
     setAddress(loaded);
     setWalletAddress(loaded);
+    // Eagerly, not via the render-time mirror: `resolveDisplayName` is fired
+    // below and its guard must already see the NEW account.
+    walletAddressRef.current = loaded;
     setWalletSource('builtin');
     // Persistence trails; it does not gate correctness of the live session.
     await setSetting('walletSource', 'builtin');
     await setSetting('walletAddress', loaded);
 
-    // The display name is per-account, so re-read it under the new scope.
+    // The display name is per-account, so re-read it under the new scope —
+    // and fall back to the node, which is the only source for an account that
+    // was imported rather than created here.
     setDisplayName(await getSetting('displayName').catch(() => null));
+    void resolveDisplayNameRef.current?.(loaded);
     void ensureDeviceEncBinding().catch((e) => debugLog('warn', 'enc binding failed', e));
     connectWs(nodeUrlRef.current);
     void refreshAccounts();
@@ -687,6 +703,53 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   }, [client]);
 
   /**
+   * Resolve `addr`'s display name and put it in the header.
+   *
+   * Local setting first; if the account has none — the usual case for a wallet
+   * IMPORTED onto this device, which has a profile on the node but no local
+   * state yet — ask the node and persist the answer. Without this an imported
+   * account showed blank in the header and "Unnamed" on the Accounts list,
+   * even though every other client displayed its name correctly.
+   *
+   * Writes go through `scopedSetFor(addr, ...)`, never `setSetting`, and the
+   * result is applied only while `addr` is still active: the fetch is a network
+   * round-trip and an account switch can land in the middle, which would
+   * otherwise file one account's name under another's namespace.
+   */
+  const resolveDisplayName = useCallback(async (addr: string, c?: OgmaraClient | null) => {
+    if (!addr) return;
+    const local = await scopedGetFor(addr, 'ogmara.display_name').catch(() => null);
+    if (local) {
+      if (walletAddressRef.current === addr) setDisplayName(local);
+      return;
+    }
+    const client_ = c ?? clientRef.current;
+    if (!client_) return;
+    try {
+      const resp: any = await client_.getUserProfile(addr);
+      const name = resp?.user?.display_name;
+      if (!name) return;
+      await scopedSetFor(addr, 'ogmara.display_name', name);
+      if (walletAddressRef.current === addr) setDisplayName(name);
+    } catch {
+      // No profile on this node, or it is unreachable. Not an error: a brand
+      // new account legitimately has no name yet.
+    }
+  }, []);
+
+  // These three are assigned during render, NOT in effects. An effect runs
+  // only after the commit, so a guard reading `walletAddressRef` during the
+  // switch that just set the address would still see the PREVIOUS one and
+  // discard the result it was meant to admit.
+  walletAddressRef.current = walletAddress;
+  clientRef.current = client;
+  // Assigned during render for a second reason: `initClient`'s effect is declared
+  // above this one and therefore runs first, so an effect-based assignment
+  // would leave the ref null for the whole startup connect and silently skip
+  // the boot-time name lookup.
+  resolveDisplayNameRef.current = resolveDisplayName;
+
+  /**
    * Re-read the active account's display name.
    *
    * The header renders it, and it is written by the profile editor rather than
@@ -694,8 +757,12 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
    * only after the next app launch.
    */
   const refreshProfile = useCallback(async () => {
-    setDisplayName(await getSetting('displayName').catch(() => null));
-  }, []);
+    const local = await getSetting('displayName').catch(() => null);
+    setDisplayName(local);
+    if (!local && walletAddressRef.current) {
+      await resolveDisplayName(walletAddressRef.current);
+    }
+  }, [resolveDisplayName]);
 
   const onWsEvent = useCallback((handler: (event: WsEvent) => void) => {
     eventHandlersRef.current.add(handler);

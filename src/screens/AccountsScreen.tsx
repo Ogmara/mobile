@@ -12,39 +12,77 @@ import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
 import QuickMenu from '../components/QuickMenu';
 import type { AccountEntry } from '../lib/vaultAccounts';
-import { scopedGetFor } from '../lib/walletScope';
+import { scopedGetFor, scopedSetFor } from '../lib/walletScope';
 import { vaultExportKeyFor } from '../lib/vault';
 
 export default function AccountsScreen() {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const nav = useNavigation<any>();
-  const { accounts, walletAddress, refreshAccounts, switchAccount, removeAccount } = useConnection();
+  const { accounts, walletAddress, refreshAccounts, switchAccount, removeAccount, client } = useConnection();
   const [busy, setBusy] = useState<string | null>(null);
   /** Per-account display names, read across namespaces without switching. */
   const [names, setNames] = useState<Record<string, string>>({});
 
   useEffect(() => { void refreshAccounts(); }, [refreshAccounts]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  /**
+   * Re-read names on every focus, not just when `accounts` changes.
+   *
+   * Renaming an account does not alter the account LIST, and this screen stays
+   * mounted while the profile editor is pushed over it — so keying the read on
+   * `accounts` alone meant a rename never appeared here. Focus covers both
+   * cases: returning from the editor, and returning after adding an account.
+   */
+  const loadNames = useCallback(
+    (isCancelled: () => boolean) => async () => {
       const out: Record<string, string> = {};
+      const unresolved: string[] = [];
       for (const a of accounts) {
         const n = await scopedGetFor(a.a, 'ogmara.display_name');
         if (n) out[a.a] = n;
+        else unresolved.push(a.a);
       }
-      if (!cancelled) setNames(out);
-    })();
-    return () => { cancelled = true; };
-  }, [accounts]);
+      if (isCancelled()) return;
+      setNames(out);
+
+      // Accounts IMPORTED onto this device have a profile on the node but no
+      // local name yet, and only the ACTIVE one gets resolved on switch — so
+      // without this the others read "Unnamed" forever. Bounded by the account
+      // cap, and the answer is written back scoped so it is a one-time cost.
+      if (!client || unresolved.length === 0) return;
+      for (const addr of unresolved) {
+        if (isCancelled()) return;
+        try {
+          const resp: any = await client.getUserProfile(addr);
+          const name = resp?.user?.display_name;
+          if (!name) continue;
+          await scopedSetFor(addr, 'ogmara.display_name', name);
+          if (isCancelled()) return;
+          setNames((prev) => ({ ...prev, [addr]: name }));
+        } catch {
+          // No profile, or the node is unreachable — the row falls back to
+          // "Unnamed", which is accurate rather than wrong.
+        }
+      }
+    },
+    [accounts, client],
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void loadNames(() => cancelled)();
+      return () => { cancelled = true; };
+    }, [loadNames]),
+  );
 
   /**
    * Returns whether the switch actually happened. Callers chain on this — the

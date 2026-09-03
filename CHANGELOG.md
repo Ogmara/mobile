@@ -5,6 +5,34 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.1] - 2026-09-03
+
+### Fixed
+
+- **Account names did not appear after adding or renaming.** Three separate
+  causes, all of which had to be fixed to make the name show up reliably:
+
+  - The node was only ever asked for a profile inside `connectToNode`, never on
+    an account switch. Switching or adding re-read the LOCAL setting only — and
+    an account IMPORTED onto this device has a profile on the node but no local
+    state yet, so the header went blank and the Accounts row read "Unnamed"
+    while every other client displayed the name correctly. A shared resolver
+    now runs on connect, on switch and on profile refresh: local first, node
+    second, answer written back so it costs one lookup.
+  - The Accounts list re-read names only when the account LIST changed. A
+    rename does not change the list, and the screen stays mounted while the
+    profile editor sits on top of it, so a rename never appeared. It now
+    reloads on focus, which covers both returning from the editor and returning
+    after adding an account.
+  - The Accounts list read local storage exclusively, so only the ACTIVE
+    account ever got its name resolved. Rows still missing a name now resolve
+    against the node themselves — bounded by the account cap, cached scoped.
+
+  The startup lookup this replaces wrote through the UNSCOPED setter with no
+  guard, so an account switch landing mid-fetch would file one account's name
+  under another's namespace. All writes now go through `scopedSetFor(addr, …)`
+  and are applied only while that account is still active.
+
 ## [0.48.0] - 2026-09-03
 
 On-device testing of the multi-account build turned up four issues. The

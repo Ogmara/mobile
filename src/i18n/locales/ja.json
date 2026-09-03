@@ -121,6 +121,7 @@
   "register_confirm": "Klever ブロックチェーンに ID を登録します。ネットワーク手数料 約4.4 KLV に加え、設定されている場合はオンチェーン認証手数料がかかります。",
   "register_proceed": "登録する",
   "register_button": "オンチェーン登録",
+  "register_already": "オンチェーンで認証済み",
   "register_success": "登録を送信しました",
   "register_tx_sent": "登録トランザクションが送信されました。確認には数秒かかる場合があります。",
   "register_failed": "登録に失敗しました",
@@ -340,5 +341,10 @@
   "accounts_remove_export_first": "アカウントを削除すると秘密鍵がこの端末から消去され、元に戻せません。先に鍵をコピーしてください。",
   "accounts_remove_confirm": "鍵をクリップボードにコピーしました。このアカウントとローカルデータをすべて削除しますか？",
   "accounts_k5_locked": "K5 · 連携中",
-  "accounts_remove_have_backup": "バックアップ済みです"
+  "accounts_remove_have_backup": "バックアップ済みです",
+  "accounts_switch_to": "このアカウントに切り替え",
+  "accounts_edit_profile": "プロフィールを編集",
+  "accounts_actions": "アカウント操作",
+  "profile_display_name": "ユーザー名",
+  "profile_avatar_too_large": "画像が大きすぎます（最大5MB）。"
 }

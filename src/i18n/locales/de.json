@@ -121,6 +121,7 @@
   "register_confirm": "Registriere deine Identität in der Klever-Blockchain. Das kostet etwa 4,4 KLV Netzwerkgebühren zuzüglich der On-Chain-Verifizierungsgebühr, sofern eine festgelegt ist.",
   "register_proceed": "Registrieren",
   "register_button": "On-Chain registrieren",
+  "register_already": "Bereits On-Chain verifiziert",
   "register_success": "Registrierung eingereicht",
   "register_tx_sent": "Deine Registrierungstransaktion wurde gesendet. Die Bestätigung kann einige Sekunden dauern.",
   "register_failed": "Registrierung fehlgeschlagen",
@@ -340,5 +341,10 @@
   "accounts_remove_export_first": "Beim Entfernen wird der private Schlüssel von diesem Gerät gelöscht. Das kann nicht rückgängig gemacht werden — kopiere ihn zuerst.",
   "accounts_remove_confirm": "Schlüssel in die Zwischenablage kopiert. Dieses Konto und alle lokalen Daten jetzt entfernen?",
   "accounts_k5_locked": "K5 · verknüpft",
-  "accounts_remove_have_backup": "Ich habe bereits ein Backup"
+  "accounts_remove_have_backup": "Ich habe bereits ein Backup",
+  "accounts_switch_to": "Zu diesem Konto wechseln",
+  "accounts_edit_profile": "Profil bearbeiten",
+  "accounts_actions": "Kontoaktionen",
+  "profile_display_name": "Benutzername",
+  "profile_avatar_too_large": "Bild ist zu groß (max. 5 MB)."
 }

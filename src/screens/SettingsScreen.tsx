@@ -13,11 +13,9 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   Modal,
   Image,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import { useTranslation } from 'react-i18next';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -25,7 +23,6 @@ import { useTheme, spacing, fontSize, radius, type ThemeMode } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { getStartScreen, setStartScreen, setSetting, getSetting, type StartScreen } from '../lib/settings';
 import { debugLog } from '../lib/debug';
-import { setCachedUser } from '../lib/userCache';
 import { isLockEnabled, hasPinSetup, isBiometricAvailable, isBiometricEnabled, setBiometricEnabled, getBiometricType } from '../lib/appLock';
 import { LANGUAGES, type LanguageCode } from '../i18n/init';
 import type { MoreStackParamList } from '../navigation/types';
@@ -76,14 +73,11 @@ export default function SettingsScreen() {
 
   // Profile state
   const [displayName, setDisplayName] = useState('');
-  const [bio, setBio] = useState('');
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
-  const [editingProfile, setEditingProfile] = useState(false);
 
   useEffect(() => {
     getStartScreen().then(setStartScreenState);
     getSetting('displayName').then((n) => { if (n) setDisplayName(n); });
-    getSetting('bio').then((b) => { if (b) setBio(b); });
     getSetting('avatarLocalUri').then((u) => { if (u) setAvatarUri(u); });
     getSetting('fontSize').then((v) => { if (v) setFontSizeSetting(v); });
     getSetting('compactLayout').then((v) => { if (v === 'true') setCompactLayout(true); });
@@ -115,36 +109,6 @@ export default function SettingsScreen() {
     setLangPickerOpen(false);
   };
 
-  const handleSaveProfile = async () => {
-    if (!client || !signer) {
-      showAlert(t('error_generic'), t('wallet_connect'));
-      return;
-    }
-    try {
-      await client.updateProfile({
-        display_name: displayName.trim() || undefined,
-        bio: bio.trim() || undefined,
-      });
-      // Save display name and bio locally
-      if (displayName.trim()) {
-        await setSetting('displayName', displayName.trim());
-      }
-      if (bio.trim()) {
-        await setSetting('bio', bio.trim());
-      }
-      // Cache own profile for user display hook
-      if (address) {
-        await setCachedUser(address, {
-          displayName: displayName.trim() || null,
-          bio: bio.trim() || null,
-        });
-      }
-      setEditingProfile(false);
-    } catch (e) {
-      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
-    }
-  };
-
   const themeOptions: { key: ThemeMode; label: string }[] = [
     { key: 'light', label: t('settings_theme_light') },
     { key: 'dark', label: t('settings_theme_dark') },
@@ -173,20 +137,8 @@ export default function SettingsScreen() {
             <View style={styles.profileRow}>
               <TouchableOpacity
                 style={[styles.avatar, { backgroundColor: colors.accentPrimary }]}
-                onPress={editingProfile ? async () => {
-                  const result = await ImagePicker.launchImageLibraryAsync({
-                    mediaTypes: ['images'],
-                    allowsEditing: true,
-                    aspect: [1, 1],
-                    quality: 0.7,
-                  });
-                  if (!result.canceled && result.assets[0]) {
-                    setAvatarUri(result.assets[0].uri);
-                    await setSetting('avatarLocalUri', result.assets[0].uri);
-                  }
-                } : undefined}
-                disabled={!editingProfile}
-                activeOpacity={editingProfile ? 0.6 : 1}
+                onPress={() => navigation.navigate('EditProfile')}
+                activeOpacity={0.6}
               >
                 {avatarUri ? (
                   <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
@@ -195,60 +147,24 @@ export default function SettingsScreen() {
                     {(displayName || address)[0]?.toUpperCase() || 'O'}
                   </Text>
                 )}
-                {editingProfile && (
-                  <View style={styles.avatarEditBadge}>
-                    <Text style={{ color: '#fff', fontSize: 10 }}>Edit</Text>
-                  </View>
-                )}
               </TouchableOpacity>
               <View style={styles.profileInfo}>
-                {editingProfile ? (
-                  <TextInput
-                    style={[styles.profileInput, { color: colors.textPrimary, borderBottomColor: colors.accentPrimary }]}
-                    placeholder="Username"
-                    placeholderTextColor={colors.textSecondary}
-                    value={displayName}
-                    onChangeText={setDisplayName}
-                    maxLength={50}
-                    autoFocus
-                  />
-                ) : (
-                  <Text style={[styles.profileName, { color: colors.textPrimary }]}>
-                    {displayName || address.slice(0, 16) + '...'}
-                  </Text>
-                )}
+                <Text style={[styles.profileName, { color: colors.textPrimary }]}>
+                  {displayName || address.slice(0, 16) + '...'}
+                </Text>
                 <Text style={[styles.profileAddr, { color: colors.textSecondary }]} numberOfLines={1}>
                   {address}
                 </Text>
               </View>
             </View>
-            {/* Bio */}
-            {editingProfile && (
-              <TextInput
-                style={[styles.bioInput, { color: colors.textPrimary, backgroundColor: colors.bgTertiary }]}
-                placeholder={t('profile_bio')}
-                placeholderTextColor={colors.textSecondary}
-                value={bio}
-                onChangeText={setBio}
-                maxLength={200}
-                multiline
-                numberOfLines={3}
-              />
-            )}
             {/* Edit + Balance row */}
             <View style={styles.profileActions}>
               <TouchableOpacity
                 style={styles.profileActionBtn}
-                onPress={() => {
-                  if (editingProfile) {
-                    handleSaveProfile();
-                  } else {
-                    setEditingProfile(true);
-                  }
-                }}
+                onPress={() => navigation.navigate('EditProfile')}
               >
                 <Text style={[styles.rowText, { color: colors.accentPrimary }]}>
-                  {editingProfile ? t('save') : t('chat_edit')}
+                  {t('chat_edit')}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -694,7 +610,6 @@ const styles = StyleSheet.create({
   },
   avatarText: { fontSize: fontSize.xl, fontWeight: '700' },
   avatarImage: { width: 56, height: 56, borderRadius: radius.full },
-  avatarEditBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8, paddingHorizontal: 4, paddingVertical: 1 },
   profileInfo: { flex: 1, marginLeft: spacing.md },
   profileName: { fontSize: fontSize.lg, fontWeight: '600' },
   profileAddr: { fontSize: fontSize.xs, marginTop: spacing.xs },
@@ -705,21 +620,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   profileActionBtn: {},
-  profileInput: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    borderBottomWidth: 2,
-    paddingVertical: spacing.xs,
-  },
-  bioInput: {
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.md,
-    padding: spacing.md,
-    borderRadius: radius.md,
-    fontSize: fontSize.sm,
-    minHeight: 60,
-    textAlignVertical: 'top',
-  },
   // Language modal
   modalOverlay: {
     flex: 1,

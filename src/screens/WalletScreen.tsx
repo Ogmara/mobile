@@ -6,7 +6,7 @@
  * Per spec 05-clients.md section 4.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -25,7 +25,7 @@ import type { MoreStackParamList } from '../navigation/types';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { vaultExportKey } from '../lib/vault';
-import { loadRegistrationCost } from '../lib/registration';
+import { loadRegistrationCost, isWalletRegistered } from '../lib/registration';
 import { registerUser, getExplorerTxUrl } from '../lib/kleverTx';
 import { debugLog } from '../lib/debug';
 import * as Clipboard from 'expo-clipboard';
@@ -136,6 +136,21 @@ export default function WalletScreen() {
     );
   };
 
+  // Tri-state: null while unknown. Only a definite `true` swaps the button for
+  // a static "already verified" row — an unknown answer must not strand a user
+  // who genuinely still needs to register.
+  const [registered, setRegistered] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!address) { setRegistered(null); return; }
+    let alive = true;
+    const forAddress = address;
+    isWalletRegistered(forAddress).then((r) => {
+      if (alive && forAddress === address) setRegistered(r);
+    });
+    return () => { alive = false; };
+  }, [address]);
+
   const handleRegister = async () => {
     if (!signer) return;
     // Guard BEFORE the await: the lookup is a network round-trip, and an
@@ -169,6 +184,10 @@ export default function WalletScreen() {
                 feeAtomic: cost.known ? cost.feeAtomic : undefined,
                 viaNode: cost.operatorAddress ?? undefined,
               });
+              // Only after the send actually returned a hash — setting it
+              // before would hide the button on a failed registration and
+              // leave the user no way to retry.
+              setRegistered(true);
               const url = await getExplorerTxUrl(txHash);
               showAlert(
                 t('register_success'),
@@ -224,7 +243,14 @@ export default function WalletScreen() {
           </Text>
         </TouchableOpacity>
 
-        {/* On-Chain Registration */}
+        {/* On-Chain Registration — hidden once the chain says it is done. */}
+        {registered === true ? (
+          <View style={[styles.btn, { backgroundColor: colors.bgTertiary }]}>
+            <Text style={[styles.btnText, { color: colors.textSecondary }]}>
+              {t('register_already')}
+            </Text>
+          </View>
+        ) : (
         <TouchableOpacity
           style={[styles.btn, { backgroundColor: registering ? colors.textSecondary : colors.accentSecondary }]}
           onPress={handleRegister}
@@ -238,6 +264,7 @@ export default function WalletScreen() {
             </Text>
           )}
         </TouchableOpacity>
+        )}
 
         {/* Reveal Private Key */}
         {!revealedKey ? (

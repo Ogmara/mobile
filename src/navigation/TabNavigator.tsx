@@ -47,6 +47,7 @@ import DebugScreen from '../screens/DebugScreen';
 import BookmarksScreen from '../screens/BookmarksScreen';
 import AddressbookScreen from '../screens/AddressbookScreen';
 import AccountsScreen from '../screens/AccountsScreen';
+import EditProfileScreen from '../screens/EditProfileScreen';
 import AddAccountScreen from '../screens/AddAccountScreen';
 import WalletBalanceScreen from '../screens/WalletBalanceScreen';
 import ReceiveScreen from '../screens/ReceiveScreen';
@@ -124,6 +125,7 @@ function MoreTab() {
       <MoreStack.Screen name="Addressbook" component={AddressbookScreen} options={{ headerShown: true, title: 'Addressbook' }} />
       <MoreStack.Screen name="Accounts" component={AccountsScreen} options={{ headerShown: true, title: 'Accounts' }} />
       <MoreStack.Screen name="AddAccount" component={AddAccountScreen} options={{ headerShown: true, title: 'Add account' }} />
+      <MoreStack.Screen name="EditProfile" component={EditProfileScreen} options={{ headerShown: true, title: 'Edit profile' }} />
       <MoreStack.Screen name="Wallet" component={WalletScreen} />
       <MoreStack.Screen name="WalletBalance" component={WalletBalanceScreen} options={{ headerShown: true, title: 'Wallet' }} />
       <MoreStack.Screen name="Receive" component={ReceiveScreen} options={{ headerShown: true, title: 'Receive' }} />

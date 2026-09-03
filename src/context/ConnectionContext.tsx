@@ -51,6 +51,8 @@ interface ConnectionContextValue {
   walletAddress: string | null;
   walletSource: WalletSource;
   displayName: string | null;
+  /** Re-read the active account's display name into the header. */
+  refreshProfile: () => Promise<void>;
   peers: number;
   /** Connect to a node URL (persists the choice). Pass pin=true for an explicit
    *  user choice so the auto best-ping optimizer won't override it. */
@@ -95,6 +97,7 @@ const ConnectionContext = createContext<ConnectionContextValue>({
   walletAddress: null,
   walletSource: null,
   displayName: null,
+  refreshProfile: async () => {},
   peers: 0,
   connectToNode: async () => {},
   setWallet: async () => {},
@@ -439,6 +442,11 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       setAddress(null);
       setWalletAddress(null);
       setWalletSource(null);
+      // The header renders this next to the burger menu. `removeAccount`
+      // cleared it; this path did not, so after a disconnect the app showed a
+      // name for an account that no longer existed — and kept showing it
+      // through wallet creation, until a restart happened to reload state.
+      setDisplayName(null);
       await setSetting('walletSource', '');
       await setSetting('walletAddress', '');
       await setSetting('deviceRegistered', '');
@@ -678,6 +686,17 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     setCryptoEnv({ signer: s, walletAddress: externalAddress, client, walletSource: 'k5-delegation' });
   }, [client]);
 
+  /**
+   * Re-read the active account's display name.
+   *
+   * The header renders it, and it is written by the profile editor rather than
+   * by this context — without a way to pull it back in, a rename showed up
+   * only after the next app launch.
+   */
+  const refreshProfile = useCallback(async () => {
+    setDisplayName(await getSetting('displayName').catch(() => null));
+  }, []);
+
   const onWsEvent = useCallback((handler: (event: WsEvent) => void) => {
     eventHandlersRef.current.add(handler);
     return () => {
@@ -690,7 +709,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       value={{
         client, status, nodeUrl, signer, address, walletAddress, walletSource,
         displayName, peers, connectToNode, setWallet, generateWallet,
-        registerExternalWallet, onWsEvent,
+        registerExternalWallet, onWsEvent, refreshProfile,
         accounts, refreshAccounts, switchAccount, createAccount, addAccount, removeAccount,
       }}
     >

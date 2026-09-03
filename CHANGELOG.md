@@ -5,6 +5,66 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.0] - 2026-09-03
+
+On-device testing of the multi-account build turned up four issues. The
+registration fee itself was verified working on testnet (tx `99ee764d…`).
+
+### Fixed
+
+- **The "+" button on the Chat screen did nothing.** The floating action button
+  was rendered as the FIRST child of its container with `position: absolute`,
+  and the channel list after it. `elevation` raises a view in Android's DRAW
+  order but not its TOUCH order, so the FAB painted on top while the list
+  underneath it swallowed every tap — visible, correctly styled, and completely
+  inert. It is now the last child, with an explicit `zIndex`. Creating a
+  channel never required a verified account; the button simply could not be
+  pressed.
+- **Disconnecting left the previous account's name in the header.** The header
+  shows the display name next to the burger menu, and the disconnect path
+  cleared the signer, address and wallet source but not the name — so it stayed
+  visible through wallet creation, for an account that no longer existed, until
+  the app happened to be restarted. `removeAccount` had always cleared it; this
+  path had not.
+- **"Register on-chain" stayed offered after the account was already
+  registered.** Nothing ever asked the chain. The action is now hidden once the
+  node reports a public key for the wallet, and hidden immediately after a
+  successful registration rather than at the next launch. The check is
+  deliberately TRI-STATE: an offline node or a failed lookup is "unknown", not
+  "unregistered", and leaves the action available — hiding it on a failed
+  lookup would strand a genuinely unregistered user with no way to verify.
+
+### Added
+
+- **A profile editor, reachable from the Accounts screen.** Tapping an account
+  now opens an action sheet — switch, edit profile, remove — instead of only
+  switching, which is what a row needs once it has more than one verb. Editing
+  a non-active account switches to it first, because `updateProfile` is signed
+  by whichever account is active; the edit would otherwise be written against
+  the wrong one. The switch now reports success so a failed one cannot navigate
+  into the editor for the wrong account.
+
+  Profile editing previously lived inline inside Settings, which is a poor
+  place to look for it in a multi-account app. It is now its own screen, linked
+  from both Settings and Accounts, and the dead inline editor was removed
+  rather than left behind.
+
+- **The avatar is now actually uploaded.** Picking an image only ever wrote
+  `avatarLocalUri`, so the picture stayed on that one device and every other
+  client kept rendering the default — the control looked like it worked and
+  never changed anything anyone else could see. It now uploads to the node and
+  sets `avatar_cid`, capped at 5 MB with a sanitized filename. A failed upload
+  fails the save rather than quietly storing the name change and dropping the
+  picture.
+
+  Empty name or bio means "leave unchanged", matching what the node does with
+  omitted fields, instead of clearing locally and diverging until the next
+  fetch pulled the old value back.
+
+- `register_already`, `accounts_switch_to`, `accounts_edit_profile`,
+  `accounts_actions`, `profile_display_name` and `profile_avatar_too_large`
+  across all 7 locales.
+
 ## [0.47.0] - 2026-09-02
 
 Multi-account: hold several wallets on one device and switch between them.

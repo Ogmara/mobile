@@ -141,3 +141,30 @@ export function formatKlv(atomic: number): string {
   if (!frac) return String(whole);
   return `${whole}.${String(frac).padStart(6, '0').replace(/0+$/, '')}`;
 }
+
+/**
+ * Whether `address` already holds an on-chain identity.
+ *
+ * TRI-STATE on purpose. `null` means "could not tell" — an offline node, an
+ * RPC failure, a node without the profile endpoint — and is NOT the same as
+ * `false`. Callers must keep the register action reachable when the answer is
+ * unknown: hiding it would strand a genuinely unregistered user with no way to
+ * verify, which is far worse than showing it to someone already registered.
+ *
+ * A registered user is one the node serves a non-empty `public_key` for; that
+ * field is written by the on-chain registration and by nothing else, and it is
+ * the same signal the profile screen's verified badge uses.
+ */
+export async function isWalletRegistered(address: string): Promise<boolean | null> {
+  if (!address) return null;
+  try {
+    const client = await getClient();
+    const profile = await client.getUserProfile(address);
+    return !!profile?.user?.public_key && profile.user.public_key.length > 0;
+  } catch {
+    // A 404 here means "no profile record", which for a wallet that has never
+    // posted is indistinguishable from "node has no opinion" — so it stays
+    // unknown rather than being reported as definitely unregistered.
+    return null;
+  }
+}

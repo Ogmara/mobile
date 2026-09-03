@@ -22,7 +22,7 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
 import { fetchAccountData, formatTokenAmount, fetchAssetMeta } from '../lib/klever';
-import { loadRegistrationCost } from '../lib/registration';
+import { loadRegistrationCost, isWalletRegistered } from '../lib/registration';
 import { sendTransfer, registerUser, getExplorerTxUrl, getExplorerAddressUrl, getExplorerStakingUrl } from '../lib/kleverTx';
 import { vaultExportKey } from '../lib/vault';
 import { loadPrices, loadForex, fiatValue, formatFiat, SUPPORTED_CURRENCIES, type Currency, type TokenPrice } from '../lib/prices';
@@ -83,6 +83,9 @@ export default function WalletBalanceScreen() {
     [address],
   );
 
+  // null = not yet known / node could not answer. The register action stays
+  // available while unknown; only a definite `true` hides it.
+  const [registered, setRegistered] = useState<boolean | null>(null);
   const [prices, setPrices] = useState<Record<string, TokenPrice>>({});
   const [txs, setTxs] = useState<TxSummary[]>([]);
   const [sendDialog, setSendDialog] = useState<{ assetId: string; precision: number } | null>(null);
@@ -143,6 +146,18 @@ export default function WalletBalanceScreen() {
     } finally { setSending(false); }
   }, [sendDialog, sendTo, sendAmount, onRefresh, t]);
 
+  useEffect(() => {
+    if (!address) { setRegistered(null); return; }
+    let alive = true;
+    const forAddress = address;
+    isWalletRegistered(forAddress).then((r) => {
+      // The account can be switched while this is in flight; applying the old
+      // account's answer would show the wrong state for the new one.
+      if (alive && forAddress === address) setRegistered(r);
+    });
+    return () => { alive = false; };
+  }, [address]);
+
   const copyAddress = async () => {
     if (!address) return;
     await Clipboard.setStringAsync(address);
@@ -182,6 +197,7 @@ export default function WalletBalanceScreen() {
               feeAtomic: cost.known ? cost.feeAtomic : undefined,
               viaNode: cost.operatorAddress ?? undefined,
             });
+            setRegistered(true);
             const url = await getExplorerTxUrl(txHash);
             showAlert(t('register_success'), t('register_tx_sent'), [
               { text: t('tip_view_tx'), onPress: () => Linking.openURL(url) },
@@ -446,7 +462,11 @@ export default function WalletBalanceScreen() {
               <Text style={[styles.dialogTitle, { color: colors.textPrimary, paddingHorizontal: spacing.lg }]}>{t('wallet_manage')}</Text>
               <ManageItem color={colors} label={t('wallet_staking_overview')} onPress={async () => { setManageOpen(false); Linking.openURL(await getExplorerStakingUrl(address)); }} />
               <ManageItem color={colors} label={t('wallet_view_explorer')} onPress={async () => { setManageOpen(false); Linking.openURL(await getExplorerAddressUrl(address)); }} />
-              <ManageItem color={colors} label={t('register_button')} onPress={() => { setManageOpen(false); handleRegister(); }} disabled={busy} />
+              {registered === true ? (
+                <ManageItem color={colors} label={t('register_already')} muted disabled onPress={() => {}} />
+              ) : (
+                <ManageItem color={colors} label={t('register_button')} onPress={() => { setManageOpen(false); handleRegister(); }} disabled={busy} />
+              )}
               <ManageItem color={colors} label={t('wallet_export_key')} onPress={() => { setManageOpen(false); handleExport(); }} />
               <ManageItem color={colors} label={t('wallet_disconnect')} danger onPress={handleDisconnect} />
               <ManageItem color={colors} label={t('cancel')} muted onPress={() => setManageOpen(false)} />

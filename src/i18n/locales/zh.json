@@ -121,6 +121,7 @@
   "register_confirm": "在 Klever 区块链上注册你的身份。需支付约 4.4 KLV 的网络费用，以及已设置的链上验证费用（如有）。",
   "register_proceed": "注册",
   "register_button": "链上注册",
+  "register_already": "已在链上验证",
   "register_success": "注册已提交",
   "register_tx_sent": "您的注册交易已广播。确认可能需要几秒钟。",
   "register_failed": "注册失败",
@@ -340,5 +341,10 @@
   "accounts_remove_export_first": "移除账户会从本设备删除其私钥，且无法撤销 — 请先复制私钥。",
   "accounts_remove_confirm": "私钥已复制到剪贴板。现在移除该账户及其所有本地数据吗？",
   "accounts_k5_locked": "K5 · 已关联",
-  "accounts_remove_have_backup": "我已备份"
+  "accounts_remove_have_backup": "我已备份",
+  "accounts_switch_to": "切换到此账户",
+  "accounts_edit_profile": "编辑资料",
+  "accounts_actions": "账户操作",
+  "profile_display_name": "用户名",
+  "profile_avatar_too_large": "图片过大（最大 5 MB）。"
 }

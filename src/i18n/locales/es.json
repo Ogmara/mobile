@@ -121,6 +121,7 @@
   "register_confirm": "Registra tu identidad en la cadena de bloques Klever. Cuesta unos 4,4 KLV en tarifas de red, más la tarifa de verificación en cadena si hay alguna establecida.",
   "register_proceed": "Registrar",
   "register_button": "Registrar en cadena",
+  "register_already": "Ya verificado en la cadena",
   "register_success": "Registro enviado",
   "register_tx_sent": "Tu transacción de registro ha sido enviada. Puede tardar unos segundos en confirmarse.",
   "register_failed": "Registro fallido",
@@ -340,5 +341,10 @@
   "accounts_remove_export_first": "Eliminar una cuenta borra su clave privada de este dispositivo. No se puede deshacer — copia la clave primero.",
   "accounts_remove_confirm": "Clave copiada al portapapeles. ¿Eliminar esta cuenta y todos sus datos locales ahora?",
   "accounts_k5_locked": "K5 · vinculada",
-  "accounts_remove_have_backup": "Ya tengo una copia"
+  "accounts_remove_have_backup": "Ya tengo una copia",
+  "accounts_switch_to": "Cambiar a esta cuenta",
+  "accounts_edit_profile": "Editar perfil",
+  "accounts_actions": "Acciones de cuenta",
+  "profile_display_name": "Nombre de usuario",
+  "profile_avatar_too_large": "La imagen es demasiado grande (máx. 5 MB)."
 }

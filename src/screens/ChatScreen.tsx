@@ -410,12 +410,6 @@ export default function ChatScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
-      <TouchableOpacity
-        style={[styles.fab, { backgroundColor: colors.accentPrimary }]}
-        onPress={() => navigation.navigate('CreateChannel')}
-      >
-        <Text style={[styles.fabText, { color: colors.textInverse }]}>+</Text>
-      </TouchableOpacity>
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.channel_id.toString()}
@@ -477,6 +471,12 @@ export default function ChatScreen() {
         onConfirm={() => confirmState?.onConfirm()}
         onClose={() => setConfirmState(null)}
       />
+      <TouchableOpacity
+        style={[styles.fab, { backgroundColor: colors.accentPrimary }]}
+        onPress={() => navigation.navigate('CreateChannel')}
+      >
+        <Text style={[styles.fabText, { color: colors.textInverse }]}>+</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -514,7 +514,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   memberCount: { fontSize: fontSize.sm },
-  fab: { position: 'absolute', right: spacing.lg, bottom: spacing.lg, width: 56, height: 56, borderRadius: radius.full, justifyContent: 'center', alignItems: 'center', elevation: 4 },
+  // Rendered LAST in the container, not first: `elevation` raises the FAB in
+  // Android's DRAW order but not its TOUCH order, so as an earlier sibling it
+  // painted above the channel list while the list swallowed every tap.
+  fab: { position: 'absolute', right: spacing.lg, bottom: spacing.lg, width: 56, height: 56, borderRadius: radius.full, justifyContent: 'center', alignItems: 'center', elevation: 4, zIndex: 10 },
   fabText: { fontSize: fontSize.xl, fontWeight: '600' },
   toolbar: {
     flexDirection: 'row',

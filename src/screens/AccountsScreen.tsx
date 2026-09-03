@@ -7,7 +7,7 @@
  * action, and is gated behind an explicit key-export confirmation because
  * losing a private key is unrecoverable.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +17,8 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
+import QuickMenu from '../components/QuickMenu';
+import type { AccountEntry } from '../lib/vaultAccounts';
 import { scopedGetFor } from '../lib/walletScope';
 import { vaultExportKeyFor } from '../lib/vault';
 
@@ -44,13 +46,20 @@ export default function AccountsScreen() {
     return () => { cancelled = true; };
   }, [accounts]);
 
-  const onSwitch = useCallback(async (addr: string) => {
-    if (addr === walletAddress || busy) return;
+  /**
+   * Returns whether the switch actually happened. Callers chain on this — the
+   * profile editor edits whoever is ACTIVE, so navigating there after a failed
+   * switch would edit the wrong account's profile.
+   */
+  const onSwitch = useCallback(async (addr: string): Promise<boolean> => {
+    if (addr === walletAddress || busy) return false;
     setBusy(addr);
     try {
       await switchAccount(addr);
+      return true;
     } catch (e) {
       showAlert(t('accounts_switch_failed'), e instanceof Error ? e.message.slice(0, 200) : '');
+      return false;
     } finally {
       setBusy(null);
     }
@@ -99,8 +108,62 @@ export default function AccountsScreen() {
     ]);
   }, [confirmRemoval, t]);
 
+  /**
+   * Which account's action sheet is open.
+   *
+   * Tapping a row opens this rather than switching outright: with the profile
+   * editor reachable only from here, a row needs to offer more than one verb,
+   * and "switch" stays the first item so it is still a two-tap action.
+   */
+  const [menuFor, setMenuFor] = useState<AccountEntry | null>(null);
+
+  const menuItems = useMemo(() => {
+    if (!menuFor) return [];
+    const acc = menuFor;
+    const isActive = acc.a === walletAddress;
+    const locked = acc.source === 'k5-delegation';
+    const items: { icon: any; label: string; onPress: () => void; danger?: boolean }[] = [];
+    if (!isActive && !locked) {
+      items.push({
+        icon: 'swap-horizontal-outline',
+        label: t('accounts_switch_to'),
+        onPress: () => { setMenuFor(null); onSwitch(acc.a); },
+      });
+    }
+    if (!locked) {
+      items.push({
+        icon: 'person-circle-outline',
+        label: t('accounts_edit_profile'),
+        onPress: () => {
+          setMenuFor(null);
+          // The profile update is signed by the ACTIVE account, so editing a
+          // different one means switching to it first — otherwise the edit
+          // would silently be written against whoever is currently signed in.
+          if (isActive) {
+            nav.navigate('EditProfile');
+          } else {
+            onSwitch(acc.a).then((ok) => { if (ok) nav.navigate('EditProfile'); });
+          }
+        },
+      });
+    }
+    items.push({
+      icon: 'trash-outline',
+      label: t('accounts_remove'),
+      danger: true,
+      onPress: () => { setMenuFor(null); onRemove(acc.a); },
+    });
+    return items;
+  }, [menuFor, walletAddress, onSwitch, onRemove, nav, t]);
+
   return (
     <ScrollView style={{ backgroundColor: colors.bgPrimary }} contentContainerStyle={styles.content}>
+      <QuickMenu
+        visible={menuFor !== null}
+        onClose={() => setMenuFor(null)}
+        items={menuItems}
+        anchor="bottom"
+      />
       <Text style={[styles.hint, { color: colors.textSecondary }]}>{t('accounts_hint')}</Text>
 
       {accounts.map((acc) => {
@@ -113,8 +176,8 @@ export default function AccountsScreen() {
           <View key={acc.a} style={[styles.row, { borderColor: colors.border, backgroundColor: colors.bgSecondary }]}>
             <TouchableOpacity
               style={styles.rowMain}
-              onPress={() => onSwitch(acc.a)}
-              disabled={active || locked || busy !== null}
+              onPress={() => setMenuFor(acc)}
+              disabled={locked || busy !== null}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
             >
@@ -135,12 +198,12 @@ export default function AccountsScreen() {
               {busy === acc.a && <ActivityIndicator size="small" color={colors.accentPrimary} />}
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => onRemove(acc.a)}
+              onPress={() => setMenuFor(acc)}
               disabled={locked || busy !== null}
-              accessibilityLabel={t('accounts_remove')}
+              accessibilityLabel={t('accounts_actions')}
               style={styles.removeBtn}
             >
-              <Ionicons name="trash-outline" size={18} color={colors.error} />
+              <Ionicons name="ellipsis-horizontal" size={18} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
         );

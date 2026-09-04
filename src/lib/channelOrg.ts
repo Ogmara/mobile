@@ -71,6 +71,15 @@ const STORAGE_KEY = 'ogmara.channelOrg';
 // account's collapse state to another's groups.
 const COLLAPSE_KEY = 'ogmara.groupCollapsed';
 
+/**
+ * Collapse-state key for the ungrouped bucket. It has no real group id (a
+ * placement's `groupId` is `null` for it), but `isGroupCollapsed`/
+ * `toggleGroupCollapsed` are keyed by plain string, so a sentinel lets it
+ * collapse exactly like a real group. Matches the `__ungrouped__` sentinel
+ * desktop/web already use for their drag-and-drop drop-bucket id.
+ */
+export const UNGROUPED_GROUP_ID = '__ungrouped__';
+
 /** Default channel always pinned at the top of the list, never grouped. */
 export const DEFAULT_CHANNEL_SLUG = 'ogmara';
 

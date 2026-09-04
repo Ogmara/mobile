@@ -49,16 +49,52 @@ export default function EditProfileScreen() {
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  /** Avatar resolved from the node profile's `avatar_cid`. Used when this device
+   *  has no local copy — an imported account, a reinstall, or a picture that was
+   *  uploaded from another device. */
+  const [remoteAvatarUrl, setRemoteAvatarUrl] = useState<string | null>(null);
   /** Set only when the user picks a NEW image, so saving without touching the
    *  avatar does not re-upload the existing one on every save. */
   const [pickedAvatar, setPickedAvatar] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getSetting('displayName').then((n) => { if (n) setDisplayName(n); });
-    getSetting('bio').then((b) => { if (b) setBio(b); });
-    getSetting('avatarLocalUri').then((u) => { if (u) setAvatarUri(u); });
+    let cancelled = false;
+    getSetting('displayName').then((n) => { if (!cancelled && n) setDisplayName((cur) => cur || n); });
+    getSetting('bio').then((b) => { if (!cancelled && b) setBio((cur) => cur || b); });
+    getSetting('avatarLocalUri').then((u) => { if (!cancelled && u) setAvatarUri((cur) => cur || u); });
+    return () => { cancelled = true; };
   }, []);
+
+  // Pull the profile the network actually holds, so an avatar (or name/bio) that
+  // only exists on the node still shows here. The old screen read local settings
+  // only, so an imported account or a picture uploaded elsewhere looked empty.
+  useEffect(() => {
+    if (!client || !address) return;
+    let cancelled = false;
+    // A previously-saved CID resolves an avatar instantly, before the fetch lands.
+    getSetting('avatarCid').then((cid) => {
+      if (!cancelled && cid && client) setRemoteAvatarUrl(client.getMediaUrl(cid));
+    });
+    (async () => {
+      try {
+        const resp: any = await client.getUserProfile(address);
+        const user = resp?.user;
+        if (cancelled || !user) return;
+        if (user.avatar_cid) setRemoteAvatarUrl(client.getMediaUrl(user.avatar_cid));
+        // Prefill only what this device does not already know locally — never
+        // overwrite an edit in progress or a value the user just typed. Clamp to
+        // the same limits the inputs enforce, so a hostile node cannot seed an
+        // oversized string that the user then saves under their key.
+        setDisplayName((cur) => cur || (user.display_name ?? '').slice(0, 50));
+        setBio((cur) => cur || (user.bio ?? '').slice(0, 200));
+      } catch {
+        // No profile on this node yet, or it is unreachable — fine, the local
+        // fields and monogram stand.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [client, address]);
 
   const pickAvatar = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -131,6 +167,9 @@ export default function EditProfileScreen() {
       if (displayName.trim()) await setSetting('displayName', displayName.trim());
       if (bio.trim()) await setSetting('bio', bio.trim());
       if (pickedAvatar) await setSetting('avatarLocalUri', pickedAvatar.uri);
+      // Remember the CID too, so a later open (or a device without the local
+      // file) can resolve the avatar straight from settings without a fetch.
+      if (avatarCid) await setSetting('avatarCid', avatarCid);
       if (address) {
         await setCachedUser(address, {
           displayName: displayName.trim() || null,
@@ -166,8 +205,16 @@ export default function EditProfileScreen() {
           onPress={pickAvatar}
           activeOpacity={0.6}
         >
-          {avatarUri ? (
-            <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
+          {avatarUri || remoteAvatarUrl ? (
+            <Image
+              source={{ uri: (avatarUri || remoteAvatarUrl) as string }}
+              style={styles.avatarImage}
+              // A local picker-cache URI can be evicted by the OS, and a node
+              // media URL can 404. Drop whichever one just failed so the render
+              // falls through: local → node avatar → monogram, never a blank
+              // circle.
+              onError={() => (avatarUri ? setAvatarUri(null) : setRemoteAvatarUrl(null))}
+            />
           ) : (
             <Text style={[styles.avatarText, { color: colors.textInverse }]}>
               {(displayName || address)[0]?.toUpperCase() || 'O'}

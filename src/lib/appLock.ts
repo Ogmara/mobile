@@ -139,6 +139,10 @@ export async function setupPin(pin: string): Promise<Uint8Array> {
   await SecureStore.setItemAsync(PIN_VERIFY_KEY, verifyToken);
   await SecureStore.setItemAsync(LOCK_ENABLED_KEY, 'true');
   await SecureStore.setItemAsync(FAILED_ATTEMPTS_KEY, '0');
+  // Clear any lockout left over from failed attempts on the OLD PIN — otherwise
+  // "Change PIN" mid-cooldown leaves a stale `cooldown_until` that bites the
+  // user at the next unlock even though the PIN they'd enter is now valid.
+  await SecureStore.deleteItemAsync(COOLDOWN_UNTIL_KEY).catch(() => {});
   await SecureStore.setItemAsync(ITERATIONS_KEY, PBKDF2_ITERATIONS.toString());
 
   return key;
@@ -225,17 +229,33 @@ async function migrateIterations(
   }
 }
 
-/** Remove PIN and disable app lock (requires current PIN). */
+/**
+ * Remove the PIN and disable app lock (requires the current PIN).
+ *
+ * Order matters. The gate flag is cleared FIRST, before any delete that could
+ * throw (a locked iOS keychain, an Android Keystore fault after an OS update).
+ * The PIN only gates the UI — it does not wrap the vault key — so a partial
+ * wipe must fail OPEN: clearing `SALT_KEY` while `LOCK_ENABLED_KEY` stayed
+ * `true` would strand the user at a lock screen whose `verifyPin` can never
+ * succeed (no salt), with the wallet key physically present but unreachable.
+ */
 export async function removePin(currentPin: string): Promise<boolean> {
   const key = await verifyPin(currentPin);
   if (!key) return false;
 
-  await SecureStore.deleteItemAsync(SALT_KEY);
-  await SecureStore.deleteItemAsync(PIN_VERIFY_KEY);
   await SecureStore.setItemAsync(LOCK_ENABLED_KEY, 'false');
-  await SecureStore.setItemAsync(BIOMETRIC_KEY, 'false');
-  await SecureStore.deleteItemAsync(FAILED_ATTEMPTS_KEY).catch(() => {});
-  await SecureStore.deleteItemAsync(COOLDOWN_UNTIL_KEY).catch(() => {});
+  await SecureStore.setItemAsync(BIOMETRIC_KEY, 'false').catch(() => {});
+  // Best-effort from here — the gate is already down, so a failed delete just
+  // leaves a harmless orphan that the next setupPin/setLockTimeout overwrites.
+  for (const k of [
+    SALT_KEY,
+    PIN_VERIFY_KEY,
+    ITERATIONS_KEY,
+    FAILED_ATTEMPTS_KEY,
+    COOLDOWN_UNTIL_KEY,
+  ]) {
+    await SecureStore.deleteItemAsync(k).catch(() => {});
+  }
   return true;
 }
 
@@ -280,12 +300,25 @@ export async function isBiometricAvailable(): Promise<boolean> {
   return LocalAuthentication.isEnrolledAsync();
 }
 
-export async function getBiometricType(): Promise<string | null> {
+export type BiometricModality = 'fingerprint' | 'face' | 'iris';
+
+/**
+ * Biometric modalities this device's hardware reports, as stable tokens the UI
+ * can localize.
+ *
+ * `supportedAuthenticationTypesAsync()` describes the HARDWARE, not what the
+ * user has enrolled, and on many Android devices returns both fingerprint and
+ * face. It is only good enough for an informational hint — the OS, not the app,
+ * decides which modality the unlock prompt actually uses. That is why the UI
+ * says "Biometric unlock" rather than naming one method.
+ */
+export async function getBiometricModalities(): Promise<BiometricModality[]> {
   const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
-  if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) return 'Face ID';
-  if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) return 'Fingerprint';
-  if (types.includes(LocalAuthentication.AuthenticationType.IRIS)) return 'Iris';
-  return null;
+  const out: BiometricModality[] = [];
+  if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) out.push('fingerprint');
+  if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) out.push('face');
+  if (types.includes(LocalAuthentication.AuthenticationType.IRIS)) out.push('iris');
+  return out;
 }
 
 export async function isBiometricEnabled(): Promise<boolean> {
@@ -297,10 +330,13 @@ export async function setBiometricEnabled(enabled: boolean): Promise<void> {
   await SecureStore.setItemAsync(BIOMETRIC_KEY, enabled ? 'true' : 'false');
 }
 
-export async function authenticateBiometric(prompt: string): Promise<boolean> {
+export async function authenticateBiometric(
+  prompt: string,
+  cancelLabel = 'Use PIN',
+): Promise<boolean> {
   const result = await LocalAuthentication.authenticateAsync({
     promptMessage: prompt,
-    cancelLabel: 'Use PIN',
+    cancelLabel,
     disableDeviceFallback: true,
   });
   return result.success;
@@ -308,9 +344,14 @@ export async function authenticateBiometric(prompt: string): Promise<boolean> {
 
 // --- Auto-Lock ---
 
+/** Auto-lock delay in seconds. `0` means "lock on every return from background". */
 export async function getLockTimeout(): Promise<number> {
   const val = await SecureStore.getItemAsync(LOCK_TIMEOUT_KEY).catch(() => null);
-  return val ? parseInt(val, 10) || 300 : 300;
+  if (val == null) return 300;
+  // `parseInt('0') || 300` would coerce a deliberate "Immediately" back to 5 min,
+  // so test the parsed number explicitly rather than its truthiness.
+  const n = parseInt(val, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 300;
 }
 
 export async function setLockTimeout(seconds: number): Promise<void> {

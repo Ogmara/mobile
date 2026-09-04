@@ -67,7 +67,10 @@ export default function LockScreen({ onUnlock }: Props) {
     if (bioAttempts >= MAX_BIOMETRIC_ATTEMPTS) return;
     const enabled = await isBiometricEnabled();
     if (!enabled) return;
-    const success = await authenticateBiometric(t('wallet_biometric_prompt'));
+    const success = await authenticateBiometric(
+      t('wallet_biometric_prompt'),
+      t('biometric_use_pin'),
+    );
     if (success) {
       onUnlock();
     } else {
@@ -158,7 +161,7 @@ export default function LockScreen({ onUnlock }: Props) {
         <Text style={[styles.error, { color: colors.error }]}>{error}</Text>
       ) : cooldown > 0 ? (
         <Text style={[styles.error, { color: colors.warning }]}>
-          {`Locked for ${cooldown}s`}
+          {t('security_pin_locked', { count: cooldown })}
         </Text>
       ) : null}
 
@@ -188,7 +191,7 @@ export default function LockScreen({ onUnlock }: Props) {
       {bioAttempts < MAX_BIOMETRIC_ATTEMPTS && (
         <TouchableOpacity onPress={tryBiometric} style={styles.biometricBtn}>
           <Text style={[styles.biometricText, { color: colors.accentPrimary }]}>
-            {t('wallet_biometric_prompt')}
+            {t('security_biometric_unlock')}
           </Text>
         </TouchableOpacity>
       )}

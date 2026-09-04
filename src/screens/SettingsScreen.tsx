@@ -23,7 +23,16 @@ import { useTheme, spacing, fontSize, radius, type ThemeMode } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { getStartScreen, setStartScreen, setSetting, getSetting, type StartScreen } from '../lib/settings';
 import { debugLog } from '../lib/debug';
-import { isLockEnabled, hasPinSetup, isBiometricAvailable, isBiometricEnabled, setBiometricEnabled, getBiometricType } from '../lib/appLock';
+import {
+  hasPinSetup,
+  isBiometricAvailable,
+  isBiometricEnabled,
+  setBiometricEnabled,
+  getBiometricModalities,
+  authenticateBiometric,
+  getLockTimeout,
+  setLockTimeout,
+} from '../lib/appLock';
 import { LANGUAGES, type LanguageCode } from '../i18n/init';
 import type { MoreStackParamList } from '../navigation/types';
 import NodeSelector from '../components/NodeSelector';
@@ -61,10 +70,12 @@ export default function SettingsScreen() {
   const [pinEnabled, setPinEnabled] = useState(false);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioEnabled, setBioEnabled] = useState(false);
-  const [bioType, setBioType] = useState<string | null>(null);
+  const [bioModalities, setBioModalities] = useState<string[]>([]);
+  const [lockTimeout, setLockTimeoutState] = useState(300);
   const [langPickerOpen, setLangPickerOpen] = useState(false);
   const [startPickerOpen, setStartPickerOpen] = useState(false);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [lockPickerOpen, setLockPickerOpen] = useState(false);
   const [nodeSelectorOpen, setNodeSelectorOpen] = useState(false);
   const [fontSizeSetting, setFontSizeSetting] = useState<string>('medium');
   const [compactLayout, setCompactLayout] = useState(false);
@@ -74,15 +85,46 @@ export default function SettingsScreen() {
   // Profile state
   const [displayName, setDisplayName] = useState('');
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  /** Avatar resolved from the node profile's `avatar_cid` — same fallback as
+   *  EditProfileScreen, for the same reason: an imported account, a reinstall,
+   *  or a picture uploaded from another device has no local `avatarLocalUri`. */
+  const [remoteAvatarUrl, setRemoteAvatarUrl] = useState<string | null>(null);
 
   useEffect(() => {
     getStartScreen().then(setStartScreenState);
-    getSetting('displayName').then((n) => { if (n) setDisplayName(n); });
-    getSetting('avatarLocalUri').then((u) => { if (u) setAvatarUri(u); });
     getSetting('fontSize').then((v) => { if (v) setFontSizeSetting(v); });
     getSetting('compactLayout').then((v) => { if (v === 'true') setCompactLayout(true); });
     getSetting('mediaAutoload').then((v) => { if (v) setMediaAutoload(v); });
   }, []);
+
+  // Reload on focus (not just mount) so returning from Edit Profile shows a
+  // just-changed name/avatar immediately instead of only after next launch,
+  // and resolve the avatar from the node when this device has no local copy —
+  // same fallback as EditProfileScreen, for the same reason (imported account
+  // or a picture uploaded from another device). One `cancelled` flag guards
+  // every write: without it, a fast account switch could let a stale pre-switch
+  // read resolve after the new account's and flash the wrong name/avatar.
+  useFocusEffect(
+    React.useCallback(() => {
+      let cancelled = false;
+      // Clear immediately — the fallbacks below only ever SET a resolved
+      // value, never clear one, so without this an account with no avatar
+      // would keep showing whatever account switched away FROM last had.
+      setRemoteAvatarUrl(null);
+      getSetting('displayName').then((n) => { if (!cancelled) setDisplayName(n || ''); });
+      getSetting('avatarLocalUri').then((u) => { if (!cancelled) setAvatarUri(u || null); });
+      getSetting('avatarCid').then((cid) => {
+        if (!cancelled && cid && client) setRemoteAvatarUrl(client.getMediaUrl(cid));
+      });
+      if (client && address) {
+        client.getUserProfile(address).then((resp: any) => {
+          const cid = resp?.user?.avatar_cid;
+          if (!cancelled && cid) setRemoteAvatarUrl(client.getMediaUrl(cid));
+        }).catch(() => {});
+      }
+      return () => { cancelled = true; };
+    }, [client, address]),
+  );
 
   // Refresh security state every time screen gains focus (e.g., after PinSetup)
   useFocusEffect(
@@ -90,9 +132,75 @@ export default function SettingsScreen() {
       hasPinSetup().then(setPinEnabled);
       isBiometricAvailable().then(setBioAvailable);
       isBiometricEnabled().then(setBioEnabled);
-      getBiometricType().then(setBioType);
+      getBiometricModalities().then(setBioModalities);
+      getLockTimeout().then(setLockTimeoutState);
     }, []),
   );
+
+  /** Auto-lock delay options, in seconds. `0` locks on every return to foreground. */
+  const lockTimeoutOptions: { seconds: number; label: string }[] = [
+    { seconds: 0, label: t('security_autolock_immediately') },
+    { seconds: 60, label: t('security_autolock_minutes', { count: 1 }) },
+    { seconds: 300, label: t('security_autolock_minutes', { count: 5 }) },
+    { seconds: 900, label: t('security_autolock_minutes', { count: 15 }) },
+    { seconds: 3600, label: t('security_autolock_hour') },
+  ];
+  const lockTimeoutLabel =
+    lockTimeoutOptions.find((o) => o.seconds === lockTimeout)?.label ??
+    t('security_autolock_minutes', { count: Math.round(lockTimeout / 60) });
+
+  const handleLockTimeout = async (seconds: number) => {
+    const prev = lockTimeout;
+    setLockTimeoutState(seconds);
+    setLockPickerOpen(false);
+    try {
+      await setLockTimeout(seconds);
+    } catch {
+      // The store rejected the write — don't leave the UI showing a value that
+      // was never persisted.
+      setLockTimeoutState(prev);
+      showAlert(t('error_generic'), '');
+    }
+  };
+
+  const handleBiometricToggle = async () => {
+    try {
+      if (bioEnabled) {
+        await setBiometricEnabled(false);
+        setBioEnabled(false);
+        return;
+      }
+      // Prove the sensor actually works before we promise the user it will —
+      // enabling without a live check is exactly why this looked broken before.
+      const ok = await authenticateBiometric(
+        t('wallet_biometric_prompt'),
+        t('biometric_use_pin'),
+      );
+      if (!ok) return;
+      await setBiometricEnabled(true);
+      setBioEnabled(true);
+    } catch {
+      showAlert(t('error_generic'), '');
+    }
+  };
+
+  const handlePinRow = () => {
+    if (!pinEnabled) {
+      navigation.navigate('PinSetup');
+      return;
+    }
+    // A set PIN can be changed or turned off — the old row navigated straight
+    // to setup (which doubled as "change"), so keep both paths reachable.
+    showAlert(t('settings_security'), t('security_pin_manage'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('security_pin_change'), onPress: () => navigation.navigate('PinSetup') },
+      {
+        text: t('security_pin_disable_action'),
+        style: 'destructive',
+        onPress: () => navigation.navigate('PinSetup', { mode: 'disable' }),
+      },
+    ]);
+  };
 
   const handleStartScreen = (screen: StartScreen) => {
     setStartScreenState(screen);
@@ -140,8 +248,15 @@ export default function SettingsScreen() {
                 onPress={() => navigation.navigate('EditProfile')}
                 activeOpacity={0.6}
               >
-                {avatarUri ? (
-                  <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
+                {avatarUri || remoteAvatarUrl ? (
+                  <Image
+                    source={{ uri: (avatarUri || remoteAvatarUrl) as string }}
+                    style={styles.avatarImage}
+                    // A local picker-cache URI can be evicted by the OS, and a
+                    // node media URL can 404 — drop whichever one just failed
+                    // so this falls through instead of showing a blank circle.
+                    onError={() => (avatarUri ? setAvatarUri(null) : setRemoteAvatarUrl(null))}
+                  />
                 ) : (
                   <Text style={[styles.avatarText, { color: colors.textInverse }]}>
                     {(displayName || address)[0]?.toUpperCase() || 'O'}
@@ -475,10 +590,7 @@ export default function SettingsScreen() {
         {t('settings_security')}
       </Text>
       <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
-        <TouchableOpacity
-          style={styles.row}
-          onPress={() => navigation.navigate('PinSetup')}
-        >
+        <TouchableOpacity style={styles.row} onPress={handlePinRow}>
           <Text style={[styles.rowText, { color: colors.textPrimary }]}>
             {t('wallet_pin_setup')}
           </Text>
@@ -487,22 +599,58 @@ export default function SettingsScreen() {
           </Text>
         </TouchableOpacity>
         {bioAvailable && pinEnabled && (
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => {
-              const next = !bioEnabled;
-              setBiometricEnabled(next).then(() => setBioEnabled(next));
-            }}
-          >
-            <Text style={[styles.rowText, { color: colors.textPrimary }]}>
-              {bioType || 'Biometric'} unlock
-            </Text>
+          <TouchableOpacity style={styles.row} onPress={handleBiometricToggle}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+                {t('security_biometric_unlock')}
+              </Text>
+              {bioModalities.length > 0 && (
+                <Text style={[styles.rowHint, { color: colors.textSecondary }]}>
+                  {t('security_biometric_available', {
+                    methods: bioModalities.map((m) => t(`biometric_type_${m}`)).join(', '),
+                  })}
+                </Text>
+              )}
+            </View>
             <Text style={{ color: bioEnabled ? colors.success : colors.textSecondary }}>
               {bioEnabled ? 'ON' : 'OFF'}
             </Text>
           </TouchableOpacity>
         )}
+        {pinEnabled && (
+          <TouchableOpacity style={styles.row} onPress={() => setLockPickerOpen(true)}>
+            <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+              {t('security_autolock')}
+            </Text>
+            <Text style={{ color: colors.textSecondary }}>
+              {lockTimeoutLabel} {'\u25BE'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* Auto-lock delay picker modal */}
+      <Modal visible={lockPickerOpen} transparent animationType="fade" onRequestClose={() => setLockPickerOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setLockPickerOpen(false)}>
+          <View style={[styles.modalContent, { backgroundColor: colors.bgSecondary }]}>
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+              {t('security_autolock')}
+            </Text>
+            {lockTimeoutOptions.map((opt) => (
+              <TouchableOpacity
+                key={opt.seconds}
+                style={[styles.modalRow, { borderBottomColor: colors.border }]}
+                onPress={() => handleLockTimeout(opt.seconds)}
+              >
+                <Text style={[styles.rowText, { color: colors.textPrimary }]}>{opt.label}</Text>
+                {lockTimeout === opt.seconds && (
+                  <Text style={{ color: colors.accentPrimary, fontSize: fontSize.lg }}>{'\u2713'}</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Wallet */}
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
@@ -588,6 +736,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   rowText: { fontSize: fontSize.md },
+  rowHint: { fontSize: fontSize.xs, marginTop: 2 },
   sizeBtn: {
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,

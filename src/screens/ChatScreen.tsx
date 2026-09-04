@@ -30,7 +30,7 @@ import {
   ensureChannelOrgLoaded, ensureCollapsedStateLoaded, getChannelOrg, resolveChannelLayout,
   createGroup, renameGroup, deleteGroup, moveGroup, moveChannel, assignChannel, clearPlacement,
   resetToAlphabetical, isGroupCollapsed, toggleGroupCollapsed, DEFAULT_CHANNEL_SLUG,
-  type ChannelOrg,
+  UNGROUPED_GROUP_ID, type ChannelOrg,
 } from '../lib/channelOrg';
 import QuickMenu from '../components/QuickMenu';
 import PromptModal from '../components/PromptModal';
@@ -48,7 +48,11 @@ interface MenuItem {
   danger?: boolean;
 }
 
-type Section = { key: string; groupId: string | null; title: string; data: Channel[] };
+// `groupId` is null for the ungrouped bucket — it gates the group-options menu
+// (rename/delete only make sense for a real group). `collapseId` is always a
+// real key into the collapse map, using UNGROUPED_GROUP_ID for the bucket, so
+// "Ungrouped" can collapse exactly like any user-created group.
+type Section = { key: string; groupId: string | null; collapseId: string; title: string; data: Channel[] };
 
 export default function ChatScreen() {
   const { t } = useTranslation();
@@ -152,17 +156,21 @@ export default function ChatScreen() {
     const list: Section[] = layout.groups.map((rg) => ({
       key: `g-${rg.group.id}`,
       groupId: rg.group.id,
+      collapseId: rg.group.id,
       title: rg.group.name,
       data: isGroupCollapsed(rg.group.id) ? [] : rg.channels,
     }));
     if (layout.ungrouped.length > 0) {
+      // No header at all when there are no groups yet — matches the plain,
+      // un-customized list every user starts with. With no header there is no
+      // way to expand it again, so never hide the channels in that case.
+      const hasHeader = layout.groups.length > 0;
       list.push({
         key: 'ungrouped',
         groupId: null,
-        // No header at all when there are no groups yet — matches the plain,
-        // un-customized list every user starts with.
-        title: layout.groups.length > 0 ? t('sidebar_ungrouped') : '',
-        data: layout.ungrouped,
+        collapseId: UNGROUPED_GROUP_ID,
+        title: hasHeader ? t('sidebar_ungrouped') : '',
+        data: hasHeader && isGroupCollapsed(UNGROUPED_GROUP_ID) ? [] : layout.ungrouped,
       });
     }
     return list;
@@ -366,18 +374,15 @@ export default function ChatScreen() {
 
   const renderSectionHeader = ({ section }: { section: Section }) => {
     if (!section.title) return null;
-    const collapsed = section.groupId ? isGroupCollapsed(section.groupId) : false;
+    const collapsed = isGroupCollapsed(section.collapseId);
     return (
       <View style={[styles.sectionHeader, { backgroundColor: colors.bgPrimary, borderBottomColor: colors.border }]}>
         <TouchableOpacity
           style={styles.sectionHeaderLeft}
-          onPress={() => { if (section.groupId) { toggleGroupCollapsed(section.groupId); refreshOrg(); } }}
-          disabled={!section.groupId}
+          onPress={() => { toggleGroupCollapsed(section.collapseId); refreshOrg(); }}
           activeOpacity={0.7}
         >
-          {section.groupId && (
-            <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-down'} size={16} color={colors.textSecondary} />
-          )}
+          <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-down'} size={16} color={colors.textSecondary} />
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{section.title}</Text>
         </TouchableOpacity>
         {section.groupId && (

@@ -56,7 +56,9 @@ export type MoreStackParamList = {
   WalletBalance: undefined;
   Receive: undefined;
   TokenDetail: { assetId: string; name: string; precision: number };
-  PinSetup: undefined;
+  // `disable` turns an existing PIN off (requires re-entering it); default is
+  // the create/change flow.
+  PinSetup: { mode?: 'setup' | 'disable' } | undefined;
   DebugLogs: undefined;
   Notifications: undefined;
   UserProfile: { address: string };

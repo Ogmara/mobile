@@ -5,6 +5,108 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.1] - 2026-09-04
+
+Two more issues found in on-device review, again run through the full audit
+pipeline (code + security in parallel, then a re-check).
+
+### Fixed
+
+- **Settings still showed the letter monogram instead of the uploaded
+  avatar.** The 0.49.0 fix only covered Edit Profile; the profile card at the
+  top of the Settings page had the identical bug (local-setting-only avatar,
+  no node fallback). Fixed the same way — resolves `avatar_cid` via
+  `client.getMediaUrl`, falls through local → node → monogram on load failure —
+  and now also refreshes on screen focus, so a name/avatar just changed in Edit
+  Profile shows immediately instead of only after the next app launch.
+  **Security audit caught a real regression in that fix before it shipped:**
+  the resolved avatar URL was only ever *set*, never cleared, so switching from
+  an account with an avatar to one without would keep showing the previous
+  account's photo under the new account's name. Fixed by resetting the
+  resolved URL at the start of every focus.
+- **"Ungrouped" was the only channel-list section that couldn't collapse** on
+  Chat, while user-created groups could. The header rendered but its tap
+  handler and chevron were gated on `groupId`, which is `null` for the
+  ungrouped bucket by design (it isn't a real, renameable group) — that same
+  `null` was wrongly used to gate collapsibility too. Introduced a separate
+  `UNGROUPED_GROUP_ID` sentinel used only as the collapse-state key, so
+  "Ungrouped" collapses like any group while still correctly having no
+  rename/delete menu. Desktop and web had the identical bug (their ungrouped
+  header was a plain non-interactive `<div>`) and got the matching fix in the
+  same pass — see their CHANGELOGs.
+
+## [0.49.0] - 2026-09-04
+
+On-device review of the Settings and profile screens turned up four issues.
+The full audit pipeline (code + security in parallel, then spec compliance,
+then a re-audit of the fixed tree) ran twice; findings and their dispositions
+are noted below.
+
+### Added
+
+- **Auto-lock delay is now selectable.** `getLockTimeout` / `setLockTimeout`
+  already existed and `App.tsx` already honoured them, but nothing in the UI
+  ever set the value. Security now has an "Auto-lock" row (shown once a PIN is
+  set) with Immediately / 1 min / 5 min / 15 min / 1 hour. Default stays 5 min.
+  `getLockTimeout` no longer coerces a deliberate `0` ("Immediately") back to
+  300 via `parseInt('0') || 300`. Note: "Immediately" locks on *every* return
+  from the background, including after the system image picker or biometric
+  prompt — that is the intended meaning of the option.
+- **Change / turn off an existing PIN.** Tapping the PIN row while a PIN is set
+  now opens a dialog with Change PIN / Turn off PIN. "Turn off" re-verifies the
+  current PIN via `removePin` (the PIN is a UI gate only — it does not encrypt
+  the vault key — so removing it cannot strand a wallet). The turn-off flow
+  shares the lock screen's escalating cooldown, so repeated mistypes here can no
+  longer silently arm a lock-out that only shows up at the next real unlock.
+
+### Fixed
+
+- **Edit Profile showed the letter monogram even when an avatar had been
+  uploaded.** The screen read the local `avatarLocalUri` setting only, so a
+  picture uploaded from another device, or present after a reinstall or on an
+  imported account, looked lost. It now also fetches the node profile and
+  resolves `avatar_cid` through `client.getMediaUrl`, prefills name/bio from the
+  node (clamped to the input limits) when this device has no local copy, records
+  the CID on save, and falls through local → node → monogram if an image URL
+  fails to load instead of showing a blank circle.
+- **"Face ID unlock" was mislabelled and gave no feedback.** The label came
+  from `supportedAuthenticationTypesAsync()`, which reports hardware capability
+  rather than what is enrolled, so a fingerprint-only device was told "Face ID".
+  The row is now "Biometric unlock" with the detected method(s) shown as a
+  hint, and enabling it runs a live biometric check first — a sensor that does
+  not authenticate no longer silently reports itself as on. The OS still
+  chooses which modality the prompt uses; an app cannot force one.
+- **`removePin` was not crash-safe (security audit).** It deleted the PIN salt
+  before clearing the lock-enabled flag, with the first two deletes uncaught. A
+  keychain/Keystore fault mid-wipe could leave the lock armed with no salt —
+  `verifyPin` can then never succeed, stranding the user at the lock screen with
+  the wallet key present but unreachable. `removePin` now clears the gate flag
+  first (fail-open is correct for a UI lock) and best-effort each delete.
+- **`setupPin` left a stale `cooldown_until` (re-audit).** Changing the PIN
+  while in a failed-attempt cooldown cleared the attempt count but not the
+  cooldown timestamp, so the new (valid) PIN was still locked out at the next
+  unlock. `setupPin` now clears it.
+- Hardcoded English strings in `PinSetupScreen` / `LockScreen` moved to i18n
+  (all 7 locales); `setLockTimeout` failures now revert the UI instead of
+  becoming an unhandled rejection.
+
+### Changed
+
+- `expo-local-authentication` added to the `app.json` plugins list so a future
+  prebuild keeps the `NSFaceIDUsageDescription` / `USE_BIOMETRIC` entries that
+  are currently only hand-maintained.
+
+### Known / deferred (from the audit)
+
+- The mount effect and the node-profile fetch in Edit Profile race as
+  "first non-empty value wins"; a field cleared during the sub-second fetch can
+  be refilled. No data is lost (`updateProfile` treats empty as "leave
+  unchanged"). Not fixed this pass.
+- Spec `05-clients.md` §5.6.3 documents underscored config-key names
+  (`ogmara.app_lock_timeout_seconds`) and Argon2id KDF; the shipped clients use
+  a dotted namespace and PBKDF2 (a documented Hermes-performance decision). Spec
+  doc lag, tracked separately — no code change.
+
 ## [0.48.1] - 2026-09-03
 
 ### Fixed

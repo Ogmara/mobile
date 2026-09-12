@@ -365,5 +365,9 @@
   "accounts_edit_profile": "Editar perfil",
   "accounts_actions": "Acciones de cuenta",
   "profile_display_name": "Nombre de usuario",
-  "profile_avatar_too_large": "La imagen es demasiado grande (máx. 5 MB)."
+  "profile_avatar_too_large": "La imagen es demasiado grande (máx. 5 MB).",
+  "bot_badge": "Bot",
+  "bot_badge_tooltip": "Autodeclarado — no verificado por Ogmara",
+  "bot_commands_label": "Comandos del bot",
+  "mention_popover_label": "Sugerencias de menciones"
 }

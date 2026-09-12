@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import { useTranslation } from 'react-i18next';
+import ComposerSuggestions from '../components/ComposerSuggestions';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
@@ -120,6 +121,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [info, setInfo] = useState<{ title?: string; message: string } | null>(null);
   const showInfo = useCallback((title: string, message: string) => setInfo({ title, message }), []);
   const inputRef = useRef<TextInput>(null);
+  // Addresses resolved by the @-mention / -command pickers, merged with any raw
+  // `@klv1…` typed by hand when the message is sent. Mobile previously sent an
+  // EMPTY mentions[] on every message — so no mobile user could generate a
+  // mention notification at all, and the command picker's handle-collision
+  // disambiguation (which routes on the address, not the handle) had nothing to
+  // route with.
+  const [pendingMentions, setPendingMentions] = useState<string[]>([]);
   // Profile cache: address → display name
   const [profileNames, setProfileNames] = useState<Record<string, string>>({});
   const profileFetchedRef = useRef<Set<string>>(new Set());
@@ -181,6 +189,25 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       }).catch(() => {});
     }
   }, [client, messages]);
+
+  // Mentions belong to the draft for THIS channel, so they are cleared ONLY on a
+  // real channel change.
+  //
+  // This screen instance is reused across channel switches (React Navigation
+  // re-parameterizes the existing route rather than remounting), so without this
+  // a mention picked in channel A rides along on the next message sent in
+  // channel B — notifying, and push-notifying, someone never named in it.
+  //
+  // Deliberately its OWN effect keyed only on `channelId`, NOT folded into the
+  // channel-meta effect below: that one also depends on `client` and
+  // `myAddress`, so switching nodes in Settings mints a new client object,
+  // re-fires it on the SAME channel, and would wipe a mention the user
+  // deliberately picked while `@Alice` still sits in the composer. The send path
+  // can only recover raw `@klv1…` text, so that mention would vanish silently —
+  // the exact inverse of the leak this clearing exists to prevent.
+  useEffect(() => {
+    setPendingMentions([]);
+  }, [channelId]);
 
   // Mark channel read on enter
   useEffect(() => {
@@ -507,6 +534,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         ));
         setEditingMsg(null);
         setInput('');
+        // editMessage carries no mentions of its own; anything pending belonged
+        // to a draft that no longer exists.
+        setPendingMentions([]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : '';
         debugLog('warn', `Edit failed: ${msg}`);
@@ -517,6 +547,18 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
     try {
       const options: any = {};
+      // Merge two sources, identical to web/desktop (ChatView's send handler):
+      //  1. raw `@klv1…` addresses typed or pasted into the text
+      //  2. addresses resolved by the @-mention / -command pickers
+      //
+      // Deliberately NOT filtered by "is the address still in the text" — the
+      // pickers insert `@DisplayName`, not the address, so such a filter would
+      // drop every picker-resolved mention. Same known limitation as web: a
+      // mention deleted from the text before sending still notifies. Matching
+      // the other clients matters more than fixing it unilaterally here.
+      const raw = text.match(/@(klv1[a-z0-9]{58})/g) ?? [];
+      const merged = new Set([...pendingMentions, ...raw.map((m) => m.slice(1))]);
+      if (merged.size > 0) options.mentions = Array.from(merged);
       if (replyTo) options.replyTo = replyTo.msgId;
       if (pendingAttachments.length > 0) options.attachments = pendingAttachments;
       const sentAttachments = [...pendingAttachments];
@@ -544,6 +586,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       }
       setInput('');
       setReplyTo(null);
+      // Clear alongside the composer, or the next message silently carries the
+      // previous one's mentions — notifying people who were never named in it.
+      setPendingMentions([]);
       setPendingAttachments([]);
       setPendingEncryptedMedia([]);
 
@@ -576,7 +621,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // pendingAttachments / pendingEncryptedMedia are declared after this callback; like
     // the original send they're read via closure (state setters keep them fresh enough
     // for the send path) and intentionally omitted from deps to avoid a TDZ reference.
-  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor]);
+  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, pendingMentions]);
 
   const handleReply = useCallback((msg: ExtendedEnvelope) => {
     const d = decodedRef.current.get(chanCacheId(msg));
@@ -597,6 +642,10 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     const content = (d && (d.kind === 'text' || d.kind === 'plain') ? d.text : '') || msg._decodedContent || '';
     setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content });
     setInput(content);
+    // The draft being replaced takes its mentions with it. Without this, a
+    // mention picked for the abandoned draft survives and attaches to whatever
+    // is sent next — notifying someone who was never named in it.
+    setPendingMentions([]);
     setReplyTo(null);
     inputRef.current?.focus();
   }, [myAddress]);
@@ -642,6 +691,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const cancelEdit = useCallback(() => {
     setEditingMsg(null);
     setInput('');
+    setPendingMentions([]);
   }, []);
 
   const cancelReply = useCallback(() => {
@@ -913,6 +963,22 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
               ))}
             </View>
           )}
+
+          {/* @-mention and /-command pickers (frontend §6.1.1, §6.1.2), docked
+              directly above the composer — React Native exposes no caret
+              geometry, so a floating popover is not an option. */}
+          <ComposerSuggestions
+            value={input}
+            channelId={channelId}
+            client={client}
+            onPick={({ value, mention }) => {
+              setInput(value);
+              if (mention) {
+                setPendingMentions((prev) => Array.from(new Set([...prev, mention])));
+              }
+              inputRef.current?.focus();
+            }}
+          />
 
           {/* Input bar */}
           <View style={styles.inputBar}>

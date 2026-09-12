@@ -365,5 +365,9 @@
   "accounts_edit_profile": "编辑资料",
   "accounts_actions": "账户操作",
   "profile_display_name": "用户名",
-  "profile_avatar_too_large": "图片过大（最大 5 MB）。"
+  "profile_avatar_too_large": "图片过大（最大 5 MB）。",
+  "bot_badge": "机器人",
+  "bot_badge_tooltip": "账户自行声明 — 未经 Ogmara 验证",
+  "bot_commands_label": "机器人命令",
+  "mention_popover_label": "提及建议"
 }

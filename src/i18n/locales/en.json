@@ -365,5 +365,9 @@
   "accounts_edit_profile": "Edit profile",
   "accounts_actions": "Account actions",
   "profile_display_name": "Username",
-  "profile_avatar_too_large": "Image is too large (max 5 MB)."
+  "profile_avatar_too_large": "Image is too large (max 5 MB).",
+  "bot_badge": "Bot",
+  "bot_badge_tooltip": "Self-declared — not verified by Ogmara",
+  "bot_commands_label": "Bot commands",
+  "mention_popover_label": "Mention suggestions"
 }

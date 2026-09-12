@@ -16,6 +16,13 @@ export interface CachedUser {
   bio: string | null;
   /** Wallet is registered on-chain (profile carries a non-empty public_key). */
   verified?: boolean;
+  /**
+   * Wallet self-declared itself automated (protocol §3.11).
+   *
+   * Orthogonal to `verified` and never merged with it in a UI: `verified` is
+   * paid and on-chain, `isBot` is free and self-declared.
+   */
+  isBot?: boolean;
   lastUpdated: number;
 }
 
@@ -38,6 +45,7 @@ export async function setCachedUser(address: string, data: Partial<CachedUser>):
     avatarCid: data.avatarCid ?? existing?.avatarCid ?? null,
     bio: data.bio ?? existing?.bio ?? null,
     verified: data.verified ?? existing?.verified ?? false,
+    isBot: data.isBot ?? existing?.isBot ?? false,
     lastUpdated: Date.now(),
   };
   await AsyncStorage.setItem(PREFIX + address, JSON.stringify(merged));

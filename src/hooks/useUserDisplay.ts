@@ -16,6 +16,8 @@ interface UserDisplay {
   /** Wallet is registered on-chain — mirrors the web client's
    *  `!!user.public_key` check. Drives the verified badge on post authors. */
   verified: boolean;
+  /** Wallet self-declared itself automated — drives the Bot badge (§6.2). */
+  isBot: boolean;
 }
 
 /** Track which addresses we've already fetched from API to avoid re-fetching */
@@ -27,6 +29,7 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
     displayName: null,
     avatarUri: null,
     verified: false,
+    isBot: false,
   });
 
   useEffect(() => {
@@ -41,7 +44,12 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
     if (address === myAddress) {
       getSetting('avatarLocalUri').then((uri) => {
         if (uri) {
-          setCached((prev) => ({ displayName: myName, avatarUri: uri, verified: prev.verified }));
+          setCached((prev) => ({
+            displayName: myName,
+            avatarUri: uri,
+            verified: prev.verified,
+            isBot: prev.isBot,
+          }));
           return;
         }
         getCachedUser(address).then((user) => {
@@ -49,6 +57,7 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
             displayName: myName ?? user?.displayName ?? null,
             avatarUri: user?.avatarCid && client ? client.getMediaUrl(user.avatarCid) : null,
             verified: user?.verified ?? false,
+            isBot: user?.isBot ?? false,
           });
         });
       });
@@ -68,11 +77,12 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
     // feed effectively never showed avatars, while the profile screen — which
     // fetches directly — always did.
     getCachedUser(address).then((user) => {
-      if (user?.displayName || user?.avatarCid || user?.verified) {
+      if (user?.displayName || user?.avatarCid || user?.verified || user?.isBot) {
         setCached({
           displayName: user.displayName ?? null,
           avatarUri: user.avatarCid && client ? client.getMediaUrl(user.avatarCid) : null,
           verified: user.verified ?? false,
+          isBot: user.isBot ?? false,
         });
       }
     });
@@ -92,15 +102,22 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
         // Registered on-chain when the profile carries a non-empty public_key
         // (same rule as web `profile.ts` / `auth.ts`).
         const verified = !!(user.public_key && String(user.public_key).length > 0);
-        if (!name && !avatarCid && !verified) return; // nothing to show; leave any cache intact
+        // Self-declared bot (protocol §3.11). `GET /users/{address}` is a JSON
+        // passthrough of the node's user record, so this needs no node-side
+        // handler change; absent on pre-0.127.0 nodes, which reads as false.
+        const isBot = !!(user as { is_bot?: boolean }).is_bot;
+        // `isBot` counts as something to show — a bot with no name, avatar or
+        // registration would otherwise be dropped here and never get a badge.
+        if (!name && !avatarCid && !verified && !isBot) return;
         setCached((prev) => ({
           // Keep our own context name rather than letting an empty server profile
           // blank it out.
           displayName: name ?? prev.displayName,
           avatarUri: avatarCid ? client.getMediaUrl(avatarCid) : prev.avatarUri,
           verified,
+          isBot,
         }));
-        setCachedUser(address, { displayName: name, avatarCid, verified });
+        setCachedUser(address, { displayName: name, avatarCid, verified, isBot });
       }).catch(() => {
         // Allow a retry later in the session rather than marking this address
         // permanently fetched on a transient failure.
@@ -111,7 +128,12 @@ export function useUserDisplay(address: string | undefined): UserDisplay {
 
   // Fast path: own address
   if (address === myAddress && myName) {
-    return { displayName: myName, avatarUri: cached.avatarUri, verified: cached.verified };
+    return {
+      displayName: myName,
+      avatarUri: cached.avatarUri,
+      verified: cached.verified,
+      isBot: cached.isBot,
+    };
   }
 
   return cached;

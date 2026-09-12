@@ -365,5 +365,9 @@
   "accounts_edit_profile": "Редактировать профиль",
   "accounts_actions": "Действия с аккаунтом",
   "profile_display_name": "Имя пользователя",
-  "profile_avatar_too_large": "Изображение слишком большое (макс. 5 МБ)."
+  "profile_avatar_too_large": "Изображение слишком большое (макс. 5 МБ).",
+  "bot_badge": "Бот",
+  "bot_badge_tooltip": "Заявлено самим аккаунтом — не проверено Ogmara",
+  "bot_commands_label": "Команды бота",
+  "mention_popover_label": "Предложения упоминаний"
 }

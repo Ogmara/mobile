@@ -365,5 +365,9 @@
   "accounts_edit_profile": "プロフィールを編集",
   "accounts_actions": "アカウント操作",
   "profile_display_name": "ユーザー名",
-  "profile_avatar_too_large": "画像が大きすぎます（最大5MB）。"
+  "profile_avatar_too_large": "画像が大きすぎます（最大5MB）。",
+  "bot_badge": "ボット",
+  "bot_badge_tooltip": "自己申告 — Ogmara による検証はありません",
+  "bot_commands_label": "ボットコマンド",
+  "mention_popover_label": "メンション候補"
 }

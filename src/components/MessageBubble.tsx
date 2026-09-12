@@ -29,6 +29,7 @@ import { ImageViewerModal } from './ImageViewerModal';
 import ConfirmModal from './ConfirmModal';
 import FormattedText from './FormattedText';
 import VerifiedBadge from './VerifiedBadge';
+import BotBadge from './BotBadge';
 import { useUserDisplay } from '../hooks/useUserDisplay';
 
 /** 30-minute edit window matching desktop */
@@ -179,7 +180,9 @@ export default function MessageBubble({
 }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { verified: authorVerified } = useUserDisplay(isOwn ? undefined : message.author);
+  const { verified: authorVerified, isBot: authorIsBot } = useUserDisplay(
+    isOwn ? undefined : message.author,
+  );
   const [viewerImage, setViewerImage] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [reactPickerOpen, setReactPickerOpen] = useState(false);
@@ -255,6 +258,11 @@ export default function MessageBubble({
             {authorLabel}
           </Text>
           <VerifiedBadge verified={authorVerified} size={12} />
+          {/* Beside the verified badge, never merged with it: verified is paid
+              and on-chain, bot is free and self-declared. Shown for every bot,
+              verified or not — an unverified bot is the one most worth
+              labelling. */}
+          <BotBadge isBot={authorIsBot} />
         </TouchableOpacity>
       )}
 

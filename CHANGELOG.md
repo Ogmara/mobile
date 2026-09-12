@@ -5,6 +5,95 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.0] - 2026-09-12
+
+Requires l2-node 0.127.0 for the bot endpoints.
+
+### Added
+
+- **`@`-mention autocomplete — mobile could not mention anyone at all before
+  this.** `handleSend` never set `options.mentions`, and unlike web/desktop there
+  was no raw `@klv1…` fallback parsing either, so **every message mobile has ever
+  sent carried an empty `mentions[]`** and no mobile user could generate a
+  mention notification. Typing `@` now opens a suggestion sheet backed by
+  `users/search`, and the send path merges picker-resolved addresses with any raw
+  `@klv1…` in the text, exactly as web/desktop do.
+- **`/`-command autocomplete for bots in channels** (frontend §6.1.2). Typing `/`
+  at the start of the composer lists the commands bots in that channel advertise.
+  Picking one sends an ordinary chat message; when two bots expose the same
+  command name it inserts `@handle` **and** puts the bot's wallet in `mentions[]`
+  so the address routes rather than the self-declared, non-unique handle.
+
+  This is why the two shipped together: the command picker's disambiguation
+  depends entirely on `mentions[]`, so on a client that never sent mentions it
+  would have silently degraded to handle-only routing — precisely the ambiguity
+  the design exists to prevent.
+- **Bot badge** on message authors and suggestion rows. Neutral chrome beside the
+  on-chain verified badge, never merged with it: `verified` means the wallet paid
+  to register, `bot` means the account says it is automated. Shown for **every**
+  self-declared bot, verified or not — an unverified bot is precisely the one a
+  user most needs labelled.
+- `isBot` threaded through `useUserDisplay` and the user cache, and counted as
+  "something worth showing" so a bot with no name, avatar or registration still
+  gets a badge rather than being dropped.
+- New i18n keys (`bot_badge`, `bot_badge_tooltip`, `bot_commands_label`,
+  `mention_popover_label`) in all 7 locales.
+
+### Notes
+
+- Both pickers share one `ComposerSuggestions` component. On mobile they differ
+  only in the data source and what gets inserted; the shared half — a sheet
+  docked above the composer, the list, insertion, and the `mentions[]` plumbing —
+  is the bulk of the work, so splitting them would only duplicate it. Web and
+  desktop keep two components because they already had one.
+- Docked above the composer rather than floating at the caret: React Native
+  exposes no caret geometry. Uses the screen's existing `KeyboardAwareView`, not
+  `KeyboardAvoidingView` (inert under `edgeToEdgeEnabled`), and no `Alert.alert`.
+- The `/` trigger closes on ANY whitespace until the composer is back to a bare
+  token, matching web 0.77.0. The weaker "caret is before the first space" rule
+  let the picker reopen while arguments were already typed, where selecting a row
+  replaced the whole composer and discarded them.
+- Descriptor text renders as plain text and passes the node's full forbidden
+  codepoint set, since the node serving you may predate 0.127.0 and never have
+  validated. ZWNJ and ZWJ stay permitted so emoji sequences and Persian/Indic
+  text still render.
+- **Not runtime-verified on a device in this pass** — typecheck and the audit
+  pipeline only. The composer sheet's keyboard interaction in particular wants a
+  real device before release.
+
+### Security
+
+`npm audit` reports 26 findings (15 moderate, 11 high), none introduced by this
+change — no dependency was added or changed. They resolve to three roots, and the
+split between them is not what an earlier note recorded:
+
+- **`@xmldom/xmldom`** (10 advisories) — reached via `expo` → `@expo/cli` →
+  `@expo/plist`. **Build-time only**: plist/manifest manipulation during
+  prebuild. Not in shipped app code.
+- **`image-size`** — reached via `expo` → `@expo/metro` → `metro`. **Build-time
+  only**, the bundler. Still no upstream fix; Expo SDK 57 does not resolve it,
+  contrary to `npm audit`'s own `fixAvailable` hint.
+- **`decode-uri-component@0.2.2`** (GHSA-vcc3-ghjq-m6fr, DoS via exponential
+  decoding) — reached via `@react-navigation/native` → `@react-navigation/core` →
+  `query-string@7.1.3`. **This one is RUNTIME**, in the URL-parsing path that
+  handles deep links, so it is reachable by getting a user to open a crafted
+  link. Impact is a hang, not data loss or key exposure.
+
+  **No safe fix exists today, and this is a blocker rather than a deferral.**
+  The advisory covers `<=0.4.2`; `0.5.0` is clean but is **ESM-only**
+  (`type: "module"`), while `query-string@7.1.3` is CommonJS and declares
+  `^0.2.2` — an `overrides` pin to `0.5.0` would break Metro's CJS require and
+  crash the app on any navigation that parses a URL. `npm audit`'s suggested fix
+  is a **major downgrade** of `@react-navigation/native-stack` to `5.0.5`, which
+  is worse than the problem.
+
+  The condition that would close it: a `@react-navigation` release that moves off
+  `query-string@7`. Re-check on each dependency pass rather than trusting this
+  note — upstream moves.
+
+Per the standing rule, no `npm audit fix --force` was run: the Expo/Metro
+toolchain cannot be build-verified in this session.
+
 ## [0.49.1] - 2026-09-04
 
 Two more issues found in on-device review, again run through the full audit

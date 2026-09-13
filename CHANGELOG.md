@@ -5,6 +5,20 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.51.0] - 2026-09-13
+
+### Added
+
+- **Invite-by-address now works for public channels too**, not just
+  private ones. It previously granted no access on a public channel (anyone
+  can already self-join freely) so the UI only showed it for private
+  channels — but `ChannelInvite` now also generates a `channel_invite`
+  notification (l2-node 0.128.0+) addressed to the invitee regardless of
+  channel type, which is how a service/bot discovers "a channel owner wants
+  me here" and joins on its own. A moderator or owner can now invite a bot
+  (or anyone) to a public channel the same way they could already invite to
+  a private one.
+
 ## [0.50.0] - 2026-09-12
 
 Requires l2-node 0.127.0 for the bot endpoints.

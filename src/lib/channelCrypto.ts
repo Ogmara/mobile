@@ -311,6 +311,13 @@ export async function buildEncryptedChannelMsg(
     contentRating?: 'general' | 'teen' | 'mature' | 'explicit';
     attachments?: Array<{ cid: string; mime_type: string; size_bytes: number; filename?: string; thumbnail_cid?: string }>;
     media?: MediaDescriptor[];
+    /**
+     * Set when this message IS a button press (protocol §3.3). Forwarded
+     * verbatim to the SDK, which stamps it into the PLAINTEXT outer payload
+     * (never sealed) — feed-suppression rendering hints work identically to
+     * a plaintext channel's messages.
+     */
+    viaButton?: boolean;
   },
   floor = 0,
 ): Promise<Uint8Array | 'waiting'> {
@@ -324,6 +331,7 @@ export async function buildEncryptedChannelMsg(
     text, replyTo: opts?.replyTo, mentions: opts?.mentions,
     contentRating: opts?.contentRating, attachments: opts?.attachments,
     media: opts?.media && opts.media.length > 0 ? opts.media : undefined,
+    viaButton: opts?.viaButton,
   });
 }
 

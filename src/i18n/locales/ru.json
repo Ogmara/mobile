@@ -369,5 +369,8 @@
   "bot_badge": "Бот",
   "bot_badge_tooltip": "Заявлено самим аккаунтом — не проверено Ogmara",
   "bot_commands_label": "Команды бота",
-  "mention_popover_label": "Предложения упоминаний"
+  "mention_popover_label": "Предложения упоминаний",
+  "message_button_send_failed": "Не удалось отправить — попробуйте снова",
+  "message_button_sent": "Отправлено:",
+  "chat_channel_info_loading": "Информация о канале ещё загружается — повторите попытку через мгновение."
 }

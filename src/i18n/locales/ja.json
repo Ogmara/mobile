@@ -369,5 +369,8 @@
   "bot_badge": "ボット",
   "bot_badge_tooltip": "自己申告 — Ogmara による検証はありません",
   "bot_commands_label": "ボットコマンド",
-  "mention_popover_label": "メンション候補"
+  "mention_popover_label": "メンション候補",
+  "message_button_send_failed": "送信できませんでした — もう一度お試しください",
+  "message_button_sent": "送信済み:",
+  "chat_channel_info_loading": "チャンネル情報を読み込み中です。しばらくしてからもう一度お試しください。"
 }

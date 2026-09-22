@@ -369,5 +369,8 @@
   "bot_badge": "Bot",
   "bot_badge_tooltip": "Selbst angegeben — nicht von Ogmara verifiziert",
   "bot_commands_label": "Bot-Befehle",
-  "mention_popover_label": "Erwähnungsvorschläge"
+  "mention_popover_label": "Erwähnungsvorschläge",
+  "message_button_send_failed": "Senden fehlgeschlagen — bitte erneut versuchen",
+  "message_button_sent": "Gesendet:",
+  "chat_channel_info_loading": "Kanalinfo wird noch geladen — versuche es gleich noch einmal."
 }

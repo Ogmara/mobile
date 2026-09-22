@@ -41,9 +41,10 @@ import {
 import { chatErrorKey } from '../lib/chatErrors';
 import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
 import { resolveIsEncrypted } from '../lib/channelEncryption';
-import { CHANNEL_TYPE_PRIVATE, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
+import { CHANNEL_TYPE_PRIVATE, canPost, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
+import type { PayloadButtonRow } from '../lib/payloadDecoder';
 
 type Props = NativeStackScreenProps<ChatStackParamList, 'ChannelMessages'>;
 
@@ -101,6 +102,10 @@ type ExtendedEnvelope = Omit<Envelope, 'payload'> & {
   _decodedAttachments?: Array<{ cid: string; mime_type: string; filename?: string }>;
   /** P5: optimistic encrypted-media descriptors for a locally-sent message. */
   _decodedEncryptedMedia?: MediaDescriptor[];
+  /** Interactive buttons (protocol §3.3), cached alongside the fields above. */
+  _decodedButtons?: PayloadButtonRow[];
+  /** Whether this message IS a button press — see `payloadDecoder.ts`. */
+  _decodedViaButton?: boolean;
 };
 
 type ListItem =
@@ -135,8 +140,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // Channel encryption metadata (drives encrypt-on-send). Decryption is shape-driven
   // (decryptChannelMessage handles v1 plaintext vs v2), so rendering doesn't need this.
   const [chanMeta, setChanMeta] = useState<{
-    channelType: number; encryptionEnabled: boolean; keyEpochFloor: number; isMod: boolean;
-  }>({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false });
+    channelType: number; encryptionEnabled: boolean; keyEpochFloor: number; isMod: boolean; creator: string;
+  }>({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false, creator: '' });
   // Whether `chanMeta` reflects a successful fetch for the CURRENT channelId (reset
   // on every channel switch — see the effect below).
   const [chanMetaResolved, setChanMetaResolved] = useState(false);
@@ -147,6 +152,20 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const isEncrypted = resolveIsEncrypted(chanMetaResolved, chanMeta.encryptionEnabled, isPrivate);
   const canEstablishKey = isPrivate ? chanMeta.isMod : true; // public: any member may seed
   const encFloor = isPrivate ? chanMeta.keyEpochFloor : 0;    // public never rotates
+  // Whether the current viewer may post in this channel under the runtime
+  // posting policy (protocol §3.6). False in `ReadPublic` (broadcast)
+  // channels for non-creator/non-mod members. Gates message buttons the same
+  // way web/desktop gate the composer — a tap that can't actually post
+  // shouldn't be able to trigger an encrypted channel's epoch-key
+  // establishment as a side effect. FAILS CLOSED while `chanMetaResolved` is
+  // false, matching `isEncrypted`'s own discipline three lines above (the
+  // default `channelType: 0` is Public, under which `canPost` already
+  // returns `true` on its own once resolved — an unconditional `true`
+  // default here bought nothing for the common case and cost the one that
+  // matters: a `ReadPublic` channel where buttons would otherwise stay live
+  // for the entire metadata round-trip).
+  const canPostHere = chanMetaResolved && !!myAddress
+    && canPost({ channel_type: chanMeta.channelType, creator: chanMeta.creator }, myAddress, chanMeta.isMod);
 
   // Async decryption cache (text only). Attachments/reply stay plaintext metadata.
   const [decoded, setDecoded] = useState<Map<string, DmDisplay>>(new Map());
@@ -207,6 +226,15 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // the exact inverse of the leak this clearing exists to prevent.
   useEffect(() => {
     setPendingMentions([]);
+    // `useApi` doesn't null its `data` while a new channel's fetch is in
+    // flight (see the seed effect above), so without this, `messages` keeps
+    // rendering the PREVIOUS channel's envelopes — including their message
+    // buttons — until the fetch resolves. Harmless for read-only content,
+    // but a button tap on one of those stale rows would sign and send into
+    // the NEWLY OPEN channel (`pressButton` correctly reads the current
+    // route `channelId`) with a `reply_to` pointing at a message that
+    // belongs to the channel just left — an orphaned cross-channel reply.
+    setMessages([]);
   }, [channelId]);
 
   // Mark channel read on enter
@@ -222,18 +250,33 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // New channel (or first mount): we don't yet know its encryption state —
     // isEncrypted's fail-closed guard needs this false until proven otherwise.
     setChanMetaResolved(false);
-    setChanMeta({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false });
+    setChanMeta({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false, creator: '' });
     let cancelled = false;
     (async () => {
       try {
+        // `getChannelDetail` deliberately has NO `.catch()` of its own here —
+        // its rejection must reach the outer `catch` below, which is what
+        // keeps `chanMetaResolved` false (fail closed) on a real failure.
+        // `Promise.all` rejects as soon as either promise does, and the
+        // member fetch's OWN `.catch()` intentionally stays: a missing role
+        // should degrade to "not a moderator", not to "channel unresolved" —
+        // `isEncrypted` doesn't depend on membership, but `canPostHere` DOES
+        // (via `chanMeta.isMod`, for the `ReadPublic` case), so a member-
+        // fetch failure here silently demotes a real moderator's button
+        // access rather than blocking it outright. Fails safe either way.
         const [detail, membersResp] = await Promise.all([
-          client.getChannelDetail(channelId).catch(() => null),
+          client.getChannelDetail(channelId),
           myAddress
             ? client.getChannelMembers(channelId, { limit: 200 }).catch(() => ({ members: [] }))
             : Promise.resolve({ members: [] }),
         ]);
         if (cancelled) return;
         const ch = (detail as any)?.channel;
+        // A 200 response with no `channel` field is, for this purpose, the
+        // same failure as a rejected fetch — fall through to the outer
+        // `catch`'s fail-closed behavior rather than proceeding with
+        // `?? 0`/`?? ''` defaults and marking this resolved.
+        if (!ch) throw new Error('getChannelDetail returned no channel');
         const role = (membersResp.members as any[]).find((m) => m.address === myAddress)?.role;
         const isMod = role === 'moderator' || ch?.creator === myAddress;
         setChanMeta({
@@ -241,6 +284,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           encryptionEnabled: ch?.encryption_enabled === true,
           keyEpochFloor: ch?.key_epoch_floor ?? 0,
           isMod,
+          creator: ch?.creator ?? '',
         });
         setChanMetaResolved(true);
       } catch {
@@ -351,7 +395,20 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           if (targetId) {
             setMessages((prev) => prev.map((m) => {
               if (msgIdToHex(m.msg_id) === msgIdToHex(targetId)) {
-                return { ...m, payload: env.payload, edited: true, last_edited_at: env.timestamp as number };
+                // Clear every cached decode, not just content: protocol §3.7 /
+                // frontend spec §6.1.3 rely on a bot being able to edit
+                // `buttons` in place (a sub-menu swap) — without resetting
+                // `_decodedButtons` too, the stale pre-edit row would stay
+                // rendered and tappable forever, silently sending whatever
+                // command the bot had already retired. `_decodedContent`
+                // survives this in practice today only because the async
+                // decrypt cache (keyed by `last_edited_at`) takes priority
+                // over it in `renderItem` — buttons have no such fallback.
+                return {
+                  ...m, payload: env.payload, edited: true, last_edited_at: env.timestamp as number,
+                  _decodedContent: undefined, _decodedAttachments: undefined,
+                  _decodedButtons: undefined, _decodedViaButton: undefined,
+                };
               }
               return m;
             }));
@@ -475,15 +532,38 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         const decoded = decodeChatMessage(msg.payload);
         msg._decodedContent = decoded?.content || (typeof msg.payload === 'string' ? msg.payload : '');
         msg._decodedAttachments = (decoded as any)?.attachments;
+        msg._decodedButtons = decoded?.buttons;
+        msg._decodedViaButton = decoded?.via_button ?? false;
       }
     }
+
+    // Button-press messages (via_button: true) are suppressed from the
+    // default feed — frontend spec §6.1.3: "the user only wants to see the
+    // bot's reply, not their own tap." `messages`/`sorted` stay the
+    // unfiltered source of truth (`msgById`/`resolveReply` above read from
+    // `messages` directly, not from this derived list).
+    //
+    // Suppress only the VIEWER'S OWN presses, not everyone's — deliberately
+    // narrower than web/desktop, which hide every wallet's via_button
+    // messages. `via_button` carries no server-side authority (protocol
+    // §3.3 — any wallet can set it), and mobile has NO pagination at all
+    // (fixed `getChannelMessages(channelId, 200)` page, no `onEndReached`,
+    // no load-more): a global suppression would let any wallet blank the
+    // entire visible window for every mobile client by posting 200+
+    // ordinary messages flagged `via_button: true`, with no client-side way
+    // to recover (web/desktop have this same exposure in principle, but can
+    // page past it; mobile cannot). Matching spec §6.1.3's own stated
+    // rationale ("the user only wants to see the bot's reply, not THEIR OWN
+    // tap") this scoping is not a deviation from intent, just from the
+    // other clients' broader implementation of it.
+    const visible = sorted.filter((m) => !(m._decodedViaButton && m.author === myAddress));
 
     const items: ListItem[] = [];
     let lastDate = '';
     let lastAuthor = '';
     let lastTimestamp = 0;
 
-    for (const msg of sorted) {
+    for (const msg of visible) {
       const dateLabel = getDateLabel(msg.timestamp, t('chat_today'), t('chat_yesterday'));
       if (dateLabel !== lastDate) {
         items.push({ type: 'date', label: dateLabel, key: `date-${dateLabel}` });
@@ -508,7 +588,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
     // Reverse for inverted FlatList (newest at top)
     return items.reverse();
-  }, [messages, t]);
+  }, [messages, t, myAddress]);
 
   // ── Message Actions ──
 
@@ -516,6 +596,21 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     const text = input.trim();
     // Allow sending text, attachments (plaintext or encrypted), or both
     if ((!text && pendingAttachments.length === 0 && pendingEncryptedMedia.length === 0) || !client || !signer) return;
+
+    // `isEncrypted` FAILS CLOSED (reads `true`) while `chanMetaResolved` is
+    // false, so proceeding here would silently take the ENCRYPTED branch —
+    // for a channel that may well be plaintext — and mint + publish a fresh
+    // epoch key as a side effect. That used to be a ~100ms window; since
+    // `getChannelDetail` no longer swallows its own failure (see the
+    // channel-metadata effect), a real fetch failure now leaves this false
+    // for the rest of the mount, not just a moment. `handlePickMedia`
+    // already refuses the same way for attachments; text sending needs the
+    // identical guard, with visible feedback since there's no disabled
+    // button state to communicate it silently the way the picker has.
+    if (!chanMetaResolved) {
+      showInfo(t('chat_send'), t('chat_channel_info_loading'));
+      return;
+    }
 
     // Encrypted channels block plaintext edits via editMessage. Editing an encrypted
     // message isn't wired yet (the SDK channel-edit envelope is text-only); skip for now.
@@ -621,7 +716,35 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // pendingAttachments / pendingEncryptedMedia are declared after this callback; like
     // the original send they're read via closure (state setters keep them fresh enough
     // for the send path) and intentionally omitted from deps to avoid a TDZ reference.
-  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, pendingMentions]);
+  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, pendingMentions, chanMetaResolved]);
+
+  /**
+   * Sends a button press (protocol §3.3): an ordinary signed message whose
+   * content is the literal `command`, replying to `origin` and flagged
+   * `via_button`. Branches on encryption exactly like `handleSend` above —
+   * spec §6.1.3: "Private and encrypted channels. Buttons work there
+   * unchanged" — only `content` is ever sealed, so a press needs the
+   * channel's epoch key the same way a typed message does. Passed to
+   * `MessageBubble` (which forwards to `MessageButtons`) as `onPressButton`;
+   * neither has channel-crypto access itself.
+   */
+  const pressButton = useCallback(async (
+    origin: { channelId: number; msgId: string; author: string },
+    command: string,
+  ) => {
+    if (!client) throw new Error('not connected');
+    if (isEncrypted) {
+      const built = await buildEncryptedChannelMsg(origin.channelId, canEstablishKey, command, {
+        replyTo: origin.msgId, mentions: [origin.author], viaButton: true,
+      }, encFloor);
+      if (built === 'waiting') {
+        throw new Error(t('e2e_channel_waiting'));
+      }
+      await client.sendMessageEnvelope(built);
+      return;
+    }
+    await client.pressButton(origin, command);
+  }, [client, isEncrypted, canEstablishKey, encFloor, t]);
 
   const handleReply = useCallback((msg: ExtendedEnvelope) => {
     const d = decodedRef.current.get(chanCacheId(msg));
@@ -836,9 +959,15 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         onReact={handleReact}
         onTip={handleTip}
         onAuthorPress={handleAuthorPress}
+        // Omitted entirely (not just disabled) when the viewer can't post
+        // here — see `canPostHere`'s doc comment above.
+        buttons={canPostHere ? envelope._decodedButtons : undefined}
+        buttonMsgId={msgIdToHex(envelope.msg_id)}
+        channelId={channelId}
+        onPressButton={canPostHere ? pressButton : undefined}
       />
     );
-  }, [myAddress, colors, profileNames, client, decoded, t, resolveReply, handleReply, handleEdit, handleDelete, handleReact, handleTip, handleAuthorPress]);
+  }, [myAddress, colors, profileNames, client, decoded, t, resolveReply, handleReply, handleEdit, handleDelete, handleReact, handleTip, handleAuthorPress, canPostHere, pressButton]);
 
   const keyExtractor = useCallback((item: ListItem) => item.key, []);
 

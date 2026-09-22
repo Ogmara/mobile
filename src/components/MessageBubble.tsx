@@ -30,7 +30,9 @@ import ConfirmModal from './ConfirmModal';
 import FormattedText from './FormattedText';
 import VerifiedBadge from './VerifiedBadge';
 import BotBadge from './BotBadge';
+import MessageButtons from './MessageButtons';
 import { useUserDisplay } from '../hooks/useUserDisplay';
+import type { PayloadButtonRow } from '../lib/payloadDecoder';
 
 /** 30-minute edit window matching desktop */
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
@@ -84,6 +86,41 @@ interface Props {
   onReplyPress?: (msgId: string) => void;
   /** Hide author + avatar for grouped consecutive messages */
   isGrouped?: boolean;
+  /**
+   * Interactive buttons attached to this message (protocol §3.3). Omitted
+   * (or `onPressButton` omitted) entirely by the caller when the viewer
+   * isn't allowed to post in this channel — see `ChannelMessagesScreen`'s
+   * `canPostHere` (protocol §3.6's runtime posting policy — web/desktop gate
+   * their composer on the equivalent check; mobile's composer does not, only
+   * this button gate does) so a tap can't trigger an encrypted channel's
+   * epoch-key establishment as a side effect for a user who could never
+   * actually post there.
+   */
+  buttons?: PayloadButtonRow[];
+  /**
+   * Hex `msg_id` for the button origin, pre-computed by the caller via the
+   * same `msgIdToHex()` used everywhere else in `ChannelMessagesScreen`
+   * (handles `Uint8Array`/`number[]` shapes, not just `string`) — rather
+   * than this component re-deriving it from `message.msg_id` with a weaker
+   * `typeof === 'string'` guard.
+   */
+  buttonMsgId?: string;
+  /**
+   * The channel THIS message belongs to. NOT read from `message.channel_id`
+   * — the SDK's `Envelope` type never actually carries that field (it lives
+   * inside the msgpack `payload`, not the envelope; `ChannelMessagesScreen`
+   * itself only ever reads it via `decoded?.channel_id`, never off the raw
+   * envelope). The screen already knows its own `channelId` authoritatively
+   * from the route, so it's passed down explicitly rather than trusted from
+   * `message` — an `?? 0` fallback there would silently send every press to
+   * channel 0, and in an encrypted channel, mint and publish a fresh epoch
+   * key scoped to channel 0 as a side effect.
+   */
+  channelId?: number;
+  onPressButton?: (
+    origin: { channelId: number; msgId: string; author: string },
+    command: string,
+  ) => Promise<void>;
 }
 
 /**
@@ -177,6 +214,10 @@ export default function MessageBubble({
   onAuthorPress,
   onReplyPress,
   isGrouped,
+  buttons,
+  buttonMsgId,
+  channelId,
+  onPressButton,
 }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -339,6 +380,19 @@ export default function MessageBubble({
           </View>
         )}
       </View>
+
+      {/* Interactive buttons (protocol §3.3) — channel messages only, never
+          DMs (this component's other caller, `DmConversationScreen`, never
+          passes `channelId`/`buttons`/`onPressButton`). */}
+      {buttons && buttons.length > 0 && onPressButton && channelId !== undefined && buttonMsgId && (
+        <MessageButtons
+          rows={buttons}
+          channelId={channelId}
+          msgId={buttonMsgId}
+          author={message.author}
+          onPress={onPressButton}
+        />
+      )}
 
       {/* Reaction badges */}
       {activeReactions.length > 0 && (

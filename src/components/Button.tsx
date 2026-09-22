@@ -35,7 +35,7 @@ import {
 import { useTheme, spacing, fontSize, radius } from '../theme';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
-export type ButtonSize = 'sm' | 'md' | 'lg';
+export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg';
 
 interface Props {
   label: string;
@@ -54,8 +54,17 @@ interface Props {
   accessibilityLabel?: string;
 }
 
-const HEIGHTS: Record<ButtonSize, number> = { sm: 36, md: 44, lg: 52 };
+// `xs` is 44 (not visually smaller than `md`) despite the name — frontend
+// spec §7 mandates a 44x44px minimum touch target on mobile, and `sm`'s 36px
+// already falls short of it. "xs" describes the compact PADDING/FONT for a
+// dense per-row grid (protocol §3.3 message buttons, up to 8/row), not a
+// smaller tap target — that matters more here than usual since a tap is an
+// immediate, no-confirmation send (frontend spec §6.1.3): a mis-tap from an
+// undersized target signs and broadcasts the WRONG command, not just a UI
+// mistake.
+const HEIGHTS: Record<ButtonSize, number> = { xs: 44, sm: 36, md: 44, lg: 52 };
 const FONTS: Record<ButtonSize, number> = {
+  xs: fontSize.xs,
   sm: fontSize.sm,
   md: fontSize.md,
   lg: fontSize.md,
@@ -106,7 +115,7 @@ export default function Button({
     <TouchableOpacity
       style={[
         styles.base,
-        { height: HEIGHTS[size], paddingHorizontal: size === 'sm' ? spacing.md : spacing.lg },
+        { height: HEIGHTS[size], paddingHorizontal: size === 'xs' ? spacing.sm : size === 'sm' ? spacing.md : spacing.lg },
         container,
         fullWidth && styles.fullWidth,
         // Dim rather than swapping in a grey fill: a disabled button should read

@@ -5,6 +5,120 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.0] - 2026-09-22
+
+### Added
+
+- **Interactive message buttons** (protocol §3.3, `sdk-js` 0.61.0+): any
+  wallet's chat message can attach up to 10 rows × 8 buttons (40 total) that,
+  when tapped, sign and send an ordinary message whose content is the
+  button's literal command — no confirmation dialog, matching the "immediate
+  send" design. A press is flagged `via_button` and hidden from the default
+  feed (but never from search, permalinks, or moderation views, per spec —
+  this client has none of those to suppress it from, so the point is moot
+  here but stated for parity with web/desktop's changelog wording), so only
+  the bot's reply becomes visible, letting a bot author build Telegram-style
+  quick-reply menus (price/chart timeframe pickers, poll options, sub-menus)
+  without any new wire construct. Works unchanged in encrypted and private
+  channels — only `content` is ever sealed, so a press there is built and
+  sent through the same epoch-key path as a typed message.
+- Disclosure of the literal command a button will send (frontend spec
+  §6.1.3, mandatory): a non-auto-clearing "Sent: `<command>`" line after a
+  press. No hover exists on touch, so unlike web/desktop's tooltip-before +
+  confirmation-after, this relies solely on the spec's "immediately after"
+  branch — the same branch web/desktop's own touch fallback already relies
+  on. Known gap versus web/desktop, deferred: `FlatList` unmounts a
+  scrolled-away row, so scrolling away and back loses this confirmation
+  (web/desktop's DOM-based lists don't); a future pass should lift it to
+  screen-level state that survives cell recycling.
+- Buttons are gated behind the same posting-policy check the composer
+  should have (and, discovered while building this, didn't: mobile had no
+  `canPostHere()`-equivalent at all before now, unlike web/desktop — see
+  Fixed) — a tap can't trigger an encrypted channel's epoch-key
+  establishment as a side effect for a viewer who could never actually post
+  in a `ReadPublic` (broadcast) channel.
+- New `Button` size, `"xs"`, for the compact per-row grid this needs — added
+  to the shared `Button.tsx` primitive rather than a hand-rolled
+  `TouchableOpacity`. A full 44×44px touch target (frontend spec §7's
+  mobile minimum) despite the name — "xs" describes the tighter padding and
+  font for a dense row, not a smaller tap target, since a tap is an
+  immediate, no-confirmation send and a mis-tap from an undersized target
+  would sign and broadcast the wrong command.
+
+### Fixed
+
+- Every button press was being sent to **channel 0**, not the channel it
+  was pressed in — the SDK's `Envelope` type doesn't actually carry
+  `channel_id` (it lives inside the msgpack payload, not the envelope), so
+  an `?? 0` fallback silently fired on every message loaded via the normal
+  REST fetch. In an encrypted channel this minted and published a fresh
+  epoch key scoped to channel 0 as a side effect of one tap. Fixed by
+  sourcing the channel from the screen's own route param, the way
+  web/desktop already do, instead of trusting the envelope.
+- A button-press message flagged `via_button` is no longer suppressible by
+  anyone but its own sender — mobile has no pagination at all (a fixed
+  200-message page, no load-more), so, unlike web/desktop which can page
+  past a suppressed run, any wallet could have blanked a mobile user's
+  entire visible history by posting 200+ ordinary messages flagged
+  `via_button: true`, since that flag carries no server-side authority.
+  Narrowed the suppression to the viewer's own presses only — a deliberate,
+  documented deviation from web/desktop's broader "hide everyone's presses"
+  behavior, made specifically because mobile has no pagination to recover
+  through.
+- A bot editing a message's `buttons` in place (protocol §3.7's sub-menu
+  mechanism) had no effect on mobile — the cached decoded buttons survived
+  a live edit event, so the old row stayed rendered and tappable, still
+  signing whatever command the bot had already retired.
+- Switching channels while the previous channel's message list was still
+  showing (the fetch for the new channel hadn't resolved yet) could carry a
+  stale message — and its buttons — into the new channel view; pressing one
+  would sign into the newly-open channel with a `reply_to` pointing at a
+  message from the one just left.
+- `canPost()` (posting-policy gate, protocol §3.6) was not enforced
+  ANYWHERE on mobile before this — not even for the ordinary composer, which
+  this feature did not introduce and does not fix (out of scope here; the
+  server always validates independently, so this was a client UX gap, not a
+  security hole — a `ReadPublic`-restricted user's composer stayed visible
+  and any send attempt failed with a raw node rejection instead of the
+  composer simply not showing). Flagging for a future session: web/desktop
+  already hide the composer and show an explanatory banner in this case.
+  The new `canPostHere` gate added for buttons also failed OPEN during the
+  channel-metadata loading window in its first draft — corrected to fail
+  closed (buttons hidden until resolved), matching this same file's
+  existing `isEncrypted` discipline.
+- The channel-metadata fetch (`getChannelDetail`) silently swallowed its own
+  failure and still marked itself "resolved" with plaintext-shaped defaults
+  — undermining `isEncrypted`'s documented fail-closed guarantee (a private
+  or `encryption_enabled` channel could be treated as plaintext after a
+  failed fetch) and, transitively, the new `canPostHere` gate above. Fixed
+  to let the failure propagate and stay unresolved instead. That surfaced a
+  second issue the first fix's caller wasn't re-checked against: the
+  ordinary composer (`handleSend`) had no guard for "channel metadata isn't
+  resolved yet", so after a transient fetch failure it would now silently
+  take the FAILS-CLOSED-MEANS-ENCRYPTED branch for what might be an
+  ordinary plaintext channel and mint + publish an unwanted epoch key.
+  `handleSend` now refuses with a visible message instead, matching the
+  existing guard the attachment picker already had.
+
+### Known deviation from spec §6.1.3, recorded not silent
+
+- Frontend spec §6.1.3 says a compliant client suppresses `via_button`
+  messages from the default feed unconditionally (for everyone, with an
+  exception only for the addressed bot). Mobile's actual behavior (see
+  Fixed, above) suppresses only the viewer's OWN presses, because mobile
+  has no pagination to recover through if a wider filter is exploited. This
+  needs one of two resolutions in a future session: either spec §6.1.3
+  gains a carve-out for clients without pagination, or mobile grows
+  `onEndReached`-based pagination and adopts the broader filter web/desktop
+  use. Not resolved here — recorded so it doesn't get silently forgotten.
+
+### Security
+
+- Hoisted a `safeText()`/`stripBidi()` duplicate out of `ComposerSuggestions.tsx`
+  into the shared `sanitize.ts` (mobile had no such shared helper before —
+  unlike web/desktop, where it already existed), now reused for message
+  button `label`/`command` sanitization at both decode and render time.
+
 ## [0.51.0] - 2026-09-13
 
 ### Added

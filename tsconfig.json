@@ -1,7 +1,12 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    // A handful of `src/lib/*.ts` files are imported with an explicit `.ts`
+    // extension so `node --test` (native ESM, no bundler) can resolve them
+    // directly for unit tests — Metro/the app build resolve extensionless
+    // imports fine either way. `noEmit` is already set via expo/tsconfig.base.
+    "allowImportingTsExtensions": true
   },
   "exclude": ["${configDir}/node_modules", "${configDir}/babel.config.js", "${configDir}/metro.config.js", "${configDir}/jest.config.js", "${configDir}/android", "${configDir}/ios", "${configDir}/src/**/*.test.ts"]
 }

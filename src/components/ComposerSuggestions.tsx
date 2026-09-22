@@ -26,6 +26,7 @@ import { useTheme } from '../theme';
 import { useTranslation } from 'react-i18next';
 import VerifiedBadge from './VerifiedBadge';
 import BotBadge from './BotBadge';
+import { safeText } from '../lib/sanitize';
 
 /** Rows rendered at once — matches web/desktop so the clients agree. */
 const MAX_ROWS = 20;
@@ -41,21 +42,6 @@ const BOT_ERROR_TTL = 3_000;
 const SEARCH_DEBOUNCE = 150;
 /** Channels retained in the bot cache — bounded rather than "bounded in practice". */
 const MAX_CACHED_CHANNELS = 32;
-
-/**
- * Every codepoint the node refuses in a bot descriptor (protocol §3.11).
- *
- * `U+200C` ZWNJ and `U+200D` ZWJ are deliberately PERMITTED — ZWJ is required
- * for emoji sequences and ZWNJ for correct Persian and Indic orthography, and
- * neither can reorder surrounding text. Applied at render because the node
- * serving us may predate 0.127.0 and never have validated at all.
- */
-const FORBIDDEN_DESCRIPTOR_CHARS =
-  /[\u0000-\u001F\u007F-\u009F\u061C\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\uFFF9-\uFFFB]|[\u{E0000}-\u{E007F}]/gu;
-
-function safeText(s: string | null | undefined): string {
-  return (s ?? '').replace(FORBIDDEN_DESCRIPTOR_CHARS, '');
-}
 
 const truncateAddress = (a: string) => `${a.slice(0, 7)}…${a.slice(-4)}`;
 

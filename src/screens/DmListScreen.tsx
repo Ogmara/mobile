@@ -22,6 +22,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
+import { useUserDisplay } from '../hooks/useUserDisplay';
 import { ensureHiddenDmsLoaded, isConversationHidden, hideConversation } from '../lib/dmHide';
 import QuickMenu from '../components/QuickMenu';
 import ConfirmModal from '../components/ConfirmModal';
@@ -32,6 +33,62 @@ import Button from '../components/Button';
 import { formatDateTime } from '../lib/datetime';
 
 type NavProp = NativeStackNavigationProp<DmStackParamList, 'DmList'>;
+
+// A row needs its own component (not an inline function) because it calls
+// `useUserDisplay`, a hook — FlatList's `renderItem` is called outside any
+// component body, so a hook can't run directly inside it. This previously
+// just rendered the raw address with no lookup at all.
+function DmConversationRow({
+  item,
+  colors,
+  onPress,
+  onLongPress,
+}: {
+  item: DmConversation;
+  colors: ReturnType<typeof useTheme>['colors'];
+  onPress: (displayName: string | null) => void;
+  onLongPress: () => void;
+}) {
+  const { displayName } = useUserDisplay(item.peer);
+  // `.trim()` before checking truthiness (a name of just whitespace is
+  // effectively empty, not a blank-but-"valid" name/first character) and
+  // `Array.from(...)[0]` instead of raw `[0]` indexing for the avatar
+  // initial (a non-BMP first character, e.g. an emoji, is a UTF-16
+  // surrogate pair — `[0]` would grab only half of it and render a broken
+  // glyph).
+  const trimmedName = displayName?.trim();
+  const label = trimmedName || `${item.peer.slice(0, 16)}...`;
+  const avatarInitial = (trimmedName ? Array.from(trimmedName)[0] : item.peer[4])?.toUpperCase() || '?';
+  return (
+    <TouchableOpacity
+      style={[styles.row, { borderBottomColor: colors.border }]}
+      activeOpacity={0.7}
+      onPress={() => onPress(displayName)}
+      onLongPress={onLongPress}
+    >
+      <View style={[styles.avatar, { backgroundColor: colors.accentPrimary }]}>
+        <Text style={[styles.avatarText, { color: colors.textInverse }]}>
+          {avatarInitial}
+        </Text>
+      </View>
+      <View style={styles.rowContent}>
+        <Text style={[styles.peer, { color: colors.textPrimary }]}>
+          {label}
+        </Text>
+        <Text style={[styles.time, { color: colors.textSecondary }]}>
+          {formatDateTime(item.last_message_at)}
+        </Text>
+      </View>
+      {item.unread_count > 0 && (
+        <View style={[styles.unread, { backgroundColor: colors.accentPrimary }]}>
+          <Text style={[styles.unreadText, { color: colors.textInverse }]}>
+            {item.unread_count}
+          </Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
 
 export default function DmListScreen() {
   const { t } = useTranslation();
@@ -101,33 +158,15 @@ export default function DmListScreen() {
   };
 
   const renderConversation = ({ item }: { item: DmConversation }) => (
-    <TouchableOpacity
-      style={[styles.row, { borderBottomColor: colors.border }]}
-      activeOpacity={0.7}
-      onPress={() => navigation.navigate('DmConversation', { address: item.peer })}
+    <DmConversationRow
+      item={item}
+      colors={colors}
+      onPress={(displayName) => navigation.navigate('DmConversation', {
+        address: item.peer,
+        ...(displayName ? { displayName } : {}),
+      })}
       onLongPress={() => { setMenuTarget(item); setMenuVisible(true); }}
-    >
-      <View style={[styles.avatar, { backgroundColor: colors.accentPrimary }]}>
-        <Text style={[styles.avatarText, { color: colors.textInverse }]}>
-          {item.peer[4]?.toUpperCase() || '?'}
-        </Text>
-      </View>
-      <View style={styles.rowContent}>
-        <Text style={[styles.peer, { color: colors.textPrimary }]}>
-          {item.peer.slice(0, 16)}...
-        </Text>
-        <Text style={[styles.time, { color: colors.textSecondary }]}>
-          {formatDateTime(item.last_message_at)}
-        </Text>
-      </View>
-      {item.unread_count > 0 && (
-        <View style={[styles.unread, { backgroundColor: colors.accentPrimary }]}>
-          <Text style={[styles.unreadText, { color: colors.textInverse }]}>
-            {item.unread_count}
-          </Text>
-        </View>
-      )}
-    </TouchableOpacity>
+    />
   );
 
   if (!signer) {

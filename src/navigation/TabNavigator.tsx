@@ -97,7 +97,20 @@ function DmTab() {
   return (
     <DmStack.Navigator screenOptions={{ headerShown: false }}>
       <DmStack.Screen name="DmList" component={DmListScreen} />
-      <DmStack.Screen name="DmConversation" component={DmConversationScreen} />
+      {/* getId forces a remount when navigating to a DIFFERENT peer while a
+          DmConversation screen is already on the stack (e.g. Alice's chat ->
+          her profile -> Bob's profile -> "Message" Bob) — React Navigation
+          otherwise pops back to the existing screen instance and only
+          replaces params, so component state (in particular
+          useUserDisplay's resolved name inside DmConversationScreen) kept
+          showing the PREVIOUS peer's display name over the new peer's
+          messages. Audit finding: this misidentifies who you're actually
+          talking to, not just a stale label. */}
+      <DmStack.Screen
+        name="DmConversation"
+        component={DmConversationScreen}
+        getId={({ params }) => (params as { address: string }).address}
+      />
       <DmStack.Screen name="UserProfile" component={UserProfileScreen} options={{ headerShown: true, title: 'Profile' }} />
       <DmStack.Screen name="FollowList" component={FollowListScreen} options={{ headerShown: true, title: '' }} />
     </DmStack.Navigator>

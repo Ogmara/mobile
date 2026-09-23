@@ -5,6 +5,51 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.1] - 2026-09-23
+
+### Fixed
+
+- **DM peer's display name never resolved anywhere** — the DM conversation
+  list and the DM thread screen (header + every peer message bubble) only
+  ever trusted an optional `displayName` route param that almost no caller
+  actually passed (only `UserProfileScreen`/`AddressbookScreen` did;
+  `DmListScreen`, `NotificationsScreen`, and deep links/push all omitted
+  it), so DMs fell back to the raw wallet address while regular channel
+  chats — which have their own working name-resolution effect — showed
+  names correctly. Both DM screens now call the existing `useUserDisplay`
+  hook (already used successfully in `FollowListScreen`/`NewsFeedScreen`)
+  instead. The DM list's row markup was extracted into a `DmConversationRow`
+  component since a hook can't run inside a bare `FlatList.renderItem`
+  function.
+- **Regression introduced by the fix above, caught in review**: React
+  Navigation reuses an already-mounted `DmConversation` screen instance
+  (and only replaces its params) when navigating to it again from elsewhere
+  in the same stack — e.g. open a DM with Alice, go to her profile, follow
+  a link to Bob's profile, tap "Message". Since `useUserDisplay` never
+  resets its internal state when its `address` argument changes, the
+  screen kept showing the *previous* peer's resolved name over the *new*
+  peer's messages — not just a stale label, but misidentifying who you're
+  actually talking to. Fixed by giving the `DmConversation` screen
+  registration a `getId` keyed on the peer address
+  (`navigation/TabNavigator.tsx`), which forces a fresh mount — and
+  therefore fresh hook state — whenever the peer actually changes.
+- Avatar-initial letter in the DM list could render blank (a display name
+  that was only whitespace was truthy, so the `'?'` fallback never kicked
+  in) or a broken glyph (a non-BMP first character, e.g. an emoji, is a
+  UTF-16 surrogate pair — raw `[0]` indexing grabbed only half of it).
+  Fixed with `.trim()` and `Array.from(...)[0]`.
+
+### Note
+
+- Not changed: `useUserDisplay`'s `apiFetched` guard re-fetches a
+  persistently-failing address (node error, not just "no profile yet") on
+  every component mount rather than backing off — with the DM list now
+  calling the hook once per row, fast scrolling through a large list could
+  mean a request per cell remount for such an address. Reviewed and left
+  as-is: bounded by scroll rate, realistically dozens of requests rather
+  than an amplification vector, and this is pre-existing behavior of a
+  hook already used elsewhere, not something this fix introduced.
+
 ## [0.52.0] - 2026-09-22
 
 ### Added

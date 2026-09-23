@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
+import { useUserDisplay } from '../hooks/useUserDisplay';
 import { decodePayload } from '../lib/payloadDecoder';
 import { normalizeEnvelopes, normalizeEnvelope } from '../lib/envelopeNormalizer';
 import { debugLog } from '../lib/debug';
@@ -94,7 +95,7 @@ type ListItem =
   | { type: 'message'; envelope: ExtendedEnvelope; isGrouped: boolean; key: string };
 
 export default function DmConversationScreen({ route, navigation }: Props) {
-  const { address: peerAddress, displayName } = route.params;
+  const { address: peerAddress, displayName: seedDisplayName } = route.params;
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client, signer, address: myAddress, onWsEvent } = useConnection();
@@ -470,7 +471,18 @@ export default function DmConversationScreen({ route, navigation }: Props) {
 
   // ── Render ──
 
-  const peerLabel = useMemo(() => displayName || peerAddress.slice(0, 16) + '...', [displayName, peerAddress]);
+  // Only `seedDisplayName` (a route param, present when navigated to from a
+  // screen that already resolved it) was ever used here — most entry points
+  // (the DM list before this fix, notifications, deep links/push) don't pass
+  // it, so the header and every peer message bubble fell back to the raw
+  // address. `useUserDisplay` resolves it directly instead, the same way
+  // the working channel-message path does; the route param is kept only as
+  // an instant-render seed before the hook's own fetch/cache resolves.
+  const { displayName: resolvedDisplayName } = useUserDisplay(peerAddress);
+  const peerLabel = useMemo(
+    () => resolvedDisplayName || seedDisplayName || peerAddress.slice(0, 16) + '...',
+    [resolvedDisplayName, seedDisplayName, peerAddress],
+  );
 
   const handleAuthorPress = useCallback((addr: string) => {
     navigation.navigate('UserProfile', { address: addr });

@@ -130,9 +130,35 @@ async function getChannelTargets(channelId: number): Promise<Target[]> {
   return [...byDevice.values()];
 }
 
+/**
+ * In-flight de-dup for `fetchChannelKey`, keyed by (scope, epoch). Needed
+ * because `ChannelMessagesScreen.tsx`'s decrypt effect now fires every
+ * visible message's `decryptChannelMessage` call CONCURRENTLY (previously
+ * sequential, one `await` at a time) — on a cold open of an encrypted
+ * channel, `channelKeys` starts empty, so without this every message in the
+ * page misses the cache simultaneously and would each independently call
+ * `getKeyEnvelope` for the exact same (scope, epoch), up to ~100 identical
+ * requests at once. This is NOT the same map as `establishing` above —
+ * that one only covers the SEND-side key-establishment path
+ * (`ensureChannelKeyForSend`/`rotateChannelKey`), never the decrypt path.
+ */
+const fetchingChannelKey = new Map<string, Promise<FetchResult>>();
+
 /** Fetch + unwrap MY wrapped channel key for `epoch` (latest if omitted). */
 type FetchResult = { key: Uint8Array; epoch: number } | 'missing' | 'corrupt';
 async function fetchChannelKey(
+  ctx: DeviceCtx, channelId: number, scope: Uint8Array, scopeHex: string, epoch?: number,
+): Promise<FetchResult> {
+  const dedupKey = `${scopeHex}:${epoch ?? ''}`;
+  const inflight = fetchingChannelKey.get(dedupKey);
+  if (inflight) return inflight;
+  const p = fetchChannelKeyUncached(ctx, channelId, scope, scopeHex, epoch)
+    .finally(() => fetchingChannelKey.delete(dedupKey));
+  fetchingChannelKey.set(dedupKey, p);
+  return p;
+}
+
+async function fetchChannelKeyUncached(
   ctx: DeviceCtx, channelId: number, scope: Uint8Array, scopeHex: string, epoch?: number,
 ): Promise<FetchResult> {
   let resp;

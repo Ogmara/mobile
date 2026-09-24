@@ -296,8 +296,36 @@ export async function coverPeerDevices(recipient: string): Promise<void> {
 /** `missing` = not delivered yet (retry); `corrupt` = present but unwrap failed (error). */
 type FetchResult = { key: Uint8Array; epoch: number } | 'missing' | 'corrupt';
 
+/**
+ * In-flight de-dup for `fetchConvKey`, keyed by (conversation, epoch,
+ * author). Needed because `DmConversationScreen.tsx`'s decrypt effect now
+ * fires every visible message's `decryptDmMessage` call CONCURRENTLY
+ * (previously sequential) — on a cold open, `convKeys` starts empty, so
+ * without this every message in the page misses the cache simultaneously
+ * and would each independently call `getKeyEnvelope` for the exact same
+ * (conversation, epoch, author). NOT the same map as `establishing` above
+ * — that one only covers the SEND-side path (`ensureConvKeyForSend`).
+ */
+const fetchingConvKey = new Map<string, Promise<FetchResult>>();
+
 /** Fetch + unwrap author `author`'s `conv_key` for a scope/epoch, addressed to my device. */
 async function fetchConvKey(
+  ctx: DeviceCtx,
+  conversationId: Uint8Array,
+  convIdHex: string,
+  author: string,
+  epoch?: number,
+): Promise<FetchResult> {
+  const dedupKey = `${convIdHex}:${epoch ?? ''}:${author}`;
+  const inflight = fetchingConvKey.get(dedupKey);
+  if (inflight) return inflight;
+  const p = fetchConvKeyUncached(ctx, conversationId, convIdHex, author, epoch)
+    .finally(() => fetchingConvKey.delete(dedupKey));
+  fetchingConvKey.set(dedupKey, p);
+  return p;
+}
+
+async function fetchConvKeyUncached(
   ctx: DeviceCtx,
   conversationId: Uint8Array,
   convIdHex: string,

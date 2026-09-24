@@ -514,34 +514,47 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // local messages (raw text payload) short-circuit to plain.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const results: Array<[string, DmDisplay]> = [];
-      for (const m of allMsgs) {
-        const id = chanCacheId(m);
-        if (m._optimistic) {
-          const optText = typeof m.payload === 'string' ? m.payload : '';
-          results.push([id, m._decodedEncryptedMedia
-            ? { kind: 'text', text: optText, media: m._decodedEncryptedMedia }
-            : { kind: 'plain', text: optText }]);
-          continue;
-        }
-        const ex = decodedRef.current.get(id);
-        if (ex && ex.kind !== 'waiting') continue;
-        const d = await decryptChannelMessage(m.payload as never, channelId);
-        if (cancelled) return;
-        results.push([id, d]);
-      }
-      if (cancelled || results.length === 0) return;
+    // Apply ONE message's result immediately, independent of every other
+    // message's decrypt — never downgrade an already-resolved entry back to
+    // 'waiting' (a slower, superseded call finishing after a faster retry).
+    const applyResult = (id: string, d: DmDisplay) => {
       setDecoded((prev) => {
+        const ex = prev.get(id);
+        if (ex && ex.kind !== 'waiting' && d.kind === 'waiting') return prev;
         const next = new Map(prev);
-        for (const [id, d] of results) {
-          const ex = next.get(id);
-          if (ex && ex.kind !== 'waiting' && d.kind === 'waiting') continue;
-          next.set(id, d);
-        }
+        next.set(id, d);
         return next;
       });
-    })();
+    };
+    for (const m of allMsgs) {
+      const id = chanCacheId(m);
+      if (m._optimistic) {
+        const optText = typeof m.payload === 'string' ? m.payload : '';
+        applyResult(id, m._decodedEncryptedMedia
+          ? { kind: 'text', text: optText, media: m._decodedEncryptedMedia }
+          : { kind: 'plain', text: optText });
+        continue;
+      }
+      const ex = decodedRef.current.get(id);
+      if (ex && ex.kind !== 'waiting') continue;
+      // Fired concurrently, NOT awaited in sequence — the previous version
+      // awaited each message's decrypt one at a time inside this loop and
+      // committed every result in a SINGLE `setDecoded` call only after the
+      // entire batch finished, so every bubble (cached rows included — the
+      // cache holds ciphertext only, so a cache hit still needs this same
+      // pass) stayed blank for the full sum of every message's decrypt
+      // latency, not the slowest one. On a cold open this fires up to ~100
+      // messages' key lookups at once — `channelCrypto.ts`'s `establishing`
+      // map does NOT cover this (it only dedupes the SEND-side key-
+      // establishment path), so `fetchChannelKey` itself has its own
+      // in-flight de-dup keyed by (scope, epoch); without it, this loop
+      // would fire up to ~100 identical `getKeyEnvelope` requests at once.
+      decryptChannelMessage(m.payload as never, channelId).then((d) => {
+        if (!cancelled) applyResult(id, d);
+      }).catch(() => {
+        if (!cancelled) applyResult(id, { kind: 'error' });
+      });
+    }
     return () => { cancelled = true; };
   }, [allMsgs, decodeTick, channelId]);
 

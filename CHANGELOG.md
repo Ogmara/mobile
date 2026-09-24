@@ -5,6 +5,35 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.1] - 2026-09-24
+
+### Fixed
+
+- **The 0.53.0 message-history cache appeared to do nothing, and channels
+  with lots of images showed empty bubbles for a while** — root cause was
+  unrelated to the cache's own correctness: `ChannelMessagesScreen.tsx`'s
+  and `DmConversationScreen.tsx`'s decrypt effects processed every message
+  SEQUENTIALLY (one `await` at a time) and only revealed anything via a
+  SINGLE batched state update after the *entire* list had decrypted. Since
+  the cache holds ciphertext only, a cache hit still has to go through this
+  same pass — so "painted instantly, then blank while decrypting" and "cache
+  didn't work, slow reload" looked identical. Both effects now fire every
+  message's decrypt concurrently and reveal each one as soon as it
+  individually resolves, so already-resolvable messages (plaintext, or an
+  already-cached key) paint within roughly one decrypt's latency instead of
+  the sum of the whole batch's.
+- **Fixed a regression the fix above would otherwise have introduced**:
+  parallelizing the decrypt calls removes the sequential loop's incidental
+  serialization of key-fetch requests — on a cold open of an encrypted
+  channel/DM (module key caches empty), every message in the page would
+  otherwise miss the key cache at once and each independently call
+  `getKeyEnvelope` for the identical (scope, epoch), up to ~100 duplicate
+  requests simultaneously, risking a sustained "waiting for key" state
+  against a rate-limited node. `channelCrypto.ts`'s `fetchChannelKey` and
+  `dmCrypto.ts`'s `fetchConvKey` now each have their own in-flight request
+  de-duplication (the existing `establishing` map in both files only
+  covers the SEND-side key-establishment path, not decrypt).
+
 ## [0.53.0] - 2026-09-24
 
 ### Added

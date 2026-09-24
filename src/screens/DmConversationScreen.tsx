@@ -353,34 +353,45 @@ export default function DmConversationScreen({ route, navigation }: Props) {
   // already-resolved messages so a new incoming message doesn't re-AEAD the whole list.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const results: Array<[string, DmDisplay]> = [];
-      for (const m of allMsgs) {
-        const id = dmCacheId(m);
-        if (m._optimistic) {
-          const optText = typeof m.payload === 'string' ? m.payload : '';
-          results.push([id, m._decodedEncryptedMedia
-            ? { kind: 'text', text: optText, media: m._decodedEncryptedMedia }
-            : { kind: 'plain', text: optText }]);
-          continue;
-        }
-        const ex = decodedRef.current.get(id);
-        if (ex && ex.kind !== 'waiting') continue; // already resolved
-        const d = await decryptDmMessage(m.payload as never, m.author);
-        if (cancelled) return;
-        results.push([id, d]);
-      }
-      if (cancelled || results.length === 0) return;
+    // Apply ONE message's result immediately, independent of every other
+    // message's decrypt — see ChannelMessagesScreen's identical fix for why:
+    // the previous version awaited each message's decrypt one at a time and
+    // committed every result in a single `setDecoded` call only after the
+    // WHOLE batch finished, so every bubble (including cache hits — the
+    // cache holds ciphertext only, so a cache-seeded conversation still
+    // needs this same pass) stayed blank for the sum of every message's
+    // decrypt latency, not the slowest one.
+    const applyResult = (id: string, d: DmDisplay) => {
       setDecoded((prev) => {
+        const ex = prev.get(id);
+        if (ex && ex.kind !== 'waiting' && d.kind === 'waiting') return prev; // never downgrade
         const next = new Map(prev);
-        for (const [id, d] of results) {
-          const ex = next.get(id);
-          if (ex && ex.kind !== 'waiting' && d.kind === 'waiting') continue; // never downgrade
-          next.set(id, d);
-        }
+        next.set(id, d);
         return next;
       });
-    })();
+    };
+    for (const m of allMsgs) {
+      const id = dmCacheId(m);
+      if (m._optimistic) {
+        const optText = typeof m.payload === 'string' ? m.payload : '';
+        applyResult(id, m._decodedEncryptedMedia
+          ? { kind: 'text', text: optText, media: m._decodedEncryptedMedia }
+          : { kind: 'plain', text: optText });
+        continue;
+      }
+      const ex = decodedRef.current.get(id);
+      if (ex && ex.kind !== 'waiting') continue; // already resolved
+      // Fired concurrently, not awaited in sequence — see
+      // ChannelMessagesScreen's identical comment for the full reasoning.
+      // `dmCrypto.ts`'s `fetchConvKey` has its own in-flight de-dup keyed
+      // by (conversation, epoch, author), for the same reason
+      // `fetchChannelKey` does — `establishing` only covers the send path.
+      decryptDmMessage(m.payload as never, m.author).then((d) => {
+        if (!cancelled) applyResult(id, d);
+      }).catch(() => {
+        if (!cancelled) applyResult(id, { kind: 'error' });
+      });
+    }
     return () => { cancelled = true; };
   }, [allMsgs, decodeTick]);
 

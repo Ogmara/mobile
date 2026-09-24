@@ -5,6 +5,15 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.2] - 2026-09-24
+
+### Changed
+
+- Chat and DM message bubbles now use up to 90% of the available width
+  (was 85%) — noticeably cramped for wide content like bot cards/embeds.
+  `MessageBubble.tsx`'s `styles.container`, shared by both channel and DM
+  screens.
+
 ## [0.52.1] - 2026-09-23
 
 ### Fixed

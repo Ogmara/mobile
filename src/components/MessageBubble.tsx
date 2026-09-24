@@ -501,7 +501,7 @@ export default function MessageBubble({
 const styles = StyleSheet.create({
   container: {
     paddingVertical: 2,
-    maxWidth: '85%',
+    maxWidth: '90%',
     alignSelf: 'flex-start',
   },
   containerOwn: {

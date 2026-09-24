@@ -114,6 +114,7 @@ export function clearDmKeyCache(): void {
   establishing.clear();
   wrappedToDevices.clear();
   lastCoverMs.clear();
+  deviceCtxCache = null;
 }
 
 export interface DeviceCtx {
@@ -123,22 +124,57 @@ export interface DeviceCtx {
   wallet: string;
 }
 
+/**
+ * Memoizes the EXPENSIVE, wallet-scoped part of `deviceCtx()` — the device
+ * keypair (a native `SecureStore` round-trip PLUS an X25519 public-key
+ * derive) and the device id (an `AsyncStorage` read) — keyed by wallet
+ * address. Caches the in-flight PROMISE, not just the resolved value: since
+ * `ChannelMessagesScreen.tsx`/`DmConversationScreen.tsx`'s decrypt effects
+ * now fire every visible message's decrypt CONCURRENTLY, without this every
+ * message in a page would independently redo BOTH round-trips even though
+ * the result is identical for all of them — for a page of 50-100 messages
+ * that's 50-100 redundant native Keystore calls contending with the JS
+ * thread's own rendering work, a real, measured source of remaining
+ * sluggishness after parallelizing the decrypt loop itself. A wallet change
+ * naturally invalidates this (the `wallet` key differs), and `clearDmKeyCache`
+ * also clears it directly for the same reason it clears everything else here.
+ */
+let deviceCtxCache: { wallet: string; promise: Promise<{ encPriv: Uint8Array; deviceId: string } | null> } | null = null;
+
 export async function deviceCtx(): Promise<DeviceCtx | null> {
   const signer = getSigner();
   const wallet = walletAddress();
-  if (!signer || !wallet) return null;
-  // `getOrCreateEncKeypair` now THROWS when no account is scoped, rather than
-  // minting a keypair into the shared legacy slot. `deviceCtx` is awaited bare
-  // from decrypt paths inside render effects, so letting that escape would
-  // reject the effect and stop the rest of the message batch decrypting.
-  // `null` is this function's documented "not ready" signal — use it.
-  let kp;
-  try {
-    kp = await getOrCreateEncKeypair();
-  } catch {
+  if (!signer || !wallet) { deviceCtxCache = null; return null; }
+  let cached = deviceCtxCache;
+  if (!cached || cached.wallet !== wallet) {
+    const promise = (async (): Promise<{ encPriv: Uint8Array; deviceId: string } | null> => {
+      // `getOrCreateEncKeypair` now THROWS when no account is scoped, rather
+      // than minting a keypair into the shared legacy slot. `null` is this
+      // function's documented "not ready" signal — use it, don't let the
+      // throw escape into a caller awaiting this promise bare.
+      try {
+        const kp = await getOrCreateEncKeypair();
+        const deviceId = await getOrCreateDeviceId();
+        return { encPriv: kp.privateKey, deviceId };
+      } catch {
+        return null;
+      }
+    })();
+    cached = { wallet, promise };
+    deviceCtxCache = cached;
+  }
+  const resolved = await cached.promise;
+  if (!resolved) {
+    // Don't permanently cache a failure — allow the NEXT call (e.g. once an
+    // account finishes activating) to retry rather than staying stuck.
+    if (deviceCtxCache === cached) deviceCtxCache = null;
     return null;
   }
-  return { signer, encPriv: kp.privateKey, deviceId: await getOrCreateDeviceId(), wallet };
+  // `signer` is read fresh on every call (cheap — an in-memory accessor, not
+  // storage-backed) rather than cached alongside `encPriv`/`deviceId`, so a
+  // resigned-in session always gets its current signer even when the rest
+  // of this result comes from cache.
+  return { signer, encPriv: resolved.encPriv, deviceId: resolved.deviceId, wallet };
 }
 
 export interface Target { target: string; deviceId: string; encPub: string; createdAt: number }

@@ -5,6 +5,35 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.2] - 2026-09-24
+
+### Fixed
+
+- **Still slow after 0.53.1's decrypt-parallelization fix, and text bubbles
+  were still empty on a quick reopen of a just-visited channel.** Every
+  message decrypt calls `deviceCtx()` first (device encryption keypair +
+  device id), and it was doing REAL, uncached work on every single call: a
+  native `SecureStore` round-trip plus an X25519 public-key derive for the
+  keypair, and an `AsyncStorage` read for the device id — identical for
+  every message in a channel, but redone from scratch per message. For a
+  page of 50-100 messages that's 50-100 redundant native Keystore calls
+  contending with the JS thread's own rendering work — the dominant cost
+  once 0.53.1 removed the sequential-decrypt bottleneck. `deviceCtx()` now
+  memoizes this (in-flight promise, not just the resolved value, so a burst
+  of concurrent calls shares one round-trip) keyed by wallet address,
+  cleared on logout/wallet switch. A revisit within the same session should
+  now decrypt near-instantly (the per-channel key is also already cached
+  from the first open), matching the actual reachable ceiling: the network
+  refetch `messageCache.ts` was never meant to skip, plus one AEAD decrypt
+  pass per message.
+- Confirmed (not a bug): encrypted image/video attachments were already
+  disk-cached (`mediaDiskCache.ts`, 7-day TTL, pre-existing) and were NOT
+  being re-downloaded on revisit — but attachment loading only starts once
+  its message's TEXT payload has decrypted (the descriptor rides inside the
+  decrypted content), so the same `deviceCtx()` bottleneck above was
+  delaying image loads from starting, not re-fetching images that had
+  already loaded.
+
 ## [0.53.1] - 2026-09-24
 
 ### Fixed

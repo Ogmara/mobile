@@ -50,7 +50,15 @@ export const lightColors = {
 /** Dark theme color palette (desktop Modern dark — Telegram blue). */
 export const darkColors = {
   bgPrimary: '#0E1621',
-  bgSecondary: '#0E1621',
+  // Was identical to bgPrimary — a peer message bubble (background:
+  // bgSecondary, per MessageBubble.tsx) was therefore indistinguishable
+  // from the screen behind it: no visible bubble/border at all for any
+  // incoming message, own messages only stood out because those use
+  // accentPrimary instead. Set to a genuine midpoint between bgPrimary and
+  // bgTertiary so a bubble reads as a surface, and nested bgTertiary
+  // elements inside it (reply bar, file chip, reaction badges) still have
+  // their own contrast against the bubble.
+  bgSecondary: '#131E2A',
   bgTertiary: '#182533',
   textPrimary: '#FFFFFF',
   textSecondary: '#708499',

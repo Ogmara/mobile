@@ -5,6 +5,25 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.3] - 2026-09-24
+
+### Fixed
+
+- **The 90% bubble width from 0.52.2 didn't actually show** on content with
+  an inline image (e.g. a bot-posted chart): `MessageBubble.tsx`'s
+  `inlineImage` had a hardcoded `width: 220`, and a `View` shrinks to fit
+  its widest child — so the fixed-width image silently capped the whole
+  bubble regardless of the 90% `maxWidth` on the container. Now computed
+  from screen width (`Dimensions.get('window').width * 0.9 - padding`; the
+  app is portrait-locked, so a static read at module load is sufficient).
+- **Peer (incoming) message bubbles had no visible background at all** —
+  only the sender's own bubble (a distinct accent color) was visible; every
+  incoming message floated directly on the screen background with no
+  border or fill. Root cause: the dark theme's `bgSecondary` (used for
+  peer bubbles) was set to the exact same color as `bgPrimary` (the screen
+  background) — `#0E1621` for both. Gave `bgSecondary` a genuine
+  intermediate shade between `bgPrimary` and `bgTertiary`.
+
 ## [0.52.2] - 2026-09-24
 
 ### Changed

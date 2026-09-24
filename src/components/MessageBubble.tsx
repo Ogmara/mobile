@@ -19,6 +19,7 @@ import {
   ActivityIndicator,
   Platform,
   Modal,
+  Dimensions,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
@@ -498,6 +499,15 @@ export default function MessageBubble({
   );
 }
 
+// A fixed inline-image width (previously 220) doesn't grow with the bubble's
+// percentage-based maxWidth — a View shrinks to fit its widest child, so a
+// hardcoded-width image silently caps the WHOLE bubble at that width
+// regardless of how much room `container.maxWidth` actually allows,
+// noticeably cramped for wide content like bot-posted charts (app is
+// portrait-locked per app.json, so a static Dimensions read is fine — no
+// rotation to react to).
+const MAX_INLINE_IMAGE_WIDTH = Dimensions.get('window').width * 0.9 - spacing.md * 2;
+
 const styles = StyleSheet.create({
   container: {
     paddingVertical: 2,
@@ -541,7 +551,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   inlineImage: {
-    width: 220,
+    width: MAX_INLINE_IMAGE_WIDTH,
     aspectRatio: 4 / 3,
     borderRadius: radius.md,
     marginTop: spacing.xs,

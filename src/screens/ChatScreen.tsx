@@ -38,6 +38,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import type { Channel } from '@ogmara/sdk';
 import type { ChatStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import { clearCachedMessages } from '../lib/messageCache';
 
 type NavProp = NativeStackNavigationProp<ChatStackParamList, 'ChannelList'>;
 
@@ -57,7 +58,7 @@ type Section = { key: string; groupId: string | null; collapseId: string; title:
 export default function ChatScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, status, signer, address: myAddress } = useConnection();
+  const { client, status, signer, address: myAddress, nodeUrl } = useConnection();
   const navigation = useNavigation<NavProp>();
 
   const { data, refreshing, onRefresh } = useApi(
@@ -206,12 +207,20 @@ export default function ChatScreen() {
           clearPlacement(ch.channel_id);
           refreshOrg();
           onRefresh();
+          // Deferred as cheap insurance against any still-mounted
+          // ChannelMessagesScreen instance for this channel re-writing its
+          // cache moments after this clears it (reached via this list
+          // screen specifically, that instance is normally already
+          // unmounted — see ChannelAdminScreen's equivalent handlers, where
+          // it genuinely IS still mounted underneath, for the case this
+          // actually guards against day to day).
+          setTimeout(() => { clearCachedMessages('ch', ch.channel_id, nodeUrl).catch(() => {}); }, 0);
         } catch (e) {
           showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
-  }, [client, t, refreshOrg, onRefresh]);
+  }, [client, t, refreshOrg, onRefresh, nodeUrl]);
 
   const handleDeleteChannel = useCallback((ch: Channel) => {
     setConfirmState({
@@ -227,12 +236,13 @@ export default function ChatScreen() {
           clearPlacement(ch.channel_id);
           refreshOrg();
           onRefresh();
+          setTimeout(() => { clearCachedMessages('ch', ch.channel_id, nodeUrl).catch(() => {}); }, 0);
         } catch (e) {
           showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
-  }, [client, t, refreshOrg, onRefresh]);
+  }, [client, t, refreshOrg, onRefresh, nodeUrl]);
 
   // --- Row long-press context menu (main + "move to group" submenu) ---
   const [channelMenuChannel, setChannelMenuChannel] = useState<Channel | null>(null);

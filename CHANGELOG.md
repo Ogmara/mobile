@@ -5,6 +5,79 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.0] - 2026-09-24
+
+### Added
+
+- **Local message-history cache for channel and DM chat** (Phase 3 of the
+  cross-client caching plan — web shipped 0.80.0, desktop 1.80.0). Reopening
+  a channel or DM now paints instantly from the last-seen local snapshot
+  instead of blanking on every open, reconciled against the next full fetch
+  (never refreshed via an `after` cursor — see `lib/messageCache.ts`'s doc
+  comment). Not a mechanical port: mobile's storage is asynchronous
+  (`@react-native-async-storage/async-storage`, not `localStorage`), its
+  fetching hook is React's `useApi` (not SolidJS's `createResource`), and
+  its account-switch model remounts the entire navigation tree rather than
+  leaving a screen mounted across a switch. Ciphertext-only, matching
+  web/desktop (a deliberate choice against mobile's own precedent of
+  caching decrypted plaintext media in `mediaDiskCache.ts`, made explicitly
+  this session for consistency across all three clients). New
+  `lib/messageCache.ts`, integrated into `ChannelMessagesScreen.tsx`/
+  `DmConversationScreen.tsx`, with cache-clearing wired into every
+  leave/delete/hide/kick/ban path (`ChatScreen.tsx`, `DmListScreen.tsx`,
+  `ChannelAdminScreen.tsx`, `App.tsx`'s real-time revocation handler).
+
+### Fixed
+
+- **A pre-existing bug found while integrating the cache**:
+  `DmConversationScreen.tsx` never cleared `messages` on a peer switch (the
+  channel screen already did this for channel switches) — the previous
+  peer's messages, including your own optimistic sends, rendered under the
+  newly-opened conversation's header until the fetch resolved.
+- **Cross-wallet cache leak on account handover.** `ConnectionContext.tsx`'s
+  `switchAccount`/`removeAccount` flip the active wallet scope before the
+  `<TabNavigator key={walletAddress}>` remount that unmounts the departing
+  wallet's open chat screens actually commits — so a screen's own
+  unmount-triggered debounced write could execute with the NEW wallet
+  already active, writing the departing wallet's messages into the arriving
+  wallet's cache namespace (and repopulating the in-memory layer moments
+  after the wallet-switch reset had cleared it). `writeCachedMessages` now
+  takes an explicit `ownerWallet`, captured from React state (not the
+  module-level scope signal, which can itself run ahead of a render) at the
+  moment a write is armed, and re-checked — at entry, after the
+  quota-exceeded eviction retry, and again before updating the in-memory
+  cache — bailing on any mismatch.
+- **A channel access-revocation (403/404) deterministically re-wrote the
+  just-cleared content back to disk** about a second later: the revoked
+  branch cleared the cache view but left the live `messages` state
+  untouched (preserving `useApi`'s existing error-surfacing behavior),
+  which the merged view — and the debounced persist effect watching it —
+  still reflected. Both are now cleared together, and the persist effect
+  additionally refuses to arm a write at all while the current channel is
+  known to be revoked.
+- **A race between two independently-debounced screens** (the bottom-tab
+  navigator keeps a Chat-tab channel and a DM-tab conversation mounted at
+  once) **could silently drop one conversation's LRU-index entry**, a
+  regression introduced by porting web/desktop's synchronous `localStorage`
+  design to asynchronous `AsyncStorage` (the read-modify-write of the
+  shared index is no longer atomic for free). All index mutations now
+  serialize through one lock.
+- Fetch results are now tagged by node URL as well as channel/peer id — the
+  app can switch nodes automatically in the background (`maybeOptimizeNode`,
+  once per launch); without the tag, a slower fetch against the old node
+  resolving after the switch could apply a different node's channel history
+  under the new node's cache key.
+
+Went through 3 rounds of Code + Security audit (Agent tool, `model: opus`,
+in parallel each round) before landing — see `project_message_history_cache`
+memory for the full trail, including two residual, low-severity, cache-only
+gaps deliberately deferred (never cross-wallet content, never key material):
+an index-key TOCTOU inside the LRU eviction helpers, and a quota-exhausted
+write that can leave the in-memory cache briefly out of sync with a
+concurrent clear on disk. `npm audit`: only the pre-existing, already-
+tracked Expo/build-tooling findings (zero new dependencies). 83/83 tests
+pass (`messageCache.test.ts`: 40, up from the pre-existing 43).
+
 ## [0.52.3] - 2026-09-24
 
 ### Fixed

@@ -24,6 +24,7 @@ import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
 import { useUserDisplay } from '../hooks/useUserDisplay';
 import { ensureHiddenDmsLoaded, isConversationHidden, hideConversation } from '../lib/dmHide';
+import { clearCachedMessages } from '../lib/messageCache';
 import QuickMenu from '../components/QuickMenu';
 import ConfirmModal from '../components/ConfirmModal';
 import type { DmConversation } from '@ogmara/sdk';
@@ -93,7 +94,7 @@ function DmConversationRow({
 export default function DmListScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, signer } = useConnection();
+  const { client, signer, nodeUrl } = useConnection();
   const navigation = useNavigation<NavProp>();
   const [newDmOpen, setNewDmOpen] = useState(false);
   const [newDmAddress, setNewDmAddress] = useState('');
@@ -242,7 +243,20 @@ export default function DmListScreen() {
         message={t('dm_delete_confirm')}
         confirmLabel={t('dm_delete')}
         danger
-        onConfirm={() => { if (confirmTarget) { hideConversation(confirmTarget.peer); setHiddenTick((v) => v + 1); } }}
+        onConfirm={() => {
+          if (confirmTarget) {
+            hideConversation(confirmTarget.peer);
+            setHiddenTick((v) => v + 1);
+            // A hidden conversation reappears automatically if the peer sends
+            // a new message (see dmHide.ts) — so this only clears the local
+            // paint-instantly cache, not the server-side history. Deferred
+            // one tick for the same reason web/desktop defer theirs: lets
+            // any unmount-triggered flush from a currently-open DmConversationScreen
+            // for this peer land first, so it can't resurrect what's cleared here.
+            const peer = confirmTarget.peer;
+            setTimeout(() => { clearCachedMessages('dm', peer, nodeUrl).catch(() => {}); }, 0);
+          }
+        }}
         onClose={() => setConfirmTarget(null)}
       />
     </View>

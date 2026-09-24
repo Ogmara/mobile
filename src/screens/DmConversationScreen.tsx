@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { readCachedMessages, writeCachedMessages, clearCachedMessages, mergeMessages, isAccessRevokedError } from '../lib/messageCache';
 import * as ImagePicker from 'expo-image-picker';
 import {
   View,
@@ -47,6 +48,14 @@ type Props = NativeStackScreenProps<DmStackParamList, 'DmConversation'>;
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
 const GROUP_WINDOW_MS = 2 * 60 * 1000;
 const MAX_LOCAL_MESSAGES = 200;
+/**
+ * The SDK's default page size for `getDmMessages` (no limit override is
+ * passed below). Passed to `mergeMessages` as `requestedLimit` — see
+ * `lib/messageCache.ts`'s doc comment for why the cache module needs to
+ * know this, and why THIS constant (not the channel screen's 200) is the
+ * binding one for `MAX_ROWS_PER_CONV`.
+ */
+const DM_REQUESTED_LIMIT = 50;
 
 function msgIdToHex(msgId: unknown): string {
   if (typeof msgId === 'string') return msgId;
@@ -98,9 +107,13 @@ export default function DmConversationScreen({ route, navigation }: Props) {
   const { address: peerAddress, displayName: seedDisplayName } = route.params;
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, signer, address: myAddress, onWsEvent } = useConnection();
+  const { client, signer, address: myAddress, onWsEvent, nodeUrl, walletAddress } = useConnection();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ExtendedEnvelope[]>([]);
+  // Local message-history cache (`lib/messageCache.ts`) — see
+  // ChannelMessagesScreen's identical integration for the full reasoning.
+  // Mobile port of web 0.80.0 / desktop 1.80.0.
+  const [cachedMessages, setCachedMessages] = useState<ExtendedEnvelope[]>([]);
   const [editingMsg, setEditingMsg] = useState<{ msgId: string; content: string } | null>(null);
   const [info, setInfo] = useState<{ title?: string; message: string } | null>(null);
   const showInfo = useCallback((title: string, message: string) => setInfo({ title, message }), []);
@@ -121,24 +134,76 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, []);
 
+  // Tracks which (peerAddress, nodeUrl) pair is CURRENTLY open, and whether
+  // it's been revoked since — see ChannelMessagesScreen's identical pair of
+  // refs for the full reasoning.
+  const currentConvRef = useRef<{ peerAddress: string; nodeUrl: string }>({ peerAddress: '', nodeUrl: '' });
+  const revokedRef = useRef(false);
+
+  // Tagged with `peerAddress` AND `nodeUrl` at fetch time — see
+  // ChannelMessagesScreen's identical fetcher for why (`useApi` has no
+  // built-in staleness guard against an out-of-order resolution, and
+  // `nodeUrl` specifically guards against `maybeOptimizeNode()`'s automatic
+  // background node switch resolving a stale fetch after the switch).
   const { data } = useApi(
     async () => {
-      if (!client || !signer) return { messages: [], has_more: false };
+      if (!client || !signer) return { peerAddress, nodeUrl, messages: [], has_more: false };
       try {
         const resp = await client.getDmMessages(peerAddress);
-        return { ...resp, messages: normalizeEnvelopes(resp.messages) };
-      } catch {
-        return { messages: [], has_more: false };
+        return { peerAddress, nodeUrl, ...resp, messages: normalizeEnvelopes(resp.messages) };
+      } catch (e) {
+        // 403/404 means access was actually revoked — clear the cache too,
+        // same reasoning as ChannelMessagesScreen's identical branch.
+        // Existing behavior otherwise unchanged: any failure (revoked or a
+        // generic network blip) resolves to an empty page rather than
+        // propagating to `useApi`'s `error` state. `clearCachedMessages`
+        // runs unconditionally (keyed on this fetch's own captured peer/
+        // node); `setCachedMessages([])` is guarded against a stale fetch
+        // for a peer/node the screen has since switched away from.
+        if (isAccessRevokedError(e)) {
+          clearCachedMessages('dm', peerAddress, nodeUrl).catch(() => {});
+          if (currentConvRef.current.peerAddress === peerAddress && currentConvRef.current.nodeUrl === nodeUrl) {
+            revokedRef.current = true;
+            setCachedMessages([]);
+          }
+        }
+        return { peerAddress, nodeUrl, messages: [], has_more: false };
       }
     },
-    [peerAddress, client, signer],
+    [peerAddress, client, signer, nodeUrl],
   );
 
+  // Seed `messages` from the fetch AND reconcile the cache against it, once
+  // a result tagged for the CURRENT peer AND node arrives. Never refreshed
+  // via an `after` cursor — see `messageCache.ts`'s doc comment.
   useEffect(() => {
-    if (data?.messages) {
-      setMessages(data.messages as ExtendedEnvelope[]);
+    if (data && data.peerAddress === peerAddress && data.nodeUrl === nodeUrl && data.messages) {
+      const fresh = data.messages as ExtendedEnvelope[];
+      setMessages(fresh);
+      setCachedMessages((prev) => mergeMessages(prev, fresh, DM_REQUESTED_LIMIT) as ExtendedEnvelope[]);
     }
-  }, [data]);
+  }, [data, peerAddress, nodeUrl]);
+
+  // The screen instance is reused across peer switches (only the route
+  // param changes), so clear per-conversation local state when the peer
+  // changes — otherwise the previous peer's messages (including optimistic
+  // sends) render under the newly-opened conversation's header until the
+  // fetch above resolves. This `setMessages([])` was MISSING before this
+  // change (found while integrating the cache — ChannelMessagesScreen
+  // already had its own equivalent for the same reason); the new
+  // `peerAddress` tag on the fetch above closes the underlying race, this
+  // closes what was visible in the meantime.
+  useEffect(() => {
+    currentConvRef.current = { peerAddress, nodeUrl };
+    revokedRef.current = false;
+    setMessages([]);
+    setCachedMessages([]);
+    let cancelled = false;
+    readCachedMessages('dm', peerAddress, nodeUrl).then((rows) => {
+      if (!cancelled && !revokedRef.current) setCachedMessages(rows as ExtendedEnvelope[]);
+    });
+    return () => { cancelled = true; };
+  }, [peerAddress, nodeUrl]);
 
   // Mark DM read on enter
   useEffect(() => {
@@ -223,6 +288,66 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     return unsub;
   }, [onWsEvent, peerAddress, myAddress, client, signer]);
 
+  // Union of the live layer (`messages` — fetched + optimistic + WS-applied)
+  // and the cache layer (`cachedMessages`) — see ChannelMessagesScreen's
+  // identical `allMsgs` memo for the full reasoning. `messages` wins on any
+  // overlapping id.
+  const allMsgs = useMemo(() => {
+    const seenIds = new Set<string>();
+    for (const m of messages) {
+      const id = msgIdToHex(m.msg_id);
+      if (id) seenIds.add(id);
+    }
+    const cachedOnly = cachedMessages.filter((m) => {
+      const id = msgIdToHex(m.msg_id);
+      return id ? !seenIds.has(id) : false;
+    });
+    return [...messages, ...cachedOnly];
+  }, [messages, cachedMessages]);
+
+  // Persist the merged view to disk, debounced — see ChannelMessagesScreen's
+  // identical persist effect pair for the full reasoning (schedule-time
+  // capture via React's own per-render effect closures; flush on unmount
+  // AND on every peer/node change via the second effect's cleanup).
+  // `ownerWallet` is captured from `walletAddress` (this screen's own
+  // `useConnection()` value), not `getWalletScope()` — see
+  // ChannelMessagesScreen's identical comment for why: `walletAddress` can
+  // only change via a render commit, so it's guaranteed consistent with
+  // whatever `allMsgs` this same render closure captured, unlike
+  // `getWalletScope()`, a plain module variable `switchAccount`/
+  // `removeAccount` flip synchronously AHEAD of the `setWalletAddress` call
+  // that actually drives a re-render.
+  const pendingCacheWriteRef = useRef<{ peerAddress: string; nodeUrl: string; ownerWallet: string | null; snapshot: ExtendedEnvelope[] } | null>(null);
+  useEffect(() => {
+    if (!peerAddress) { pendingCacheWriteRef.current = null; return; }
+    // Mirrors ChannelMessagesScreen's identical guard: a 403 for the
+    // CURRENT peer sets `revokedRef` and clears `cachedMessages` in the
+    // same tick as (here) the seed effect independently zeroing `messages`
+    // — but there's a brief intermediate commit where `cachedMessages` is
+    // already `[]` while `messages` may still be pre-revocation, and this
+    // effect (depending on `allMsgs`) re-runs on that commit too. Without
+    // this, arming a write here would persist that stale snapshot, and the
+    // flush-on-unmount/peer-change effect reads whatever this ref holds
+    // unconditionally — so skip arming entirely while revoked.
+    if (revokedRef.current) { pendingCacheWriteRef.current = null; return; }
+    const ownerWallet = walletAddress;
+    pendingCacheWriteRef.current = { peerAddress, nodeUrl, ownerWallet, snapshot: allMsgs };
+    const timer = setTimeout(() => {
+      writeCachedMessages('dm', peerAddress, allMsgs, nodeUrl, ownerWallet).catch(() => {});
+      pendingCacheWriteRef.current = null;
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [allMsgs, peerAddress, nodeUrl, walletAddress]);
+  useEffect(() => {
+    return () => {
+      const pending = pendingCacheWriteRef.current;
+      if (pending && pending.peerAddress === peerAddress && pending.nodeUrl === nodeUrl) {
+        writeCachedMessages('dm', pending.peerAddress, pending.snapshot, pending.nodeUrl, pending.ownerWallet).catch(() => {});
+        pendingCacheWriteRef.current = null;
+      }
+    };
+  }, [peerAddress, nodeUrl]);
+
   // Decrypt messages asynchronously into `decoded`. Re-runs when messages change or on
   // foreground resume (retries 'waiting' entries once a key/vault restore lands). Skips
   // already-resolved messages so a new incoming message doesn't re-AEAD the whole list.
@@ -230,7 +355,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     let cancelled = false;
     (async () => {
       const results: Array<[string, DmDisplay]> = [];
-      for (const m of messages) {
+      for (const m of allMsgs) {
         const id = dmCacheId(m);
         if (m._optimistic) {
           const optText = typeof m.payload === 'string' ? m.payload : '';
@@ -257,20 +382,20 @@ export default function DmConversationScreen({ route, navigation }: Props) {
       });
     })();
     return () => { cancelled = true; };
-  }, [messages, decodeTick]);
+  }, [allMsgs, decodeTick]);
 
   // Build list items with date separators and author grouping.
   // O(n) optimistic dedup via Set.
   const listItems = useMemo((): ListItem[] => {
     const realMsgKeys = new Set<string>();
-    for (const m of messages) {
+    for (const m of allMsgs) {
       if (!m._optimistic) {
         const bucket = Math.floor(new Date(m.timestamp).getTime() / 10000);
         realMsgKeys.add(`${m.author}|${bucket}`);
       }
     }
 
-    const filtered = messages.filter((m) => {
+    const filtered = allMsgs.filter((m) => {
       if (!m._optimistic) return true;
       const bucket = Math.floor(new Date(m.timestamp).getTime() / 10000);
       return !realMsgKeys.has(`${m.author}|${bucket}`);
@@ -308,7 +433,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
     }
 
     return items.reverse();
-  }, [messages, t]);
+  }, [allMsgs, t]);
 
   // ── Message Actions ──
 

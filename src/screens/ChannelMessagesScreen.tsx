@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { readCachedMessages, writeCachedMessages, clearCachedMessages, mergeMessages, isAccessRevokedError } from '../lib/messageCache';
 import * as ImagePicker from 'expo-image-picker';
 import {
   View,
@@ -54,6 +55,21 @@ const EDIT_WINDOW_MS = 30 * 60 * 1000;
 const GROUP_WINDOW_MS = 2 * 60 * 1000;
 /** Max local messages to prevent unbounded memory */
 const MAX_LOCAL_MESSAGES = 200;
+/**
+ * What `mergeMessages` should treat as "a full page" for this screen's
+ * fetch. NOT the 200 requested below (mobile has no pagination — see the
+ * `useApi` call) — the node hard-clamps `getChannelMessages` at 100
+ * regardless of what's asked for (`l2-node/src/api/routes.rs`), so 100 is
+ * the real ceiling a response can ever reach. Using 200 here would make
+ * `mergeMessages`'s "disconnected island" discard branch
+ * (`fresh.length >= requestedLimit`) UNREACHABLE for channels — harmless
+ * today only because `MAX_ROWS_PER_CONV` (50) is already smaller than 100,
+ * so the final cap trims away the difference either way, but the module's
+ * own stated safety invariant ("`MAX_ROWS_PER_CONV` MUST stay <= the
+ * smallest real page") should hold explicitly, not by accident of a second
+ * constant. Re-derive this if the node's clamp ever changes.
+ */
+const CHANNEL_REQUESTED_LIMIT = 100;
 
 /** Convert msg_id to consistent hex string */
 function msgIdToHex(msgId: unknown): string {
@@ -118,9 +134,17 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const { channelName } = route.params;
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, signer, address: myAddress, onWsEvent } = useConnection();
+  const { client, signer, address: myAddress, onWsEvent, nodeUrl, walletAddress } = useConnection();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ExtendedEnvelope[]>([]);
+  // Local message-history cache (`lib/messageCache.ts`) — paints a resumed
+  // channel instantly from the last-seen snapshot instead of blanking on
+  // every (re-)open. Kept as a SEPARATE state from `messages` (which is the
+  // live server+optimistic+WS layer) rather than merged directly into it —
+  // `allMsgs` below unions the two, with `messages` always winning on an
+  // overlapping id, so a WS-delivered edit/delete/reaction is never shadowed
+  // by a stale cached copy. Mobile port of web 0.80.0 / desktop 1.80.0.
+  const [cachedMessages, setCachedMessages] = useState<ExtendedEnvelope[]>([]);
   const [editingMsg, setEditingMsg] = useState<{ msgId: string; content: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ReplyContext | null>(null);
   const [info, setInfo] = useState<{ title?: string; message: string } | null>(null);
@@ -177,37 +201,85 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, []);
 
+  // Tracks which (channelId, nodeUrl) pair is CURRENTLY open, set
+  // synchronously at the top of the switch effect below, and whether that
+  // pair's access has been revoked since. Both are read by async
+  // continuations (the fetcher's catch branch, the cache-seed disk read)
+  // that may resolve after the screen has already moved on to a different
+  // channel or node — see the switch effect for how they're used.
+  const currentConvRef = useRef<{ channelId: number | null; nodeUrl: string }>({ channelId: null, nodeUrl: '' });
+  const revokedRef = useRef(false);
+
+  // Tagged with `channelId` AND `nodeUrl` at fetch time — `useApi` retains
+  // the PREVIOUS `data` while a new fetch is in flight and has no built-in
+  // staleness guard against an out-of-order resolution (two in-flight
+  // fetches resolving in the wrong order). The seed/merge effect below only
+  // applies a result whose tag matches the CURRENT channel AND node,
+  // closing that race without needing a Solid-style `.loading` guard.
+  // `nodeUrl` matters here specifically because `ConnectionContext.tsx`'s
+  // `maybeOptimizeNode()` can switch nodes automatically (no user action)
+  // once per launch — without it, a slower fetch against the OLD node could
+  // resolve after the switch and get applied because `channelId` alone
+  // still matched, persisting a DIFFERENT node's channel history (channel
+  // ids are per-node) under the NEW node's cache key.
   const { data } = useApi(
     async () => {
-      if (!client) return { messages: [], has_more: false };
-      const resp = await client.getChannelMessages(channelId, 200);
-      return { ...resp, messages: normalizeEnvelopes(resp.messages) };
+      if (!client) return { channelId, nodeUrl, messages: [], has_more: false };
+      try {
+        const resp = await client.getChannelMessages(channelId, 200);
+        return { channelId, nodeUrl, ...resp, messages: normalizeEnvelopes(resp.messages) };
+      } catch (e) {
+        // 403/404 means access was actually revoked (removed from a private
+        // channel, channel deleted) — as opposed to a generic network blip,
+        // which a stale local cache should survive. Clear it too, not just
+        // the live view: otherwise the next open paints the same
+        // now-inaccessible content from disk again. Re-thrown so `useApi`'s
+        // existing error-surfacing behavior (and its "leave `data` alone"
+        // semantics on failure) is unchanged.
+        //
+        // `clearCachedMessages` runs unconditionally — it's keyed on THIS
+        // fetch's own captured `channelId`/`nodeUrl`, which really is the
+        // conversation that was revoked, regardless of what's on screen
+        // now. `setCachedMessages([])` is guarded, though: this catch can
+        // run after the screen has already switched to a DIFFERENT channel
+        // (or node) — without the guard, a stale revoked-fetch would blank
+        // that unrelated, freshly-seeded conversation's cache view.
+        if (isAccessRevokedError(e)) {
+          clearCachedMessages('ch', channelId, nodeUrl).catch(() => {});
+          if (currentConvRef.current.channelId === channelId && currentConvRef.current.nodeUrl === nodeUrl) {
+            revokedRef.current = true;
+            setCachedMessages([]);
+            // `useApi` leaves `data` untouched on a thrown fetcher (that's
+            // the whole reason this is re-thrown, to preserve its existing
+            // error-surfacing contract) — so without this, `messages` keeps
+            // holding the pre-revocation envelopes. `allMsgs` unions
+            // `messages` back in regardless of `cachedMessages`, and the
+            // persist effect (guarded below by `revokedRef`, but only AFTER
+            // this render) would otherwise still see the just-cleared
+            // conversation's own pre-revocation content reflected in
+            // `allMsgs` on this very commit — clear both together so
+            // there's no render in between where they disagree.
+            setMessages([]);
+          }
+        }
+        throw e;
+      }
     },
-    [channelId, client],
+    [channelId, client, nodeUrl],
   );
 
-  // Seed messages from initial fetch
+  // Seed `messages` from the fetch AND reconcile the cache against it, once
+  // a result tagged for the CURRENT channel AND node arrives. Never
+  // refreshed via an `after` cursor — see `messageCache.ts`'s doc comment
+  // for why an edit/delete/reaction on an already-cached row can only be
+  // revalidated by a full, unconditional fetch like this one.
   useEffect(() => {
-    if (data?.messages) {
-      setMessages(data.messages as ExtendedEnvelope[]);
+    if (data && data.channelId === channelId && data.nodeUrl === nodeUrl && data.messages) {
+      const fresh = data.messages as ExtendedEnvelope[];
+      setMessages(fresh);
+      setCachedMessages((prev) => mergeMessages(prev, fresh, CHANNEL_REQUESTED_LIMIT) as ExtendedEnvelope[]);
     }
-  }, [data]);
-
-  // Resolve display names for message authors
-  useEffect(() => {
-    if (!client) return;
-    const authors = new Set(messages.map((m) => m.author));
-    for (const addr of authors) {
-      if (profileFetchedRef.current.has(addr)) continue;
-      profileFetchedRef.current.add(addr);
-      client.getUserProfile(addr).then((resp: any) => {
-        const name = resp?.user?.display_name;
-        if (name) {
-          setProfileNames((prev) => ({ ...prev, [addr]: name }));
-        }
-      }).catch(() => {});
-    }
-  }, [client, messages]);
+  }, [data, channelId, nodeUrl]);
 
   // Mentions belong to the draft for THIS channel, so they are cleared ONLY on a
   // real channel change.
@@ -235,7 +307,24 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // route `channelId`) with a `reply_to` pointing at a message that
     // belongs to the channel just left — an orphaned cross-channel reply.
     setMessages([]);
-  }, [channelId]);
+    // Seed the cache view too, so the newly-open channel paints instantly
+    // from its last-seen snapshot instead of a blank screen while the fetch
+    // above is in flight. `cancelled` guards against a slow read for a
+    // channel already switched away from applying after the fact;
+    // `revokedRef` guards against a DIFFERENT, narrower race — the fetch's
+    // 403 handler above clearing this SAME conversation's cache while this
+    // very disk read is still in flight, which `cancelled` alone can't
+    // catch since the conversation hasn't changed. Both are reset here,
+    // synchronously, before the read starts.
+    currentConvRef.current = { channelId, nodeUrl };
+    revokedRef.current = false;
+    setCachedMessages([]);
+    let cancelled = false;
+    readCachedMessages('ch', channelId, nodeUrl).then((rows) => {
+      if (!cancelled && !revokedRef.current) setCachedMessages(rows as ExtendedEnvelope[]);
+    });
+    return () => { cancelled = true; };
+  }, [channelId, nodeUrl]);
 
   // Mark channel read on enter
   useEffect(() => {
@@ -307,6 +396,119 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     client.joinChannel(channelId).catch(() => { autoJoinedRef.current = false; });
   }, [client, signer, isEncrypted, isPrivate, channelId]);
 
+  // Union of the live layer (`messages` — fetched + optimistic + WS-applied)
+  // and the cache layer (`cachedMessages` — already reconciled against the
+  // last full fetch by the merge effect above). `messages` wins on any
+  // overlapping id, since it may carry a WS edit/delete/reaction newer than
+  // that reconciliation. Used everywhere downstream that needs the FULL
+  // conversation view (decrypt, reply-resolution, rendering) — `messages`
+  // itself stays the "what did the network actually give us this session"
+  // layer, still the only thing WS handlers and send/edit/delete mutate.
+  const allMsgs = useMemo(() => {
+    const seenIds = new Set<string>();
+    for (const m of messages) {
+      const id = msgIdToHex(m.msg_id);
+      if (id) seenIds.add(id);
+    }
+    const cachedOnly = cachedMessages.filter((m) => {
+      const id = msgIdToHex(m.msg_id);
+      return id ? !seenIds.has(id) : false;
+    });
+    return [...messages, ...cachedOnly];
+  }, [messages, cachedMessages]);
+
+  // Resolve display names for message authors — over `allMsgs`, not just
+  // `messages`, so an author only present via a cached row gets resolved
+  // too instead of showing a truncated address until a live message from
+  // them arrives.
+  useEffect(() => {
+    if (!client) return;
+    const authors = new Set(allMsgs.map((m) => m.author));
+    for (const addr of authors) {
+      if (profileFetchedRef.current.has(addr)) continue;
+      profileFetchedRef.current.add(addr);
+      client.getUserProfile(addr).then((resp: any) => {
+        const name = resp?.user?.display_name;
+        if (name) {
+          setProfileNames((prev) => ({ ...prev, [addr]: name }));
+        }
+      }).catch(() => {});
+    }
+  }, [client, allMsgs]);
+
+  // Persist the merged view to disk, debounced. Each effect invocation is
+  // its own closure over THIS render's `channelId`/`nodeUrl`/`allMsgs` — the
+  // `setTimeout` callback below only ever reads from that closure, never a
+  // live ref re-read later, so a channel switch mid-debounce can't write the
+  // OLD channel's content under the NEW channel's cache key (React's own
+  // effect-cleanup model gives this schedule-time-capture property for
+  // free, unlike Solid's manual `pendingPersist` bookkeeping on web/desktop).
+  // `pendingCacheWriteRef` exists ONLY so the separate unmount/channel-
+  // change flush effect below can still reach the latest snapshot from its
+  // own cleanup — the debounce timer itself never reads through it.
+  //
+  // `ownerWallet` is captured from `walletAddress` (this screen's own
+  // `useConnection()` value, read at the SAME moment as the rest of this
+  // pairing) — deliberately NOT `getWalletScope()`, even though that's what
+  // `writeCachedMessages` itself checks against. `getWalletScope()` is a
+  // plain module-level variable that `switchAccount`/`removeAccount` flip
+  // synchronously, AHEAD of the `setWalletAddress` call that actually
+  // drives a re-render — so a `getWalletScope()` read from inside this
+  // effect's body could observe the NEW wallet on a stale render, paired
+  // with `allMsgs` that's still the OLD wallet's messages (this render
+  // hasn't been superseded yet; React's own effect flush can lag a plain
+  // synchronous global write like `setWalletScope`). `walletAddress`, by
+  // contrast, can only change via a commit — any render that sees a
+  // particular `allMsgs` is GUARANTEED to see the `walletAddress` that was
+  // current for that same commit, so the pairing captured here can never
+  // itself already be split across the flip. This exists because mobile's
+  // account switch (unlike a plain channel switch) UNMOUNTS this whole
+  // screen, and an unmount can itself race the wallet-scope flip — without
+  // it, the DEPARTING wallet's messages could be written into the ARRIVING
+  // wallet's cache namespace. See `messageCache.ts`'s doc comment for the
+  // full reasoning.
+  const pendingCacheWriteRef = useRef<{ channelId: number; nodeUrl: string; ownerWallet: string | null; snapshot: ExtendedEnvelope[] } | null>(null);
+  useEffect(() => {
+    if (!channelId) { pendingCacheWriteRef.current = null; return; }
+    // A 403 for the CURRENT channel sets `revokedRef` and clears both
+    // `messages`/`cachedMessages` in the same tick (see the fetcher's catch
+    // branch above) — but `allMsgs` (and this effect, which depends on it)
+    // still re-runs on that same state change. Without this guard, arming a
+    // write here would persist whatever the pre-revocation `allMsgs` looked
+    // like the LAST time this effect ran before the clear (this effect's
+    // own closure is from a PRIOR render, so `allMsgs` here could still be
+    // stale-pre-revocation content), re-writing straight back to disk under
+    // the very key `clearCachedMessages` just removed. `revokedRef` is only
+    // ever reset at the top of the channel-switch effect, so this stays
+    // shut for the remainder of this channel's revoked session.
+    if (revokedRef.current) { pendingCacheWriteRef.current = null; return; }
+    const ownerWallet = walletAddress;
+    pendingCacheWriteRef.current = { channelId, nodeUrl, ownerWallet, snapshot: allMsgs };
+    const timer = setTimeout(() => {
+      writeCachedMessages('ch', channelId, allMsgs, nodeUrl, ownerWallet).catch(() => {});
+      pendingCacheWriteRef.current = null;
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [allMsgs, channelId, nodeUrl, walletAddress]);
+  // Flushes whatever the debounce above hasn't written yet — on unmount
+  // (screen navigated away, including an account switch) AND on every
+  // channelId/nodeUrl change (this effect's cleanup re-runs then too), so
+  // at most ~1s of a switched-away-from channel's state is ever lost
+  // rather than silently dropped every single time. The pairing check
+  // (`pending.channelId === channelId && pending.nodeUrl === nodeUrl`) is
+  // redundant with how the ref is currently populated — included so this
+  // stays correct even if that changes later, rather than trusting the
+  // pairing implicitly.
+  useEffect(() => {
+    return () => {
+      const pending = pendingCacheWriteRef.current;
+      if (pending && pending.channelId === channelId && pending.nodeUrl === nodeUrl) {
+        writeCachedMessages('ch', pending.channelId, pending.snapshot, pending.nodeUrl, pending.ownerWallet).catch(() => {});
+        pendingCacheWriteRef.current = null;
+      }
+    };
+  }, [channelId, nodeUrl]);
+
   // Decrypt messages asynchronously into `decoded`. decryptChannelMessage is shape-
   // driven (v1 plaintext passes through), so this runs for every channel. Optimistic
   // local messages (raw text payload) short-circuit to plain.
@@ -314,7 +516,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     let cancelled = false;
     (async () => {
       const results: Array<[string, DmDisplay]> = [];
-      for (const m of messages) {
+      for (const m of allMsgs) {
         const id = chanCacheId(m);
         if (m._optimistic) {
           const optText = typeof m.payload === 'string' ? m.payload : '';
@@ -341,7 +543,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       });
     })();
     return () => { cancelled = true; };
-  }, [messages, decodeTick, channelId]);
+  }, [allMsgs, decodeTick, channelId]);
 
   // Late channel-key arrival: re-poll while anything is still 'waiting' (bounded; renewed
   // by the `channel_members_changed` WS handler below since a cross-node cold topic-mesh +
@@ -467,12 +669,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     return unsub;
   }, [onWsEvent, channelId, client, signer, isEncrypted, isPrivate]);
 
-  // Build lookup map for reply context resolution
+  // Build lookup map for reply context resolution — over `allMsgs`, so a
+  // reply to a message only present via the cache still resolves.
   const msgById = useMemo(() => {
     const map = new Map<string, ExtendedEnvelope>();
-    for (const msg of messages) map.set(msgIdToHex(msg.msg_id), msg);
+    for (const msg of allMsgs) map.set(msgIdToHex(msg.msg_id), msg);
     return map;
-  }, [messages]);
+  }, [allMsgs]);
 
   /** Resolve reply context for a message */
   const resolveReply = useCallback((msg: ExtendedEnvelope): ReplyContext | null => {
@@ -508,7 +711,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const listItems = useMemo((): ListItem[] => {
     // Build dedup set for O(n) optimistic filtering: "author|timestamp_bucket"
     const realMsgKeys = new Set<string>();
-    for (const m of messages) {
+    for (const m of allMsgs) {
       if (!m._optimistic) {
         // 10-second bucket for matching optimistic to confirmed messages
         const bucket = Math.floor(new Date(m.timestamp).getTime() / 10000);
@@ -516,7 +719,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       }
     }
 
-    const filtered = messages.filter((m) => {
+    const filtered = allMsgs.filter((m) => {
       if (!m._optimistic) return true;
       const bucket = Math.floor(new Date(m.timestamp).getTime() / 10000);
       return !realMsgKeys.has(`${m.author}|${bucket}`);
@@ -539,9 +742,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
     // Button-press messages (via_button: true) are suppressed from the
     // default feed — frontend spec §6.1.3: "the user only wants to see the
-    // bot's reply, not their own tap." `messages`/`sorted` stay the
+    // bot's reply, not their own tap." `allMsgs`/`sorted` stay the
     // unfiltered source of truth (`msgById`/`resolveReply` above read from
-    // `messages` directly, not from this derived list).
+    // `allMsgs` directly, not from this derived list).
     //
     // Suppress only the VIEWER'S OWN presses, not everyone's — deliberately
     // narrower than web/desktop, which hide every wallet's via_button
@@ -588,7 +791,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
     // Reverse for inverted FlatList (newest at top)
     return items.reverse();
-  }, [messages, t, myAddress]);
+  }, [allMsgs, t, myAddress]);
 
   // ── Message Actions ──
 

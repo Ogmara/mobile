@@ -23,6 +23,7 @@ import * as Notifications from 'expo-notifications';
 import { ThemeProvider, useTheme } from './src/theme';
 import { ConnectionProvider, useConnection } from './src/context/ConnectionContext';
 import { removeJoinedChannel } from './src/lib/joinedChannels';
+import { clearCachedMessages } from './src/lib/messageCache';
 import { downloadSyncedObjects } from './src/lib/settingsSync';
 import { getStartScreen, type StartScreen } from './src/lib/settings';
 import { isLockEnabled, getLockTimeout } from './src/lib/appLock';
@@ -130,7 +131,7 @@ function AppContent() {
   // screen), this fires regardless of what the user is currently viewing —
   // mirrors web/desktop's always-mounted Sidebar handling, made possible here by
   // the same navigationRef already used for notification-tap navigation above.
-  const { onWsEvent, walletAddress, status } = useConnection();
+  const { onWsEvent, walletAddress, status, nodeUrl } = useConnection();
 
   // Pull the user's synced objects (channel org, hidden DMs, followed topics)
   // once the node connection is up, so a fresh device shows them without a
@@ -181,9 +182,19 @@ function AppContent() {
         // @ts-expect-error — dynamic navigation
         navigationRef.current?.navigate('ChannelList');
       }
+      // This is the REAL-TIME revocation signal for a kick/ban/delete — the
+      // fetch-level `isAccessRevokedError` handling in ChannelMessagesScreen
+      // only fires on a SUBSEQUENT fetch, and a user who's just been kicked
+      // or whose channel was deleted typically never reopens it to trigger
+      // one. Without this, the cache keeps the revoked channel's content
+      // paintable (for up to its 7-day TTL) with nothing left to clear it.
+      // Deferred one tick for the same reason ChannelAdminScreen's leave/
+      // delete handlers are: if this channel is the one just navigated away
+      // from above, that screen's own unmount flush must land first.
+      setTimeout(() => { clearCachedMessages('ch', channelId as number, nodeUrl).catch(() => {}); }, 0);
     });
     return unsub;
-  }, [onWsEvent, walletAddress]);
+  }, [onWsEvent, walletAddress, nodeUrl]);
 
   // useMemo MUST be before any conditional returns (React rules of hooks)
   const navTheme = useMemo(

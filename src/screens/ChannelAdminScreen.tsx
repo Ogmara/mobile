@@ -24,6 +24,7 @@ import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
 import { removeJoinedChannel } from '../lib/joinedChannels';
 import { clearPlacement } from '../lib/channelOrg';
+import { clearCachedMessages } from '../lib/messageCache';
 import { buildChannelInviteUrl } from '../lib/share';
 import ConfirmModal from '../components/ConfirmModal';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -259,12 +260,19 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
           await removeJoinedChannel(channelId).catch(() => {});
           clearPlacement(channelId);
           navigation.popToTop();
+          // ChannelMessagesScreen for THIS channel is mounted directly
+          // underneath (this screen is pushed from it) — `popToTop()`
+          // unmounts it, and its own debounced persist effect flushes on
+          // unmount. Deferred one tick so that flush lands first; clearing
+          // before it would otherwise be immediately undone by the flush
+          // re-writing the just-left channel's last-seen snapshot.
+          setTimeout(() => { clearCachedMessages('ch', channelId, nodeUrl).catch(() => {}); }, 0);
         } catch (e) {
           showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
-  }, [client, channelId, navigation, t]);
+  }, [client, channelId, navigation, t, nodeUrl]);
 
   const handleDeleteChannel = useCallback(() => {
     if (!client || !isOwner) return;
@@ -282,12 +290,14 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
           await removeJoinedChannel(channelId).catch(() => {});
           clearPlacement(channelId);
           navigation.popToTop();
+          // See handleLeaveChannel above for why this is deferred.
+          setTimeout(() => { clearCachedMessages('ch', channelId, nodeUrl).catch(() => {}); }, 0);
         } catch (e) {
           showAlert(t('error_generic'), e instanceof Error ? e.message : '');
         }
       },
     });
-  }, [client, channelId, isOwner, navigation, t]);
+  }, [client, channelId, isOwner, navigation, t, nodeUrl]);
 
   // Show spinner while loading initial data
   if (loading) {

@@ -5,6 +5,47 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.54.0] - 2026-10-06
+
+### Security
+
+- **Private channel creation no longer computes `channel_id` locally** —
+  `CreateChannelScreen` now lets `OgmaraClient.createChannel` (sdk-js
+  0.63.0+) derive it, using the signer's resolved wallet identity.
+  Closes l2-node 0.139.0's `federate_channel` first-sight-trust residual
+  from the client side: the node now verifies this derivation, which
+  only works if the client actually sends the `id_derivation_ts` it was
+  computed with — see that release's CHANGELOG for the full rationale.
+  Also removed the now-unused `walletAddress || address` fallback (the
+  SDK owns wallet-identity resolution now) and fixed the slug sanitizer
+  (`/[^a-z0-9-_]/g` → `/[^a-z0-9-]/g`, matching web/desktop's charset) —
+  it previously preserved `_`, which the node's slug validator rejects
+  outright, so a slug containing an underscore failed only AFTER
+  submission instead of being caught client-side. No other user-visible
+  behavior change.
+- **Dependency audit**: `npm audit fix` (non-force, applied twice until
+  stable) resolved 9 of 44 findings — all of `@xmldom/xmldom` (10
+  advisories collapsed into one fix) plus `undici`. The remaining 35 (22
+  high, 13 moderate) are **unchanged from before this session** and
+  **not newly introduced** — all rooted in the `expo`/`react-native`/
+  `metro`/`jest`/`braces` build-and-test tooling chain (confirmed:
+  `react-native` itself is flagged only via its CLI/test sub-
+  dependencies, e.g. `@react-native/community-cli-plugin` →
+  `babel-jest` → `jest-environment-node`, not its shipped runtime JS —
+  none of these 35 ship inside the built APK). `npm audit fix --force`'s
+  only offered path **downgrades `expo` to 44.0.6** — the project is
+  currently on `expo@54.0.37` (latest patch of the declared `~54.0.33`
+  range; no newer 54.x exists to patch-bump into instead) — a severe
+  regression, not a fix. Matches this repo's own prior findings exactly
+  (mobile 0.32.0 through 0.42.0: `image-size`'s advertised "SDK 57 fixes
+  it" `fixAvailable` hint was independently verified FALSE each time —
+  `metro@latest` still pins the same vulnerable range regardless of Expo
+  SDK version). Closing these for real needs a deliberate, separately-
+  tested Expo SDK migration with real Android/iOS build verification
+  this session's toolchain can't perform. Deferred explicitly, not
+  silently — flagged here per this project's mandatory
+  dependency-security gate.
+
 ## [0.53.2] - 2026-09-24
 
 ### Fixed

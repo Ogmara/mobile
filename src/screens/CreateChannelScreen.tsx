@@ -4,7 +4,11 @@
  * Supports three types:
  * - Public (type 0): discoverable, everyone can read and write
  * - Read-Public (type 1): discoverable, everyone reads, only admins write
- * - Private (type 2): L2-only, invitation-based, channel ID from Keccak-256
+ * - Private (type 2): L2-only, invitation-based — channel_id is derived by
+ *   `OgmaraClient.createChannel` itself (security fix, l2-node 0.139.0: the
+ *   derivation must use the resolved WALLET identity, verified node-side —
+ *   centralized in the SDK rather than duplicated here, which is what
+ *   previously made it possible to accidentally hash the wrong address).
  *
  * Uses SDK client.createChannel() for clean API interaction.
  */
@@ -21,7 +25,6 @@ import {
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
-import { keccak_256 } from '@noble/hashes/sha3';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
@@ -34,13 +37,7 @@ import SegmentedControl from '../components/SegmentedControl';
 export default function CreateChannelScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  // walletAddress, not address: for external/delegated wallets (K5) `address` is
-  // the ogd1... device key, while the private-channel ID must be derived from the
-  // klv1... on-chain identity — that is what web and desktop hash, and what the
-  // protocol treats as the creator. Getting this wrong would give the same
-  // channel a different ID on mobile than on every other client.
-  const { client, signer, walletAddress, address } = useConnection();
-  const creatorAddress = walletAddress || address;
+  const { client, signer, address } = useConnection();
   const navigation = useNavigation();
   const [slug, setSlug] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -50,43 +47,40 @@ export default function CreateChannelScreen() {
   const [status, setStatus] = useState('');
 
   const handleCreate = async () => {
-    const trimmedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    // `_` removed from the allowed charset: validation.rs rejects it
+    // outright for a channel slug, so keeping it here just meant a
+    // user-visible "invalid slug" failure after already submitting — now
+    // matches web/desktop's charset exactly.
+    const trimmedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
     if (!trimmedSlug) {
       showAlert(t('error_generic'), t('channel_slug_required'));
       return;
     }
-    if (!client || !signer || !creatorAddress) {
+    if (!client || !signer || !address) {
       showAlert(t('error_generic'), t('wallet_connect'));
       return;
     }
 
     setCreating(true);
     try {
-      // The L2 ChannelCreate envelope carries a channel_id that the node
-      // requires; it is NOT assigned by the node. Where it comes from depends
-      // on the channel type, and must match web/desktop exactly or the same
-      // channel would get different IDs on different clients.
-      let channelId: number;
+      // The L2 ChannelCreate envelope carries a channel_id. For Public/
+      // Read-Public it's SC-assigned (fetched below); for Private,
+      // `client.createChannel` derives it itself when omitted — see the
+      // file-level doc comment for why that's no longer done here.
+      let channelId: number | undefined;
 
-      if (channelType === 2) {
-        // Private channels are L2-only — no SC call, no fee. The ID is derived
-        // locally from Keccak-256(creator + slug + timestamp), truncated to u64
-        // (per protocol spec).
-        setStatus(t('channel_create_deriving'));
-        const ts = Date.now();
-        const hash = keccak_256(new TextEncoder().encode(creatorAddress + trimmedSlug + ts));
-        const view = new DataView(hash.buffer, hash.byteOffset, hash.byteLength);
-        channelId = Number(view.getBigUint64(0) % BigInt(Number.MAX_SAFE_INTEGER));
-      } else {
+      if (channelType !== 2) {
         // Public / Read-Public are registered on-chain; the SC assigns the ID.
         setStatus(t('channel_create_onchain'));
         const txHash = await createChannelOnChain(trimmedSlug, channelType);
         setStatus(t('channel_create_confirming'));
         channelId = await getChannelIdFromTx(txHash, trimmedSlug);
+      } else {
+        setStatus(t('channel_create_deriving'));
       }
 
       setStatus(t('channel_create_publishing'));
-      await client.createChannel({
+      const resp = await client.createChannel({
         channelId,
         slug: trimmedSlug,
         channelType,
@@ -98,7 +92,7 @@ export default function CreateChannelScreen() {
         encryptionEnabled: true,
       });
 
-      await addJoinedChannel(channelId).catch(() => {});
+      await addJoinedChannel(resp.channel_id).catch(() => {});
 
       showAlert(t('channel_created'), `#${trimmedSlug}`, [
         { text: t('done'), onPress: () => navigation.goBack() },

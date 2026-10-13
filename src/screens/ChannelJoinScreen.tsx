@@ -7,14 +7,15 @@
  * switching nodes — mirroring the desktop ChannelJoinView flow.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { OgmaraClient, validateNodeUrl } from '@ogmara/sdk';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
-import { addJoinedChannel } from '../lib/joinedChannels';
+import { addJoinedChannelFor } from '../lib/joinedChannels';
 import { debugLog } from '../lib/debug';
+import { isSameAccount } from '../lib/accountGuard';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 import Button from '../components/Button';
@@ -32,6 +33,15 @@ export default function ChannelJoinScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client, nodeUrl, walletAddress } = useConnection();
+  // Wallet mirrored during render. NOTE: App.tsx remounts the whole tree keyed
+  // on `walletAddress`, so after a switch THIS (old) instance never re-renders
+  // and this ref keeps the OLD wallet — it does not by itself detect a switch.
+  // The guard is effectively carried by `client.address`, which
+  // `withSigner` changes IN PLACE on the shared client object (see
+  // lib/accountGuard.ts). Kept as a cheap second signal for any in-place
+  // wallet change that doesn't remount.
+  const walletAddressRef = useRef(walletAddress);
+  walletAddressRef.current = walletAddress;
 
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<any>(null);
@@ -69,7 +79,17 @@ export default function ChannelJoinScreen({ route, navigation }: Props) {
 
   const handleJoin = async () => {
     if (!client) return;
-    if (!walletAddress) { navigation.navigate('UserProfile', { address: '' }); return; }
+    // No signing key either counts as "no wallet": the account guard below
+    // needs a non-empty snapshot, and the join can't be signed without one.
+    if (!walletAddress || !client.address) { navigation.navigate('UserProfile', { address: '' }); return; }
+    // `withSigner` mutates THIS client object on an account switch and the
+    // remount doesn't stop this closure, so after every await re-check that
+    // the account (wallet + live signing key) is the one the join started as.
+    // Otherwise a switch during the federate round-trip would sign the
+    // private-channel ChannelJoin as the NEW account and add the channel to
+    // its joined set. Aborts silently: the screen belongs to a stale account.
+    const start = { wallet: walletAddress, signer: client.address };
+    const stillSame = () => isSameAccount(start, { wallet: walletAddressRef.current, signer: client.address });
     setJoining(true);
     setError('');
     try {
@@ -80,12 +100,17 @@ export default function ChannelJoinScreen({ route, navigation }: Props) {
         // On-node but invite names a host — re-federate to refresh metadata (best-effort).
         try { await client.federateChannel(channelId, node); } catch { /* best-effort */ }
       }
+      if (!stillSame()) return;
       try {
         await client.joinChannel(channelId);
       } catch {
         if (isPrivate) throw new Error(t('channel_federate_failed'));
       }
-      await addJoinedChannel(channelId).catch(() => {});
+      if (!stillSame()) return;
+      // Explicit account, not the active scope: a switch during this write's
+      // own internal await must not redirect it into the new account.
+      await addJoinedChannelFor(start.wallet!, channelId).catch(() => {});
+      if (!stillSame()) return;
       navigation.replace('ChannelMessages', { channelId, channelName });
     } catch (e) {
       debugLog('warn', `Channel join failed: ${e instanceof Error ? e.message : ''}`);

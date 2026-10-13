@@ -26,6 +26,22 @@ const MIGRATED_MARKER = 'ogmara.walletScope.migrated';
 let activeWallet: string | null = null;
 
 /**
+ * Bumped on EVERY cache reset — a real scope change in `setWalletScope` and the
+ * pre-activation `runWalletSwitchResets`. Async flows that write into the
+ * in-memory per-account caches (settings sync) capture it at start and refuse
+ * to write if it moved: comparing addresses alone misses an A→B→A round trip
+ * (and the pre-flip reset window, where the scope still reads A but A's caches
+ * were just emptied), after which "A" holds an unhydrated empty cache that a
+ * remote-merge would clobber the on-disk copy from.
+ */
+let scopeGeneration = 0;
+
+/** Current cache-reset generation (see `scopeGeneration`). */
+export function getScopeGeneration(): number {
+  return scopeGeneration;
+}
+
+/**
  * Point per-wallet storage at `address`, or clear it on sign-out.
  *
  * Must be called BEFORE any per-wallet read, so the boot path sets it as soon
@@ -55,6 +71,7 @@ export function registerWalletSwitchReset(fn: () => void): void {
  * unopenable blob. Cancel first, activate second.
  */
 export function runWalletSwitchResets(): void {
+  scopeGeneration++;
   for (const reset of switchResets) {
     try {
       reset();
@@ -81,6 +98,7 @@ export function setWalletScope(address: string | null): void {
   // it to the node. Harmless while the only callers were boot and sign-out;
   // fatal once accounts can be switched at runtime.
   if (changed) {
+    scopeGeneration++;
     for (const reset of switchResets) {
       try {
         reset();
@@ -236,9 +254,15 @@ export async function runWalletScopeMigrationOnce(): Promise<void> {
  * Read/write another account's namespace without switching scope.
  *
  * The account list has to show every account's label and display name at once;
- * `scopedGet` can only ever see the active one. Deliberately narrow — anything
- * that mutates the CURRENT account must go through `scopedSet` so it cannot
- * accidentally target the wrong namespace.
+ * `scopedGet` can only ever see the active one.
+ *
+ * Also used DELIBERATELY by async flows that captured their account at start
+ * and write after an `await` (the `*For` writers: `addJoinedChannelFor`,
+ * `addJoinedChannelsFor`, `unreadBaseline`). For those, the explicit address IS
+ * the safety property — `scopedSet` would resolve the scope at write time, so
+ * an account switch during the flow would redirect the write into the NEW
+ * account. Everything else that mutates the current account in a single
+ * synchronous step should keep using `scopedSet`.
  */
 export async function scopedGetFor(address: string, base: string): Promise<string | null> {
   if (!address) return null;

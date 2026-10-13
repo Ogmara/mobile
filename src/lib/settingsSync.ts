@@ -12,23 +12,40 @@ import { sha256 } from '@noble/hashes/sha256';
 import { gcm } from '@noble/ciphers/aes';
 import { randomBytes } from '@noble/ciphers/webcrypto';
 import { getSetting, setSetting } from './settings';
-import { getCryptoClient, walletAddress } from './cryptoEnv';
-import { vaultExportKey } from './vault';
+import { getCryptoClient } from './cryptoEnv';
+import { vaultExportKeyFor } from './vault';
+import { collectAndUploadSettings } from './settingsUpload';
 import { ensureChannelOrgLoaded, getChannelOrg, applyRemoteOrg } from './channelOrg';
-import { addJoinedChannels } from './joinedChannels';
+import { addJoinedChannelsFor } from './joinedChannels';
+import { captureAccountContext as captureSyncAccount } from './accountContext';
+import {
+  applyDecryptedSettings, type SettingsApplyDeps, CHANNEL_ORG_KEY, HIDDEN_DMS_KEY, TOPIC_GROUPS_KEY,
+} from './settingsApply';
 import { ensureHiddenDmsLoaded, getHiddenDms, applyRemoteHiddenDms } from './dmHide';
 import { ensureTopicGroupsLoaded, getTopicGroups, applyRemoteTopicGroups } from './topicGroups';
+
+// `captureSyncAccount` lives in accountContext.ts (shared with keyVault.ts).
+
+function applyDeps(syncKeys: readonly string[]): SettingsApplyDeps {
+  return {
+    syncKeys,
+    setSetting: (k, v) => setSetting(k as any, v),
+    ensureChannelOrgLoaded,
+    applyRemoteOrg,
+    addJoinedChannelsFor,
+    ensureHiddenDmsLoaded,
+    applyRemoteHiddenDms,
+    ensureTopicGroupsLoaded,
+    applyRemoteTopicGroups,
+  };
+}
 
 /** Settings keys that are synced across devices. */
 const SYNC_KEYS = ['theme', 'lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
 
-/** Object-valued synced setting (channel groups + custom ordering). Stored under
- *  its own key in the blob and applied via LWW merge, not the scalar setSetting path. */
-const CHANNEL_ORG_KEY = 'channelOrg';
-/** Hidden DM conversations (per-peer hide timestamp) — same object-valued pattern. */
-const HIDDEN_DMS_KEY = 'hiddenDms';
-/** Followed news hashtags + user-named subgroups — LWW by `updatedAt` on receipt. */
-const TOPIC_GROUPS_KEY = 'topicGroups';
+// Object-valued synced settings (channel groups + ordering, hidden DMs,
+// followed topics) — stored under their own keys in the blob and applied via
+// LWW/merge, not the scalar setSetting path. Keys live in settingsApply.ts.
 
 /** Highest `updatedAt` across the object-valued synced settings — the blob's
  *  cleartext "content last-edited at". Sent as `SettingsSyncData.updated_at` so
@@ -90,36 +107,15 @@ function deriveKey(hexKey: string): Uint8Array {
   return derived;
 }
 
-/** Collect current settings and encrypt them with AES-256-GCM. */
-export async function encryptSettings(): Promise<{
+type SyncPayload = {
   encrypted_settings: Uint8Array;
   nonce: Uint8Array;
   key_epoch: number;
   updated_at: number;
-}> {
-  const hexKey = await vaultExportKey();
-  if (!hexKey) throw new Error('Cannot export wallet key for encryption');
+};
 
-  const settings: Record<string, unknown> = {};
-  for (const key of SYNC_KEYS) {
-    settings[key] = await getSetting(key);
-  }
-  // Channel organization (groups + custom ordering) — an object value, carried
-  // with its own LWW `updatedAt` so the receiver can resolve multi-device edits.
-  // Must be hydrated first: if Settings is opened before the Chat tab ever
-  // mounts, the in-memory cache would still be the module-default emptyOrg(),
-  // and uploading it would silently wipe any real synced state.
-  await ensureChannelOrgLoaded();
-  settings[CHANNEL_ORG_KEY] = getChannelOrg();
-  // Hidden DM conversations — per-peer hide timestamps, merged by max() on receipt.
-  await ensureHiddenDmsLoaded();
-  settings[HIDDEN_DMS_KEY] = getHiddenDms();
-  // Followed news topics — hashtags + subgroups, LWW by `updatedAt` on receipt.
-  // Hydrate first for the same reason channelOrg does: an un-loaded cache is the
-  // module-default emptyTopicGroups() and uploading it would wipe synced state.
-  await ensureTopicGroupsLoaded();
-  settings[TOPIC_GROUPS_KEY] = getTopicGroups();
-
+/** Synchronous: derive the AES key, encrypt the collected settings, stamp `updated_at`. */
+function encryptCollected(hexKey: string, settings: Record<string, unknown>): SyncPayload {
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
   const key = deriveKey(hexKey);
   const nonce = randomBytes(12);
@@ -135,18 +131,36 @@ export async function encryptSettings(): Promise<{
     key_epoch: 0,
     // Cleartext LWW key for the node — the content's own edit time, NOT "now",
     // so re-uploading an unchanged copy to seed a fresh node can't jump ahead of
-    // a newer copy on another node. Caches were hydrated above.
+    // a newer copy on another node. Caches were hydrated by the collector.
     updated_at: syncedContentTimestamp(),
   };
 }
 
-/** Decrypt settings blob and apply to local storage. */
+/**
+ * Decrypt settings blob and apply to local storage.
+ *
+ * Account-safe: the account is captured BEFORE the key export, re-checked
+ * after it, and the apply loop re-checks after every await (see
+ * settingsApply.ts) — a switch mid-apply abandons the rest rather than writing
+ * one account's settings into another's namespace.
+ */
 export async function decryptAndApplySettings(
   encryptedSettings: number[],
   nonce: number[],
-): Promise<void> {
-  const hexKey = await vaultExportKey();
+  /** Account captured by the caller BEFORE it fetched this blob (see
+   *  `downloadSettings`); captured here when omitted. */
+  captured?: ReturnType<typeof captureSyncAccount>,
+): Promise<boolean> {
+  const { account, signer, stillValid } = captured ?? captureSyncAccount();
+  if (!account || !signer) throw new Error('No active account for settings sync');
+  // Switched since the caller captured (e.g. during its fetch): this blob is
+  // the PREVIOUS account's — decrypting it with the active key would just
+  // fail the GCM tag. Quiet no-op, not an error.
+  if (!stillValid()) return false;
+  // The CAPTURED account's own key — never "whoever is active".
+  const hexKey = await vaultExportKeyFor(signer);
   if (!hexKey) throw new Error('Cannot export wallet key for decryption');
+  if (!stillValid()) return false;
 
   const key = deriveKey(hexKey);
   const cipher = gcm(key, new Uint8Array(nonce));
@@ -165,41 +179,37 @@ export async function decryptAndApplySettings(
     throw new Error('Invalid settings format');
   }
 
-  for (const [k, v] of Object.entries(settings)) {
-    if (SYNC_KEYS.includes(k as any) && v !== null && v !== undefined) {
-      await setSetting(k as any, String(v));
-    }
-    // Channel organization: apply via LWW (only if the remote copy is newer) and
-    // auto-join any channel the remote org places, so a channel grouped on
-    // another device becomes visible here. Must hydrate the local cache first,
-    // otherwise the LWW comparison runs against the module-default emptyOrg()
-    // (updatedAt: 0) instead of this device's real on-disk state, and the
-    // remote copy would always "win" and clobber a not-yet-loaded local edit.
-    if (k === CHANNEL_ORG_KEY && v && typeof v === 'object') {
-      await ensureChannelOrgLoaded();
-      const placedIds = applyRemoteOrg(v);
-      if (placedIds.length) await addJoinedChannels(placedIds);
-    }
-    // Hidden DM conversations: per-peer max() merge (see dmHide.ts). Hydrate
-    // first for the same reason channelOrg does above.
-    if (k === HIDDEN_DMS_KEY && v && typeof v === 'object') {
-      await ensureHiddenDmsLoaded();
-      applyRemoteHiddenDms(v);
-    }
-    // Followed news topics: LWW by `updatedAt` (see topicGroups.ts). Hydrate
-    // first so the comparison runs against this device's real on-disk state.
-    if (k === TOPIC_GROUPS_KEY && v && typeof v === 'object') {
-      await ensureTopicGroupsLoaded();
-      applyRemoteTopicGroups(v);
-    }
-  }
+  return (await applyDecryptedSettings(settings, account, stillValid, applyDeps(SYNC_KEYS))) !== 'aborted';
 }
 
-/** Upload current settings to L2 node. */
-export async function uploadSettings(): Promise<void> {
-  const data = await encryptSettings();
-  const client = authedClient();
-  await client.syncSettings(data);
+/**
+ * Upload current settings to L2 node.
+ *
+ * Account-safe (see settingsUpload.ts): the account and its signing key are
+ * captured at entry, the key is exported for THAT account only
+ * (`vaultExportKeyFor`), and wallet + scope + reset generation + signer are
+ * re-checked after every await and immediately before the signed upload.
+ * Returns `false` quietly (nothing sent) if the account changed mid-flight.
+ */
+export async function uploadSettings(): Promise<boolean> {
+  const { account, signer, client, stillValid } = captureSyncAccount();
+  if (!account || !signer || !client) {
+    throw new Error('Not connected — sign in first');
+  }
+  return collectAndUploadSettings<SyncPayload>(stillValid, {
+    exportKey: () => vaultExportKeyFor(signer),
+    syncKeys: SYNC_KEYS,
+    getSetting: (k) => getSetting(k as any),
+    // Channel organization (groups + ordering, LWW `updatedAt`), hidden DMs
+    // (per-peer max), followed topics (LWW) — each hydrated before snapshot.
+    objects: [
+      { key: CHANNEL_ORG_KEY, ensureLoaded: ensureChannelOrgLoaded, get: getChannelOrg },
+      { key: HIDDEN_DMS_KEY, ensureLoaded: ensureHiddenDmsLoaded, get: getHiddenDms },
+      { key: TOPIC_GROUPS_KEY, ensureLoaded: ensureTopicGroupsLoaded, get: getTopicGroups },
+    ],
+    encrypt: encryptCollected,
+    send: (payload) => client.syncSettings(payload),
+  });
 }
 
 /**
@@ -222,31 +232,32 @@ export async function downloadSyncedObjects(): Promise<boolean> {
     // upload to the node under its key, linking the two accounts' interest
     // graphs server-side. That is exactly the unlinkability multi-account
     // exists to provide.
-    const forWallet = walletAddress();
+    const { account: forWallet, signer, client, stillValid } = captureSyncAccount();
+    if (!forWallet || !signer || !client) return false;
     // Hydrate the three caches up front so both the LWW comparison and any
     // re-seed upload run against this device's real on-disk state.
     await Promise.all([ensureChannelOrgLoaded(), ensureHiddenDmsLoaded(), ensureTopicGroupsLoaded()]);
+    if (!stillValid()) return false;
 
-    const client = authedClient();
     const resp = await client.getSettings();
+    if (!stillValid()) return false;
     if (!resp) {
       // Fresh node with nothing for this wallet. If THIS device holds real
       // synced state, seed the node once — it then gossips it to the mesh so
       // every node converges (l2-node 0.125.0+). Safe: the upload carries the
       // content's own `updated_at`, so a node that already has a newer copy
       // will LWW-drop this one.
-      if (syncedContentTimestamp() > 0) void uploadSettings();
+      if (stillValid() && syncedContentTimestamp() > 0) void uploadSettings().catch(() => {});
       return false;
     }
     const encrypted = (resp as any).encrypted_settings;
     const nonce = (resp as any).nonce;
     if (!Array.isArray(encrypted) || !Array.isArray(nonce)) return false;
 
-    const hexKey = await vaultExportKey();
+    // The CAPTURED account's own key (`vaultExportKeyFor`), re-checked after.
+    const hexKey = await vaultExportKeyFor(signer);
     if (!hexKey) return false;
-    // Re-check after the awaits above: the key just read belongs to whoever is
-    // active NOW, which may no longer be who this download was started for.
-    if (walletAddress() !== forWallet) return false;
+    if (!stillValid()) return false;
     const key = deriveKey(hexKey);
     const cipher = gcm(key, new Uint8Array(nonce));
     const plaintext = cipher.decrypt(new Uint8Array(encrypted));
@@ -255,30 +266,16 @@ export async function downloadSyncedObjects(): Promise<boolean> {
     const settings = JSON.parse(new TextDecoder().decode(plaintext));
     if (typeof settings !== 'object' || settings === null) return false;
 
-    // Final check before writing anything into the in-memory caches.
-    if (walletAddress() !== forWallet) return false;
-
-    let applied = false;
-    const org = settings[CHANNEL_ORG_KEY];
-    if (org && typeof org === 'object') {
-      const placedIds = applyRemoteOrg(org);
-      if (placedIds.length) await addJoinedChannels(placedIds);
-      applied = true;
-    }
-    const hidden = settings[HIDDEN_DMS_KEY];
-    if (hidden && typeof hidden === 'object') {
-      applyRemoteHiddenDms(hidden);
-      applied = true;
-    }
-    const topics = settings[TOPIC_GROUPS_KEY];
-    if (topics && typeof topics === 'object') {
-      applyRemoteTopicGroups(topics);
-      applied = true;
-    }
+    // Objects only (no scalar prefs): the apply re-checks the captured
+    // account after every await and before every write, and writes joined
+    // channels into the captured account explicitly (settingsApply.ts).
+    const result = await applyDecryptedSettings(settings, forWallet, stillValid, applyDeps([]));
+    if (result === 'aborted') return false;
+    const applied = result === 'applied';
     // This device's copy is strictly newer than the node's → push it up once so
     // this node — and, via its re-gossip, every other node — converges to it.
-    if (syncedContentTimestamp() > remoteContentTimestamp(settings)) {
-      void uploadSettings();
+    if (stillValid() && syncedContentTimestamp() > remoteContentTimestamp(settings)) {
+      void uploadSettings().catch(() => {});
     }
     return applied;
   } catch {
@@ -288,13 +285,22 @@ export async function downloadSyncedObjects(): Promise<boolean> {
 
 /** Download and apply settings from L2 node. Returns true if settings were applied. */
 export async function downloadSettings(): Promise<boolean> {
-  const client = authedClient();
+  // Capture BEFORE the fetch so the whole download — fetch, key export,
+  // decrypt, apply — is bound to one account. A switch during `getSettings()`
+  // used to decrypt account A's blob with B's key (GCM failure surfaced as an
+  // error alert); now it returns false quietly.
+  const captured = captureSyncAccount();
+  // Not connected at all is a real error for the manual action (throws);
+  // the captured client is the one the whole download is bound to.
+  authedClient();
+  const client = captured.client;
+  if (!captured.account || !client) return false;
   const resp = await client.getSettings();
+  if (!captured.stillValid()) return false;
   if (!resp) return false;
   const encrypted = (resp as any).encrypted_settings;
   const nonce = (resp as any).nonce;
   if (!Array.isArray(encrypted) || !Array.isArray(nonce)) return false;
   if (!encrypted.every((v: unknown) => typeof v === 'number') || !nonce.every((v: unknown) => typeof v === 'number')) return false;
-  await decryptAndApplySettings(encrypted, nonce);
-  return true;
+  return decryptAndApplySettings(encrypted, nonce, captured);
 }

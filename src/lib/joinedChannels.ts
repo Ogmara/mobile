@@ -5,7 +5,7 @@
  * appear after the user explicitly joins them via Search.
  */
 
-import { scopedGet, scopedSet } from './walletScope';
+import { scopedGet, scopedSet, scopedGetFor, scopedSetFor } from './walletScope';
 
 // Namespaced per wallet (walletScope.ts) — this is account state, and a
 // global key meant the previous account's data stayed on screen after a
@@ -17,6 +17,33 @@ export async function addJoinedChannel(channelId: number): Promise<void> {
   const ids = await loadJoinedChannels();
   ids.add(channelId);
   await scopedSet(STORAGE_KEY, JSON.stringify([...ids]));
+}
+
+/**
+ * Add a channel to a SPECIFIC account's joined set (explicit address, not the
+ * active scope). For async flows that capture the account at start: between a
+ * caller's account check and `addJoinedChannel`'s own internal await, a switch
+ * would otherwise land the write in the NEW account's namespace.
+ */
+export async function addJoinedChannelFor(address: string, channelId: number): Promise<void> {
+  await addJoinedChannelsFor(address, [channelId]);
+}
+
+/**
+ * Add multiple channels to a SPECIFIC account's joined set in one
+ * read-modify-write (explicit address — see `addJoinedChannelFor`). Used by
+ * settings sync, which applies a blob decrypted for a captured account.
+ */
+export async function addJoinedChannelsFor(address: string, channelIds: number[]): Promise<void> {
+  if (!address || !channelIds.length) return;
+  let ids = new Set<number>();
+  try {
+    const raw = await scopedGetFor(address, STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(arr)) ids = new Set(arr);
+  } catch { /* treat as empty */ }
+  for (const id of channelIds) ids.add(id);
+  await scopedSetFor(address, STORAGE_KEY, JSON.stringify([...ids]));
 }
 
 /** Add multiple channels to the joined set in a single read-modify-write. */

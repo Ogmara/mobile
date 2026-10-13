@@ -41,7 +41,9 @@ import {
 } from '../lib/channelCrypto';
 import { chatErrorKey } from '../lib/chatErrors';
 import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
-import { resolveIsEncrypted } from '../lib/channelEncryption';
+import {
+  resolveIsEncrypted, shouldAutoJoinEncryptedChannel, isChanMetaResolvedFor, isChannelRecordUsable, type ChanMetaKey,
+} from '../lib/channelEncryption';
 import { CHANNEL_TYPE_PRIVATE, canPost, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
@@ -166,9 +168,18 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [chanMeta, setChanMeta] = useState<{
     channelType: number; encryptionEnabled: boolean; keyEpochFloor: number; isMod: boolean; creator: string;
   }>({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false, creator: '' });
-  // Whether `chanMeta` reflects a successful fetch for the CURRENT channelId (reset
-  // on every channel switch — see the effect below).
-  const [chanMetaResolved, setChanMetaResolved] = useState(false);
+  // Which (client, channelId) `chanMeta` was successfully fetched FOR, or null.
+  // `chanMetaResolved` is DERIVED from it rather than stored as a bare boolean:
+  // the metadata effect below resets the state on a channel / node switch, but
+  // that reset only lands on the NEXT render — for the one commit in which
+  // `channelId` (or `client`) has already changed, a bare `true` would still
+  // describe the PREVIOUS channel, and every effect running in that same commit
+  // (notably auto-join) would act on the new channel id with the old channel's
+  // type/encryption flags. Channel ids are per-node, hence `client` too; and
+  // `isMod` is per-account, hence `address` — a record fetched for a previous
+  // account must never count as resolved for the next one.
+  const [chanMetaFor, setChanMetaFor] = useState<ChanMetaKey | null>(null);
+  const chanMetaResolved = isChanMetaResolvedFor(chanMetaFor, { client, channelId, address: myAddress ?? null });
   const isPrivate = chanMeta.channelType === CHANNEL_TYPE_PRIVATE;
   // FAILS CLOSED (2026-08-02, see channelEncryption.ts) — mirrors the web/
   // desktop fix for the same bug (an image attached to a private channel
@@ -326,19 +337,22 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     return () => { cancelled = true; };
   }, [channelId, nodeUrl]);
 
-  // Mark channel read on enter
+  // Mark channel read on enter. Gated on the channel record having resolved for
+  // THIS channel: a signed write keyed on a channel id the node can't confirm
+  // (unknown / inaccessible channel, failed detail fetch) has no business being
+  // sent. Fires once the record lands, not on the raw route param.
   useEffect(() => {
-    if (client && signer) {
+    if (client && signer && chanMetaResolved) {
       client.markChannelRead(channelId).catch(() => {});
     }
-  }, [client, signer, channelId]);
+  }, [client, signer, channelId, chanMetaResolved]);
 
   // Load channel encryption metadata + my role (gates encrypt-on-send + key seeding).
   useEffect(() => {
     if (!client) return;
     // New channel (or first mount): we don't yet know its encryption state —
     // isEncrypted's fail-closed guard needs this false until proven otherwise.
-    setChanMetaResolved(false);
+    setChanMetaFor(null);
     setChanMeta({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false, creator: '' });
     let cancelled = false;
     (async () => {
@@ -360,22 +374,24 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
             : Promise.resolve({ members: [] }),
         ]);
         if (cancelled) return;
-        const ch = (detail as any)?.channel;
-        // A 200 response with no `channel` field is, for this purpose, the
-        // same failure as a rejected fetch — fall through to the outer
-        // `catch`'s fail-closed behavior rather than proceeding with
-        // `?? 0`/`?? ''` defaults and marking this resolved.
-        if (!ch) throw new Error('getChannelDetail returned no channel');
+        // A 200 response with no `channel`, a non-number `channel_type`, the
+        // node's `restricted` non-member summary, or a record for a different
+        // channel is, for this purpose, the same failure as a rejected fetch —
+        // fall through to the outer `catch`'s fail-closed behavior rather than
+        // defaulting the type to 0 (Public) and marking this resolved (spec 06
+        // §6.10 rules 3/5).
+        if (!isChannelRecordUsable(detail, channelId)) throw new Error('channel record not usable');
+        const ch = (detail as any).channel;
         const role = (membersResp.members as any[]).find((m) => m.address === myAddress)?.role;
         const isMod = role === 'moderator' || ch?.creator === myAddress;
         setChanMeta({
-          channelType: ch?.channel_type ?? 0,
+          channelType: ch.channel_type,
           encryptionEnabled: ch?.encryption_enabled === true,
           keyEpochFloor: ch?.key_epoch_floor ?? 0,
           isMod,
           creator: ch?.creator ?? '',
         });
-        setChanMetaResolved(true);
+        setChanMetaFor({ client, channelId, address: myAddress ?? null });
       } catch {
         // FAIL CLOSED: do NOT mark resolved on failure. isEncrypted stays true
         // for the rest of this mount instead of falling back to the
@@ -389,12 +405,27 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // P4: reading/posting in an encrypted PUBLIC channel requires membership (the node
   // only wraps the epoch key to members; anyone may join permissionlessly). Ensure
   // membership once. Private channels use the normal invite/join flow.
-  const autoJoinedRef = useRef(false);
+  //
+  // Requires POSITIVE evidence from the fetched channel record (see
+  // `shouldAutoJoinEncryptedChannel`) — NOT the fail-closed `isEncrypted`, which
+  // reads `true` while unresolved and, combined with the default
+  // `channelType: 0`, used to auto-join EVERY channel (private ones included,
+  // which the node accepts and grants real membership + key cover for) during
+  // the metadata round-trip or forever after a failed fetch.
+  //
+  // Tracked per `${nodeUrl}|${myAddress}|${channelId}`: the old single boolean
+  // was set by the first channel and never reset, so every later encrypted
+  // channel opened on the same screen instance was never joined. An entry is
+  // removed on failure so a later open can retry.
+  const autoJoinedRef = useRef<Set<string>>(new Set());
+  const shouldAutoJoin = shouldAutoJoinEncryptedChannel(chanMetaResolved, chanMeta.encryptionEnabled, isPrivate);
   useEffect(() => {
-    if (!client || !signer || !isEncrypted || isPrivate || autoJoinedRef.current) return;
-    autoJoinedRef.current = true;
-    client.joinChannel(channelId).catch(() => { autoJoinedRef.current = false; });
-  }, [client, signer, isEncrypted, isPrivate, channelId]);
+    if (!client || !signer || !myAddress || !shouldAutoJoin) return;
+    const key = `${nodeUrl}|${myAddress}|${channelId}`;
+    if (autoJoinedRef.current.has(key)) return;
+    autoJoinedRef.current.add(key);
+    client.joinChannel(channelId).catch(() => { autoJoinedRef.current.delete(key); });
+  }, [client, signer, myAddress, nodeUrl, shouldAutoJoin, channelId]);
 
   // Union of the live layer (`messages` — fetched + optimistic + WS-applied)
   // and the cache layer (`cachedMessages` — already reconciled against the
@@ -949,6 +980,15 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     command: string,
   ) => {
     if (!client) throw new Error('not connected');
+    // Same guard as `handleSend`: while the channel record is unresolved,
+    // `isPrivate` reads false from the placeholder `channelType: 0`, so
+    // `canEstablishKey` would be `true` and `encFloor` 0 — letting a non-mod
+    // seed a private channel's epoch key, or send below its key floor. Also
+    // refuse a press whose origin isn't the channel the resolved record is
+    // for (the flags below describe THIS channel only).
+    if (!chanMetaResolved || origin.channelId !== channelId) {
+      throw new Error(t('chat_channel_info_loading'));
+    }
     if (isEncrypted) {
       const built = await buildEncryptedChannelMsg(origin.channelId, canEstablishKey, command, {
         replyTo: origin.msgId, mentions: [origin.author], viaButton: true,
@@ -960,7 +1000,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       return;
     }
     await client.pressButton(origin, command);
-  }, [client, isEncrypted, canEstablishKey, encFloor, t]);
+  }, [client, isEncrypted, canEstablishKey, encFloor, t, chanMetaResolved, channelId]);
 
   const handleReply = useCallback((msg: ExtendedEnvelope) => {
     const d = decodedRef.current.get(chanCacheId(msg));

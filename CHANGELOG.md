@@ -5,6 +5,214 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.0] - 2026-10-12
+
+### Security
+
+- **Encrypted-channel auto-join now requires positive evidence.**
+  `ChannelMessagesScreen` auto-joined whenever `isEncrypted && !isPrivate`
+  — but `isEncrypted` deliberately fails CLOSED (`true`) until the channel
+  record is fetched, and `isPrivate` was computed from the placeholder
+  `channelType: 0`, so the predicate was `true` for EVERY channel during the
+  metadata round-trip and forever after a failed detail fetch. The node
+  accepts a join for a channel it doesn't know and for a private channel
+  (granting real membership + key cover), so opening a private channel
+  could silently self-join it. New pure `shouldAutoJoinEncryptedChannel`
+  (`lib/channelEncryption.ts`) joins only when the record resolved, says
+  `encryption_enabled`, and is not private; the fail-closed `isEncrypted`
+  is unchanged for confidentiality decisions (encrypt-on-send, media).
+- **Channel-metadata "resolved" is now bound to the channel it was fetched
+  for.** It was a bare boolean, so for the one commit after a channel /
+  node switch it still described the PREVIOUS channel and effects in that
+  commit could act on the new channel id with the old channel's flags. It
+  is now derived from the `(client, channelId, account)` the record was
+  fetched for (pure `isChanMetaResolvedFor`), so a record fetched for a
+  previous node, channel or account never counts as resolved.
+- **Message-button presses are refused until the channel record resolves**
+  (same guard and `chat_channel_info_loading` notice as text send). While
+  unresolved, `isPrivate` read `false` from the placeholder type, so
+  `canEstablishKey` was `true` and the key floor `0` — a press could let a
+  non-moderator seed a private channel's epoch key or send below its key
+  floor. A press whose origin channel isn't the open channel is refused too.
+- **Auto-join is tracked per `node|account|channel`** instead of one
+  screen-wide boolean that was never reset (every later encrypted channel
+  on the same screen instance was never joined); a failed join is removed
+  from the set so a later open retries.
+- **Mark-read on channel open is gated on the resolved channel record**,
+  so no signed read-cursor write is sent for a channel id the node could
+  not confirm.
+- **Async join / create flows no longer act as an account switched to
+  mid-flow.** `ConnectionContext.switchAccount` calls `client.withSigner`,
+  which mutates the SAME client object, and the App-level remount doesn't
+  stop an in-flight closure. So a switch during `ChannelJoinScreen`'s
+  federate round-trip signed the private-channel `ChannelJoin` as the NEW
+  account and added the channel to its joined set; `CreateChannelScreen`
+  could likewise publish the L2 `ChannelCreate` (after the long on-chain
+  confirmation) as the new account; and `ChatScreen`'s joined-set seeding
+  could write the previous account's private channels into the new
+  account's set. Each flow now snapshots `{wallet, signing key}` at start
+  and silently aborts after every await unless both are unchanged (pure,
+  tested `lib/accountGuard.ts`; the signing key is compared to its own
+  start value so K5 device-key accounts work). Joined-set writes in these
+  flows target the starting account explicitly
+  (`addJoinedChannelFor`), so a switch during the write's own internal
+  await can't redirect it either.
+- **Settings sync can no longer apply one account's synced data into
+  another's.** `downloadSyncedObjects` checked the wallet once, then awaited
+  `addJoinedChannels` (which resolves the ACTIVE scope internally) and wrote
+  hidden DMs / followed topics into whatever caches were live — after a
+  switch, the previous account's whole joined set, hidden-DM peers and
+  topics landed in the new account's freshly reset caches, persisted under
+  it, and were later uploaded under its key (linking the two accounts
+  server-side). `decryptAndApplySettings` (manual download) had no re-check
+  at all. Both now go through the pure, tested `lib/settingsApply.ts`: the
+  account is captured at start and re-checked — crypto-env wallet, storage
+  scope AND a new cache-reset generation counter (`walletScope.ts`, which
+  also catches an A→B→A round trip and the pre-activation reset window) —
+  after every await and immediately before every write; the first failure
+  abandons the rest. Joined channels are written to the captured account
+  explicitly (`addJoinedChannelsFor`). The manual download now reports
+  `false` when it aborted.
+- **Settings UPLOAD is now account-bound too** (round 3 only covered
+  download/apply). An upload already running when the user switched
+  accounts exported the key first (`vaultExportKey()` — the ACTIVE
+  account's, which `vaultActivate` flips before scope/signer follow), then
+  awaited ~8 reads and cache hydrations, then signed `syncSettings` with
+  whatever signer the shared client held: A's data sealed with B's key and
+  posted as A (undecryptable on A's devices), B's data under A's key, mixed
+  blobs, or freshly reset EMPTY caches uploaded over real synced state.
+  `uploadSettings` now captures wallet + scope + reset generation + the
+  client and its signing key at entry, exports the key of THAT account only
+  (`vaultExportKeyFor(signer)`), and re-checks after every await and
+  immediately before the signed upload (pure, tested
+  `lib/settingsUpload.ts`); a mismatch returns `false` with nothing sent.
+  Both download paths also use `vaultExportKeyFor` and the captured client.
+  `vaultExportKeyFor` (also used by the pre-removal backup gate) now
+  verifies the key it returns derives the requested address. The manual
+  "Upload" button only reports success when something was actually sent.
+  (Signer compared to its own start value, so K5 device-key accounts keep
+  syncing.)
+- **E2E key-recovery vault can no longer use one account's backup key for
+  another.** `ensureBackupKey` de-duplicated the (async, signature-based)
+  derivation with ONE global in-flight promise, so a caller for wallet B
+  could get A's derivation back, and `clearKeyVaultSession` didn't clear
+  it. Restore never checked whose key it got: B's restore could decrypt
+  with A's key, fail, go terminal `done`, and the pending backup would then
+  overwrite B's remote vault with a partial keyring. Now (pure, tested
+  `lib/keyVaultCore.ts`): a per-wallet `BackupKeyCache` never returns a
+  cached or in-flight key of another wallet and `clear()` invalidates
+  in-flight derivations; restore and publish bind to the full account
+  context (wallet + storage scope + reset generation + client + signer,
+  shared `lib/accountContext.ts`) and re-check after every await and right
+  before decrypt / seal / signed upload; a key for another wallet, a
+  zeroed (cleared) key, or any failure caused by a switch ends `idle` —
+  never terminal `done`; a restore from a cleared session no longer writes
+  the session state or fires the pending backup for the next account.
+- **Manual settings download is bound to one account end-to-end.**
+  `downloadSettings` fetched the blob BEFORE capturing the account, so a
+  switch during `getSettings()` decrypted account A's blob with B's key
+  (the AES-GCM tag check failed — nothing was corrupted — and the user saw
+  an error alert). The account is now captured before the fetch and
+  carried through key export, decrypt and apply; a switch at any point
+  returns `false` quietly instead of raising an error.
+- **Channel metadata only counts as resolved for a usable record**
+  (spec 06 §6.10 rules 3/5, parity with web/desktop): a missing
+  `channel`, a non-number `channel_type`, the node's `restricted: true`
+  non-member summary, or a record naming a different channel is treated
+  like a failed fetch (fail closed). `channel_type` is no longer defaulted
+  to 0 (Public) from the record — an unknown type is not evidence of a
+  public channel. Pure, tested `isChannelRecordUsable`.
+- **Dependency audit (report only, no changes this release):** `npm audit`
+  now lists 36 findings (1 critical, 22 high, 13 moderate). All are in the
+  `expo` / `react-native` / `metro` / `jest` build & dev-tooling tree, not
+  in shipped JS. New since 0.54.0's 35: `shell-quote` 1.8.4–1.10.0
+  (GHSA-pqg4-j6r4-53mv, critical, `quote()` command injection), via
+  `react-native` → `react-devtools-core`, which only loads in dev builds;
+  `npm audit` lists a non-breaking fix. Not applied here:
+  per the dependency-security rule, Expo/Metro fixes are only applied in a
+  session where the APK build can be verified.
+
+### Fixed
+
+- **Channel unread badges never rendered.** `ChatScreen` read
+  `resp.channels[].unread_count`, but the node / SDK (`getUnreadCounts()`)
+  return `{ unread: { "<channelId>": n }, mentions: {...} }` maps, so the
+  unread map was always empty. Parsing moved to the pure, tested
+  `lib/unreadCounts.ts` (string keys → numeric ids; malformed keys/counts
+  dropped; null-prototype result). `mentions` is not consumed — the
+  channel list has no mention indicator.
+- **Fresh accounts no longer open to a "99+" on the default channel.** Now
+  that badges render, a brand-new account (no read cursor on the node) saw
+  the default channel's whole history as unread. The create-new paths
+  only (`generateWallet`, `createAccount` — never import / restore /
+  add-from-key) arm a per-account flag (`lib/unreadBaseline.ts`);
+  `ChatScreen` consumes it after the first live channel list by marking
+  the default channel read, clearing it only once that succeeded. Each
+  step re-checks that the effect run is still current (the account-switch
+  remount cancels it) and that the client's live signing key is unchanged, so a
+  run spanning an account switch never marks read as the wrong signer or
+  clears another account's flag.
+
+- **Channel creation interrupted by an account switch now says so.** The
+  guard still never signs the L2 `ChannelCreate` as the account switched
+  to, but instead of a silent abort it shows `channel_create_interrupted`
+  (all 7 locales): for Public/Read-Public, that the on-chain registration
+  was completed and paid for by the previous account and where to find /
+  redo it; for Private, that nothing was created. A create that completed
+  is added to the STARTING account's joined set even if a switch lands
+  during that write.
+
+### Known limitations
+
+- The channel detail fetch is **not retried within a mount**: after a
+  failure the channel stays "unresolved" (send, attach, button presses,
+  auto-join and mark-read stay blocked, fail-closed) until it is reopened.
+- `npm audit` lists 36 findings including a critical `shell-quote`
+  (GHSA-pqg4-j6r4-53mv), dev-only via `react-native` →
+  `react-devtools-core`. A non-breaking fix is available but deferred
+  until an APK build can be tested in the same session.
+- A joined-channel write for the starting account that lands after that
+  account was REMOVED mid-flow can leave an orphan
+  `ogmara_joined_channels::<addr>` key. Harmless (the vault recovery scan
+  only adopts an address whose key slot still exists) and not cheaply
+  preventable: the vault index is not a reliable existence check for
+  K5/legacy accounts.
+- A debounced settings upload interrupted by an account switch sends
+  nothing; that account's newer local copy is pushed on its next edit, or
+  re-seeded by `downloadSyncedObjects` (App.tsx, on connect / account
+  activation and on a `settings_changed` nudge) when the local copy is
+  newer than the node's.
+- A baseline flag whose mark-read never succeeds (or whose run was
+  interrupted by an account switch) stays pending and is applied on that
+  account's next channel-list load.
+
+### Tests
+
+- `channelEncryption.test.ts`: full `shouldAutoJoinEncryptedChannel`
+  truth-table plus the exact unresolved-defaults regression.
+- New `unreadCounts.test.ts`: real wire shape, legacy shape yields
+  nothing, malformed input, `__proto__` key.
+- `channelEncryption.test.ts` also covers `isChanMetaResolvedFor`
+  (channel / node / account switch) and `isChannelRecordUsable`
+  (restricted, untyped, wrong-id records).
+- New `accountGuard.test.ts`: K5 signer≠wallet, cleared values, and a
+  switch landing mid-await with the client's signer swapped in place.
+- New `settingsUpload.test.ts`: the active account flips inside each
+  awaited upload step in turn → nothing uploaded; switch before start →
+  key never exported; no-switch control uploads A's data, A's key, signed
+  as A.
+- New `keyVaultCore.test.ts`: in-flight/cached key never crosses
+  wallets, `clear()` mid-derivation, synchronous derive failure; restore
+  and publish with a switch at each await, a foreign-wallet key, a zeroed
+  key, and no-switch controls.
+- `accountGuard.test.ts`: `isAccountContextValid` for built-in AND K5
+  (scope = external wallet, signer = device key), drift and inconsistent
+  starts. `settingsUpload.test.ts`: negative control — the same harness
+  shows a collector without the re-checks leaks.
+- New `settingsApply.test.ts`: mutation-style — the active account flips
+  inside each awaited step in turn; asserts nothing is ever written under
+  the other account, plus a no-switch control that applies everything.
+
 ## [0.54.0] - 2026-10-06
 
 ### Security

@@ -32,6 +32,7 @@ import {
   scopedSetFor,
   scopedGetFor,
 } from '../lib/walletScope';
+import { markUnreadBaselinePending } from '../lib/unreadBaseline';
 import { setCryptoEnv, setCryptoClient, clearCryptoEnv } from '../lib/cryptoEnv';
 import { setContractAddress } from '../lib/kleverTx';
 import { ensureDeviceEncBinding, wipeDeviceEncKey } from '../lib/deviceEnc';
@@ -602,8 +603,15 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
     const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-    return addAccount(hex);
-  }, [addAccount]);
+    // Inlined `addAccount` so the fresh-account unread baseline flag (see
+    // lib/unreadBaseline.ts) is written BEFORE `switchAccount` remounts the
+    // tree — ChatScreen consumes it on its first channel list. Create path
+    // ONLY: `addAccount` (import from an existing key) must never set it.
+    const addr = await vaultAddAccount(hex);
+    await markUnreadBaselinePending(addr).catch(() => {});
+    await switchAccount(addr);
+    return addr;
+  }, [switchAccount]);
 
   /**
    * Permanently remove one account from this device.
@@ -651,6 +659,10 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   const generateWallet = useCallback(async () => {
     const addr = await vaultGenerate();
+    // Brand-new key, so no read cursors exist on the node: arm the one-shot
+    // unread baseline (lib/unreadBaseline.ts) before the state updates below
+    // remount ChatScreen. Not set by `setWallet` (import) or restore.
+    await markUnreadBaselinePending(addr).catch(() => {});
     const s = vaultGetSigner();
     // A brand-new account starts with an empty namespace — nothing to migrate.
     setWalletScope(addr);

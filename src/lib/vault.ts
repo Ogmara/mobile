@@ -262,10 +262,29 @@ export async function vaultRemoveAccount(addr: string): Promise<void> {
   }
 }
 
-/** Export a specific account's key, for the pre-removal backup gate. */
+/**
+ * Export the private key of ONE SPECIFIC account — never "whoever is active".
+ *
+ * Used by the pre-removal backup gate and by background flows that captured
+ * their account at start (settings sync): `vaultExportKey()` reads
+ * `activeAddress`, which `vaultActivate` flips mid-switch BEFORE the storage
+ * scope / signer follow, so a flow resuming in that window would get the NEW
+ * account's key for the OLD account's data. The returned key is verified to
+ * derive `addr` (one ed25519 derivation), so a mislabelled slot can never hand
+ * back another account's key. Returns null if `addr` has no readable raw key
+ * here (e.g. PIN-encrypted and locked). Same SECURITY contract as
+ * `vaultExportKey`: never log or display the result outside a warned export.
+ */
 export async function vaultExportKeyFor(addr: string): Promise<string | null> {
   await vaultMigrationsReady();
-  return readKeyFor(addr);
+  if (!isValidAddress(addr)) return null;
+  const hex = await readKeyFor(addr);
+  if (!hex) return null;
+  try {
+    return (await WalletSigner.fromHex(hex)).address === addr ? hex : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

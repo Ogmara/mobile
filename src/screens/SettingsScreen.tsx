@@ -493,8 +493,8 @@ export default function SettingsScreen() {
               onPress={async () => {
                 setSyncing(true);
                 try {
-                  await uploadSettings();
-                  showAlert(t('settings_sync'), t('sync_upload_success'));
+                  // `false` = account switched mid-upload; nothing was sent.
+                  if (await uploadSettings()) showAlert(t('settings_sync'), t('sync_upload_success'));
                 } catch (e) {
                   showAlert(t('error_generic'), e instanceof Error ? e.message : '');
                 } finally { setSyncing(false); }

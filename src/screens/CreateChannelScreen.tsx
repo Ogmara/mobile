@@ -13,7 +13,7 @@
  * Uses SDK client.createChannel() for clean API interaction.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -29,7 +29,8 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
 import { createChannelOnChain, getChannelIdFromTx } from '../lib/kleverTx';
-import { addJoinedChannel } from '../lib/joinedChannels';
+import { addJoinedChannelFor } from '../lib/joinedChannels';
+import { isSameAccount } from '../lib/accountGuard';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
 import SegmentedControl from '../components/SegmentedControl';
@@ -37,7 +38,16 @@ import SegmentedControl from '../components/SegmentedControl';
 export default function CreateChannelScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, signer, address } = useConnection();
+  const { client, signer, address, walletAddress } = useConnection();
+  // Wallet mirrored during render. NOTE: App.tsx remounts the whole tree keyed
+  // on `walletAddress`, so after a switch THIS (old) instance never re-renders
+  // and this ref keeps the OLD wallet — it does not by itself detect a switch.
+  // The guard is effectively carried by `client.address`, which
+  // `withSigner` changes IN PLACE on the shared client object (see
+  // lib/accountGuard.ts). Kept as a cheap second signal for any in-place
+  // wallet change that doesn't remount.
+  const walletAddressRef = useRef(walletAddress);
+  walletAddressRef.current = walletAddress;
   const navigation = useNavigation();
   const [slug, setSlug] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -56,10 +66,21 @@ export default function CreateChannelScreen() {
       showAlert(t('error_generic'), t('channel_slug_required'));
       return;
     }
-    if (!client || !signer || !address) {
+    // `walletAddress` / `client.address` are required up front so the
+    // account-switch guard below can never abort AFTER the on-chain step for
+    // a reason that was already true before it.
+    if (!client || !signer || !address || !walletAddress || !client.address) {
       showAlert(t('error_generic'), t('wallet_connect'));
       return;
     }
+
+    // Account-switch guard (lib/accountGuard.ts): the on-chain registration
+    // and its confirmation poll are long awaits, and `withSigner` mutates
+    // THIS client on a switch — without the re-checks below, the L2
+    // ChannelCreate would be signed as the NEW account (and the channel
+    // added to its joined set) for a channel the OLD account registered.
+    const start = { wallet: walletAddress, signer: client.address };
+    const stillSame = () => isSameAccount(start, { wallet: walletAddressRef.current, signer: client.address });
 
     setCreating(true);
     try {
@@ -79,6 +100,17 @@ export default function CreateChannelScreen() {
         setStatus(t('channel_create_deriving'));
       }
 
+      if (!stillSame()) {
+        // Never sign the L2 ChannelCreate as the account switched TO — but
+        // tell the user: for Public/Read-Public the previous account has
+        // already registered (and paid for) the channel on-chain.
+        debugLog('warn', 'Channel creation aborted: account switched mid-flow');
+        showAlert(
+          t('channel_create_interrupted'),
+          t(channelType !== 2 ? 'channel_create_interrupted_onchain' : 'channel_create_interrupted_private'),
+        );
+        return;
+      }
       setStatus(t('channel_create_publishing'));
       const resp = await client.createChannel({
         channelId,
@@ -92,7 +124,13 @@ export default function CreateChannelScreen() {
         encryptionEnabled: true,
       });
 
-      await addJoinedChannel(resp.channel_id).catch(() => {});
+      // Explicit account, not the active scope (see addJoinedChannelFor), so
+      // this is correct even if a switch lands now: the channel was created
+      // by — and belongs in the joined set of — the starting account.
+      await addJoinedChannelFor(start.wallet!, resp.channel_id).catch(() => {});
+      // Created successfully under the starting account; if the user has
+      // since switched, don't pop a success dialog over the other account.
+      if (!stillSame()) return;
 
       showAlert(t('channel_created'), `#${trimmedSlug}`, [
         { text: t('done'), onPress: () => navigation.goBack() },

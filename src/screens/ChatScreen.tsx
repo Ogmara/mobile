@@ -8,7 +8,7 @@
  * group, reorder, leave, delete).
  */
 
-import React, { useCallback, useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -25,7 +25,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
-import { loadJoinedChannels, addJoinedChannel, removeJoinedChannel, isJoinedStorageInitialized } from '../lib/joinedChannels';
+import { loadJoinedChannels, addJoinedChannelFor, removeJoinedChannel, isJoinedStorageInitialized } from '../lib/joinedChannels';
+import { isSameAccount } from '../lib/accountGuard';
 import {
   ensureChannelOrgLoaded, ensureCollapsedStateLoaded, getChannelOrg, resolveChannelLayout,
   createGroup, renameGroup, deleteGroup, moveGroup, moveChannel, assignChannel, clearPlacement,
@@ -38,6 +39,8 @@ import ConfirmModal from '../components/ConfirmModal';
 import type { Channel } from '@ogmara/sdk';
 import type { ChatStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
+import { parseUnreadCounts } from '../lib/unreadCounts';
+import { isUnreadBaselinePending, clearUnreadBaselinePending } from '../lib/unreadBaseline';
 import { clearCachedMessages } from '../lib/messageCache';
 
 type NavProp = NativeStackNavigationProp<ChatStackParamList, 'ChannelList'>;
@@ -58,7 +61,7 @@ type Section = { key: string; groupId: string | null; collapseId: string; title:
 export default function ChatScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { client, status, signer, address: myAddress, nodeUrl } = useConnection();
+  const { client, status, signer, address: myAddress, nodeUrl, walletAddress } = useConnection();
   const navigation = useNavigation<NavProp>();
 
   const { data, refreshing, onRefresh } = useApi(
@@ -79,32 +82,59 @@ export default function ChatScreen() {
   // --- Joined-channel tracking (AsyncStorage via lib/joinedChannels) ---
   const [joinedIds, setJoinedIds] = useState<Set<number>>(new Set());
 
-  // Load joined IDs and sync with API channel list
+  // Wallet mirrored during render. NOTE: App.tsx remounts the whole tree keyed
+  // on `walletAddress`, so after a switch THIS (old) instance never re-renders
+  // and this ref keeps the OLD wallet — it does not by itself detect a switch.
+  // The guard is effectively carried by `client.address`, which
+  // `withSigner` changes IN PLACE on the shared client object (see
+  // lib/accountGuard.ts). Kept as a cheap second signal for any in-place
+  // wallet change that doesn't remount.
+  const walletAddressRef = useRef(walletAddress);
+  walletAddressRef.current = walletAddress;
+
+  // Load joined IDs and sync with API channel list.
+  //
+  // Account-switch guard (lib/accountGuard.ts): `data` was fetched as the
+  // account live when this run started — its private channels are THAT
+  // account's. The App-level remount doesn't stop this in-flight closure, so
+  // every write targets the starting account explicitly and the run stops as
+  // soon as the account (or the effect) is no longer current; otherwise a
+  // switch mid-run would seed the previous account's private channels into
+  // the new account's joined set.
   useEffect(() => {
-    if (!data?.channels?.length) return;
+    if (!data?.channels?.length || !client) return;
+    let cancelled = false;
+    const start = { wallet: walletAddress, signer: client.address };
+    const stillSame = () => !cancelled
+      && isSameAccount(start, { wallet: walletAddressRef.current, signer: client.address });
     (async () => {
+      const acct = start.wallet;
+      if (!acct || !stillSame()) return;
       const initialized = await isJoinedStorageInitialized();
+      if (!stillSame()) return;
       if (initialized) {
         // Already initialized — load stored IDs, auto-add private channels
         const stored = await loadJoinedChannels();
         for (const ch of data.channels) {
           if (ch.channel_type === 2 && !stored.has(ch.channel_id)) {
-            await addJoinedChannel(ch.channel_id);
+            if (!stillSame()) return;
+            await addJoinedChannelFor(acct, ch.channel_id);
             stored.add(ch.channel_id);
           }
         }
-        setJoinedIds(new Set(stored));
+        if (stillSame()) setJoinedIds(new Set(stored));
       } else {
         // First-time: only seed the default "ogmara" channel.
         // If default channel not found, don't persist so seeding retries next load.
         const defaultCh = data.channels.find((ch: Channel) => ch.slug === DEFAULT_CHANNEL_SLUG);
         if (defaultCh) {
-          await addJoinedChannel(defaultCh.channel_id);
-          setJoinedIds(new Set([defaultCh.channel_id]));
+          await addJoinedChannelFor(acct, defaultCh.channel_id);
+          if (stillSame()) setJoinedIds(new Set([defaultCh.channel_id]));
         }
       }
-    })();
-  }, [data]);
+    })().catch(() => {});
+    return () => { cancelled = true; };
+  }, [data, client, walletAddress]);
 
   // Filter: show only default channel + joined channels
   const channels = useMemo(() => {
@@ -118,20 +148,48 @@ export default function ChatScreen() {
     );
   }, [data, joinedIds, signer]);
 
-  // Fetch unread counts
+  // Fetch unread counts. The node returns `{ unread: { "<channelId>": n },
+  // mentions: {...} }` maps (see `lib/unreadCounts.ts`); this used to read a
+  // non-existent `resp.channels[]` array, so no badge ever rendered.
+  // `mentions` is not consumed: this list has no mention indicator.
   const [unreadMap, setUnreadMap] = useState<Record<number, number>>({});
   useEffect(() => {
     if (!client || !signer) return;
-    client.getUnreadCounts().then((resp: any) => {
-      const counts: Record<number, number> = {};
-      if (resp?.channels) {
-        for (const ch of resp.channels) {
-          if (ch.unread_count > 0) counts[ch.channel_id] = ch.unread_count;
+    let cancelled = false;
+    (async () => {
+      // Fresh-account baseline (see `lib/unreadBaseline.ts`): a brand-new
+      // account has no read cursor anywhere, so the node reports the default
+      // channel's entire history (capped at 99) as unread. Mark it read ONCE,
+      // after the first live channel list, before fetching counts. The flag is
+      // only cleared once the mark-read actually succeeded, so a failure (or a
+      // list without the default channel) retries on the next load.
+      //
+      // Every step re-checks that this effect run is still current — the
+      // App-level remount on an account switch runs this effect's cleanup,
+      // setting `cancelled` — AND that the client's signing key is unchanged
+      // (`withSigner` mutates the SAME client object on a switch, so
+      // `client.address` is the live signing key). The wallet ref is only a
+      // secondary signal: the old instance never re-renders after a remount.
+      // Without this, a run spanning a switch could mark-read as the WRONG
+      // signer or clear a different account's flag.
+      const acct = walletAddress;
+      const start = { wallet: acct, signer: client.address };
+      const stillCurrent = () => !cancelled
+        && isSameAccount(start, { wallet: walletAddressRef.current, signer: client.address });
+      if (acct && data?.channels && await isUnreadBaselinePending(acct)) {
+        const def = data.channels.find((ch: Channel) => ch.slug === DEFAULT_CHANNEL_SLUG);
+        if (def && stillCurrent()) {
+          try {
+            await client.markChannelRead(def.channel_id);
+            if (stillCurrent()) await clearUnreadBaselinePending(acct);
+          } catch { /* keep the flag; retried on the next channel-list load */ }
         }
       }
-      setUnreadMap(counts);
-    }).catch(() => {});
-  }, [client, signer, data]);
+      const resp = await client.getUnreadCounts();
+      if (!cancelled) setUnreadMap(parseUnreadCounts(resp));
+    })().catch(() => {});
+    return () => { cancelled = true; };
+  }, [client, signer, data, walletAddress]);
 
   // --- Channel organization (groups + custom order, synced cross-device) ---
   const [org, setOrg] = useState<ChannelOrg>(getChannelOrg());

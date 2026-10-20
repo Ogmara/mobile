@@ -38,7 +38,18 @@ import type { MoreStackParamList } from '../navigation/types';
 import NodeSelector from '../components/NodeSelector';
 import { uploadSettings, downloadSettings } from '../lib/settingsSync';
 import { e2eAvailable } from '../lib/cryptoEnv';
-import { backupNow, tryRestoreKeyVault } from '../lib/keyVault';
+import {
+  backupNow,
+  restoreKeyVaultNow,
+  retryKeyVault,
+  replaceKeyVault,
+  keyVaultAccount,
+  getKeyVaultStatus,
+  subscribeKeyVaultStatus,
+  type BackupNowResult,
+  type VaultStatus,
+} from '../lib/keyVault';
+import Button from '../components/Button';
 import { e2eSelfCheck } from '../lib/dmCrypto';
 import Constants from 'expo-constants';
 import { showAlert } from '../components/AlertHost';
@@ -81,6 +92,9 @@ export default function SettingsScreen() {
   const [compactLayout, setCompactLayout] = useState(false);
   const [mediaAutoload, setMediaAutoload] = useState<string>('always');
   const [syncing, setSyncing] = useState(false);
+  /** Which key-vault action is running (rows are disabled while one is). */
+  const [kvBusy, setKvBusy] = useState<null | 'backup' | 'restore' | 'replace'>(null);
+  const [kvStatus, setKvStatus] = useState<VaultStatus>(() => getKeyVaultStatus());
 
   // Profile state
   const [displayName, setDisplayName] = useState('');
@@ -89,6 +103,12 @@ export default function SettingsScreen() {
    *  EditProfileScreen, for the same reason: an imported account, a reinstall,
    *  or a picture uploaded from another device has no local `avatarLocalUri`. */
   const [remoteAvatarUrl, setRemoteAvatarUrl] = useState<string | null>(null);
+
+  // Key-vault state (blocked / publishing) drives the E2E section.
+  useEffect(() => {
+    setKvStatus(getKeyVaultStatus());
+    return subscribeKeyVaultStatus(() => setKvStatus(getKeyVaultStatus()));
+  }, [address]);
 
   useEffect(() => {
     getStartScreen().then(setStartScreenState);
@@ -182,6 +202,93 @@ export default function SettingsScreen() {
     } catch {
       showAlert(t('error_generic'), '');
     }
+  };
+
+  /** Each manual-backup result gets its own honest message. */
+  const backupMessage = (r: BackupNowResult): string => {
+    switch (r) {
+      case 'published': return t('e2e_backup_done');
+      case 'nothing': return t('e2e_backup_nothing');
+      case 'restore-failed': return t('e2e_backup_restore_failed');
+      case 'blocked': return t('e2e_backup_blocked');
+      case 'stale': return t('e2e_backup_stale');
+      case 'unavailable': return t('e2e_backup_unavailable');
+      default: return t('e2e_backup_failed');
+    }
+  };
+
+  const handleBackupNow = async () => {
+    if (kvBusy) return;
+    setKvBusy('backup');
+    try {
+      const r = await backupNow();
+      showAlert(t('e2e_section'), backupMessage(r));
+    } catch (e) {
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
+    } finally {
+      setKvBusy(null);
+      setKvStatus(getKeyVaultStatus());
+    }
+  };
+
+  const handleRestoreNow = async () => {
+    if (kvBusy) return;
+    setKvBusy('restore');
+    try {
+      const r = await restoreKeyVaultNow();
+      let msg: string;
+      switch (r.kind) {
+        case 'restored': msg = t('e2e_restore_ok', { n: r.n }); break;
+        case 'none': msg = t('e2e_restore_none'); break;
+        case 'blocked': msg = t(r.reason === 'missing' ? 'e2e_missing_body' : 'e2e_unreadable_body'); break;
+        case 'stale': msg = t('e2e_backup_stale'); break;
+        default: msg = t('e2e_restore_failed');
+      }
+      showAlert(t('e2e_section'), msg);
+    } catch (e) {
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
+    } finally {
+      setKvBusy(null);
+      setKvStatus(getKeyVaultStatus());
+    }
+  };
+
+  /** "Replace backup" — destructive for the remote copy, so behind a confirm. */
+  const handleReplaceBackup = () => {
+    if (kvBusy) return;
+    // Bind the confirmation to the account shown NOW: if the account switches
+    // while the dialog is open, Replace must not act on the other account.
+    const account = keyVaultAccount();
+    showAlert(t('e2e_replace_backup'), t('e2e_replace_confirm'), [
+      { text: t('cancel'), style: 'cancel' },
+      {
+        text: t('e2e_replace_backup'),
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setKvBusy('replace');
+            try {
+              const out = await replaceKeyVault(account);
+              let msg: string;
+              switch (out) {
+                case 'published': msg = t('e2e_replaced'); break;
+                case 'failed': msg = t('e2e_replace_failed'); break;
+                case 'empty': msg = t('e2e_backup_nothing'); break;
+                case 'blocked': msg = t('e2e_backup_blocked'); break;
+                case 'stale': msg = t('e2e_backup_stale'); break;
+                default: msg = t('e2e_backup_unavailable');
+              }
+              showAlert(t('e2e_section'), msg);
+            } catch (e) {
+              showAlert(t('error_generic'), e instanceof Error ? e.message : '');
+            } finally {
+              setKvBusy(null);
+              setKvStatus(getKeyVaultStatus());
+            }
+          })();
+        },
+      },
+    ]);
   };
 
   const handlePinRow = () => {
@@ -543,28 +650,53 @@ export default function SettingsScreen() {
             {t('e2e_section')}
           </Text>
           <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
+            {kvStatus.restore === 'blocked' && (
+              // Backups are paused for this account until the user decides.
+              <View style={styles.kvNotice}>
+                <Text style={[styles.rowText, { color: colors.warning, fontWeight: '600' }]}>
+                  {t('e2e_blocked_title')}
+                </Text>
+                <Text style={[styles.rowHint, { color: colors.textSecondary }]}>
+                  {t(kvStatus.blockReason === 'missing' ? 'e2e_missing_body' : 'e2e_unreadable_body')}
+                </Text>
+                <View style={styles.kvActions}>
+                  <Button
+                    label={t('e2e_retry')}
+                    variant="secondary"
+                    disabled={kvBusy !== null}
+                    onPress={() => {
+                      retryKeyVault();
+                      setKvStatus(getKeyVaultStatus());
+                    }}
+                  />
+                  <Button
+                    label={t('e2e_replace_backup')}
+                    variant="danger"
+                    disabled={kvBusy !== null}
+                    loading={kvBusy === 'replace'}
+                    onPress={handleReplaceBackup}
+                  />
+                </View>
+              </View>
+            )}
             <TouchableOpacity
-              style={styles.row}
-              onPress={async () => {
-                try {
-                  await backupNow();
-                  showAlert(t('e2e_section'), t('e2e_backup_done'));
-                } catch (e) {
-                  showAlert(t('error_generic'), e instanceof Error ? e.message : '');
-                }
-              }}
+              style={[styles.row, kvBusy !== null && { opacity: 0.5 }]}
+              onPress={handleBackupNow}
+              disabled={kvBusy !== null}
             >
-              <Text style={[styles.rowText, { color: colors.textPrimary }]}>{t('e2e_backup_now')}</Text>
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+                {kvBusy === 'backup' ? t('e2e_backup_running') : t('e2e_backup_now')}
+              </Text>
               <Text style={{ color: colors.accentPrimary }}>↑</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.row}
-              onPress={() => {
-                tryRestoreKeyVault();
-                showAlert(t('e2e_section'), t('e2e_restore_done'));
-              }}
+              style={[styles.row, kvBusy !== null && { opacity: 0.5 }]}
+              onPress={handleRestoreNow}
+              disabled={kvBusy !== null}
             >
-              <Text style={[styles.rowText, { color: colors.textPrimary }]}>{t('e2e_restore')}</Text>
+              <Text style={[styles.rowText, { color: colors.textPrimary }]}>
+                {kvBusy === 'restore' ? t('e2e_restore_done') : t('e2e_restore')}
+              </Text>
               <Text style={{ color: colors.accentPrimary }}>↓</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -737,6 +869,8 @@ const styles = StyleSheet.create({
   },
   rowText: { fontSize: fontSize.md },
   rowHint: { fontSize: fontSize.xs, marginTop: 2 },
+  kvNotice: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, gap: spacing.xs },
+  kvActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, flexWrap: 'wrap' },
   sizeBtn: {
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,

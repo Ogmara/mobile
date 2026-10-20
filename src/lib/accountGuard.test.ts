@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSameAccount, isAccountContextValid } from './accountGuard.ts';
+import { isSameAccount, isAccountContextValid, isSameAccountIgnoringClient } from './accountGuard.ts';
 
 test('unchanged wallet + signer -> same', () => {
   assert.equal(isSameAccount({ wallet: 'klv1a', signer: 'klv1a' }, { wallet: 'klv1a', signer: 'klv1a' }), true);
@@ -85,4 +85,20 @@ test('context: an incomplete or inconsistent START never validates', () => {
   assert.equal(isAccountContextValid({ ...k5, signer: null }, { ...k5, signer: null }), false);
   // scope pointing at the device key instead of the wallet = not one account
   assert.equal(isAccountContextValid({ ...k5, scope: 'klv1dev' }, { ...k5, scope: 'klv1dev' }), false);
+});
+
+// --- isSameAccountIgnoringClient (key-vault node-switch re-arm, 0.57.0) -------
+
+test('account-level: a client swap (node switch) keeps the account; every other drift does not', () => {
+  assert.equal(isSameAccountIgnoringClient(k5, { ...k5, client: {} }), true);
+  // ...while the strict guard still rejects the swapped client
+  assert.equal(isAccountContextValid(k5, { ...k5, client: {} }), false);
+  for (const live of [
+    { ...k5, wallet: 'klv1b' }, { ...k5, scope: 'klv1b' }, { ...k5, gen: 4 },
+    { ...k5, signer: 'klv1other' }, { ...k5, signer: null },
+  ]) {
+    assert.equal(isSameAccountIgnoringClient(k5, live), false, JSON.stringify(live));
+  }
+  assert.equal(isSameAccountIgnoringClient({ ...k5, wallet: null }, { ...k5, wallet: null }), false);
+  assert.equal(isSameAccountIgnoringClient({ ...k5, scope: 'klv1dev' }, { ...k5, scope: 'klv1dev' }), false);
 });

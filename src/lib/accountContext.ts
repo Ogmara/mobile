@@ -7,7 +7,11 @@
  */
 import { getCryptoClient, walletAddress } from './cryptoEnv';
 import { getWalletScope, getScopeGeneration } from './walletScope';
-import { isAccountContextValid, type AccountContextSnapshot } from './accountGuard';
+import {
+  isAccountContextValid,
+  isSameAccountIgnoringClient,
+  type AccountContextSnapshot,
+} from './accountGuard';
 
 /**
  * Capture the account a sync run is FOR, and a predicate that stays true only
@@ -30,6 +34,8 @@ export function captureAccountContext(): {
   signer: string | null;
   client: ReturnType<typeof getCryptoClient>;
   stillValid: () => boolean;
+  /** Same account, ignoring a crypto-client swap (node switch). Re-arm decisions only. */
+  accountStillValid: () => boolean;
 } {
   const snap = (): AccountContextSnapshot => {
     const client = getCryptoClient();
@@ -46,11 +52,13 @@ export function captureAccountContext(): {
   };
   const start = snap();
   const stillValid = () => isAccountContextValid(start, snap());
+  const accountStillValid = () => isSameAccountIgnoringClient(start, snap());
   const ok = stillValid();
   return {
     account: ok ? start.wallet : null,
     signer: ok ? (start.signer ?? null) : null,
     client: start.client as ReturnType<typeof getCryptoClient>,
     stillValid,
+    accountStillValid,
   };
 }

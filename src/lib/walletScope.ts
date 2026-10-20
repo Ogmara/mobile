@@ -267,10 +267,21 @@ export async function runWalletScopeMigrationOnce(): Promise<void> {
 export async function scopedGetFor(address: string, base: string): Promise<string | null> {
   if (!address) return null;
   try {
-    return await AsyncStorage.getItem(`${base}${SEP}${address}`);
+    return await scopedGetForStrict(address, base);
   } catch {
     return null;
   }
+}
+
+/**
+ * {@link scopedGetFor} that THROWS on a storage error instead of reporting
+ * "unset". For readers where "unset" is a decision, not a default — the
+ * key-vault `keyVaultSeen` marker: a read failure read as "never seen" would
+ * let a 404 count as an empty vault and the next backup overwrite it.
+ */
+export async function scopedGetForStrict(address: string, base: string): Promise<string | null> {
+  if (!address) return null;
+  return AsyncStorage.getItem(`${base}${SEP}${address}`);
 }
 
 /** Write into a specific account's namespace. */

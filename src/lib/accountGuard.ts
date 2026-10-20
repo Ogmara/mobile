@@ -49,10 +49,20 @@ export interface AccountContextSnapshot {
  * (wallet set, scope === wallet, signer set) and nothing in `live` differs.
  */
 export function isAccountContextValid(start: AccountContextSnapshot, live: AccountContextSnapshot): boolean {
+  return isSameAccountIgnoringClient(start, live) && live.client === start.client;
+}
+
+/**
+ * {@link isAccountContextValid} WITHOUT the client identity: true while the
+ * same account is active even if the crypto client was replaced (node switch
+ * via `setCryptoClient`). Use it only to decide whether work that went stale
+ * may be RE-ARMED on the new client — never to let a run keep signing or
+ * writing with the client it captured.
+ */
+export function isSameAccountIgnoringClient(start: AccountContextSnapshot, live: AccountContextSnapshot): boolean {
   return !!start.wallet && !!start.signer && start.scope === start.wallet
     && live.wallet === start.wallet
     && live.scope === start.wallet
     && live.gen === start.gen
-    && live.client === start.client
     && live.signer === start.signer;
 }

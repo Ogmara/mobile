@@ -19,6 +19,8 @@ import {
   Share,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import * as Clipboard from 'expo-clipboard';
+import { buildPrivateChannelInviteUrl } from '@ogmara/sdk';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
@@ -26,6 +28,11 @@ import { removeJoinedChannel } from '../lib/joinedChannels';
 import { clearPlacement } from '../lib/channelOrg';
 import { clearCachedMessages } from '../lib/messageCache';
 import { buildChannelInviteUrl } from '../lib/share';
+import {
+  isInviteGatedChannel, INVITE_TTL_OPTIONS, DEFAULT_INVITE_TTL_OPTION_MS, inviteTtlFromPicker,
+} from '../lib/privateInvite';
+import { formatDateTime } from '../lib/datetime';
+import SegmentedControl from '../components/SegmentedControl';
 import ConfirmModal from '../components/ConfirmModal';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
@@ -37,6 +44,18 @@ type Props = NativeStackScreenProps<ChatStackParamList, 'ChannelAdmin'>;
 /** Validate Klever bech32 address format */
 function isValidAddress(addr: string): boolean {
   return /^klv1[a-z0-9]{58}$/.test(addr);
+}
+
+/**
+ * The last personal invite created on this screen (Private only), TAGGED with
+ * the account and channel it was made for so it never shows for another one.
+ */
+interface CreatedInvite {
+  wallet: string;
+  channelId: number;
+  address: string;
+  link: string;
+  expiresAt: number;
 }
 
 interface ChannelMember {
@@ -76,6 +95,11 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
 
   // Invite state
   const [inviteAddress, setInviteAddress] = useState('');
+  // Validity of a Private-channel invite (spec 06 §6.5: 1h / 24h / 7d / 14d, default 7d).
+  const [inviteTtlMs, setInviteTtlMs] = useState<number>(DEFAULT_INVITE_TTL_OPTION_MS);
+  const [inviting, setInviting] = useState(false);
+  const [lastInvite, setLastInvite] = useState<CreatedInvite | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   // Themed confirm dialog (replaces native Alert.alert for confirmations)
   const [confirmState, setConfirmState] = useState<{
@@ -85,6 +109,15 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
   const myRole = members.find((m) => m.address === myAddress)?.role ?? 'member';
   const isOwner = detail?.channel?.creator === myAddress;
   const isMod = myRole === 'moderator' || isOwner;
+  // Fail-closed: until the record POSITIVELY says Public/ReadPublic, treat the
+  // channel as private — so the bare (non-granting) share link never shows for
+  // a private channel while its record is loading or failed to load.
+  const isPrivate = isInviteGatedChannel(detail?.channel?.channel_type, channelId);
+  // Inviting waits for the record: whether a validity + personal link apply
+  // depends on the channel type.
+  const channelTypeKnown = !!detail?.channel;
+  const currentLastInvite = lastInvite && lastInvite.wallet === myAddress && lastInvite.channelId === channelId
+    ? lastInvite : null;
 
   const fetchAll = useCallback(async () => {
     if (!client) return;
@@ -220,32 +253,67 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
   }, [client, channelId, isMod, fetchAll, t]);
 
   const handleShareInvite = useCallback(async () => {
-    // Private channels are host-scoped — embed the home node so the recipient can
-    // federate from there. Public channels share a plain link (no host hint needed).
-    const isPrivate = detail?.channel?.channel_type === 2;
-    const url = buildChannelInviteUrl(channelId, isPrivate ? nodeUrl : undefined);
+    // Public / ReadPublic only: anyone may join, so a plain link is enough. A
+    // Private channel has NO bare link (it never granted access) — its only
+    // link is the personal one created by inviting an address below.
+    if (isPrivate) return;
+    const url = buildChannelInviteUrl(channelId);
     if (!url) return;
     try {
       await Share.share({ message: url, url });
     } catch (e) {
       debugLog('warn', `Share invite failed: ${e instanceof Error ? e.message : ''}`);
     }
-  }, [channelId, detail, nodeUrl]);
+  }, [channelId, isPrivate]);
 
   const handleInvite = useCallback(async () => {
-    if (!client || !inviteAddress.trim() || !isMod) return;
-    if (!isValidAddress(inviteAddress.trim())) {
+    const target = inviteAddress.trim();
+    if (!client || !target || !isMod || inviting || !channelTypeKnown || !myAddress) return;
+    if (!isValidAddress(target)) {
       showAlert(t('error_generic'), 'Invalid Klever address format');
       return;
     }
+    // Snapshot whether this is a private invite BEFORE the await, so the result
+    // is interpreted for the channel type the user acted on.
+    const privateInvite = isPrivate;
+    const me = myAddress;
+    setInviting(true);
+    setLastInvite(null);
+    setLinkCopied(false);
     try {
-      await client.inviteUser(channelId, inviteAddress.trim());
+      // The SDK signs `expires_at = now + ttl`, bundles the moderator grant when
+      // the caller isn't the creator, and aborts if the account changes mid-call.
+      // Validity applies to Private invites; Public ones keep the SDK default.
+      const ttlMs = privateInvite ? inviteTtlFromPicker(inviteTtlMs) : undefined;
+      const res = await client.inviteUser(channelId, target, ttlMs !== undefined ? { ttlMs } : undefined);
       setInviteAddress('');
+      if (privateInvite) {
+        try {
+          // This (the inviter's) node is the invitee's federation host hint.
+          const link = buildPrivateChannelInviteUrl(channelId, res.inviteEnvelope, nodeUrl);
+          setLastInvite({ wallet: me, channelId, address: target, link, expiresAt: res.expiresAt });
+        } catch (e) {
+          // The invite itself was sent (notification); only the link failed.
+          debugLog('warn', `Personal invite link failed: ${e instanceof Error ? e.message : ''}`);
+        }
+      }
       showAlert(t('channel_invite'), t('channel_invite_sent'));
     } catch (e) {
       showAlert(t('error_generic'), e instanceof Error ? e.message : '');
+    } finally {
+      setInviting(false);
     }
-  }, [client, channelId, inviteAddress, isMod, t]);
+  }, [client, channelId, inviteAddress, inviteTtlMs, isMod, isPrivate, inviting, channelTypeKnown, myAddress, nodeUrl, t]);
+
+  const handleCopyPersonalLink = useCallback(async () => {
+    if (!currentLastInvite) return;
+    try {
+      await Clipboard.setStringAsync(currentLastInvite.link);
+      setLinkCopied(true);
+    } catch (e) {
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
+    }
+  }, [currentLastInvite, t]);
 
   const handleLeaveChannel = useCallback(() => {
     if (!client) return;
@@ -469,17 +537,21 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
       )}
 
       {/* ── Invite ──
-          Address-based invite (ChannelInvite, protocol spec §3.9) only applies
-          to Private channels and only creator/moderators may send one — the
-          node rejects it from a plain member (router.rs ChannelInvite arm). */}
+          Address-based invite (ChannelInvite, protocol spec §3.9): only
+          creator/moderators may send one — the node rejects it from a plain
+          member (router.rs ChannelInvite arm). For a Private channel it is the
+          ONLY way in (protocol §3.9.1): the invitee's join must carry it. */}
+      {(!isPrivate || isMod) && (
       <View style={[styles.section, { backgroundColor: colors.bgSecondary }]}>
         <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{t('channel_invite')}</Text>
-        <Button
-          label={t('channel_share_invite')}
-          onPress={handleShareInvite}
-          fullWidth
-          style={styles.actionBtn}
-        />
+        {!isPrivate && (
+          <Button
+            label={t('channel_share_invite')}
+            onPress={handleShareInvite}
+            fullWidth
+            style={styles.actionBtn}
+          />
+        )}
         {/* Invite by address. For a PRIVATE channel this is load-bearing: a
             URL alone can't grant access (protocol spec §3.9/§5.5.4), so the
             target address must be explicitly invited before it can send
@@ -490,6 +562,16 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
             "a channel owner wants me here" and joins on its own, with no
             confirmation step on its side. Shown for every channel type for
             that reason. */}
+        {isMod && isPrivate && (
+          <View style={styles.ttlBlock}>
+            <Text style={[styles.ttlLabel, { color: colors.textSecondary }]}>{t('channel_invite_validity')}</Text>
+            <SegmentedControl<string>
+              segments={INVITE_TTL_OPTIONS.map((o) => ({ value: String(o.ms), label: t(o.key) }))}
+              value={String(inviteTtlMs)}
+              onChange={(v) => setInviteTtlMs(inviteTtlFromPicker(v))}
+            />
+          </View>
+        )}
         {isMod && (
           <View style={styles.addRow}>
             <TextInput
@@ -499,11 +581,32 @@ export default function ChannelAdminScreen({ route, navigation }: Props) {
               value={inviteAddress}
               onChangeText={setInviteAddress}
               autoCapitalize="none"
+              autoCorrect={false}
             />
-            <Button label={t('channel_invite')} onPress={handleInvite} style={styles.addBtn} />
+            <Button
+              label={t('channel_invite')}
+              onPress={handleInvite}
+              loading={inviting}
+              disabled={inviting || !channelTypeKnown || !inviteAddress.trim()}
+              style={styles.addBtn}
+            />
+          </View>
+        )}
+        {isMod && isPrivate && currentLastInvite && (
+          <View style={styles.ttlBlock}>
+            <Text style={[styles.ttlLabel, { color: colors.textSecondary }]} numberOfLines={2}>
+              {currentLastInvite.address.slice(0, 16)}... · {t('channel_invite_valid_until', { date: formatDateTime(currentLastInvite.expiresAt) })}
+            </Text>
+            <Button
+              variant="secondary"
+              label={linkCopied ? t('channel_invite_link_copied') : t('channel_invite_copy_personal_link')}
+              onPress={handleCopyPersonalLink}
+              fullWidth
+            />
           </View>
         )}
       </View>
+      )}
 
       {/* ── Danger Zone ── */}
       {isOwner && (
@@ -558,6 +661,8 @@ const styles = StyleSheet.create({
   addRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   addInput: { flex: 1, padding: spacing.sm, borderRadius: radius.md, fontSize: fontSize.sm },
   addBtn: { minWidth: 52 },
+  ttlBlock: { marginTop: spacing.sm, gap: spacing.xs },
+  ttlLabel: { fontSize: fontSize.xs },
   dangerBtn: {
     paddingVertical: spacing.md,
     borderRadius: radius.md,

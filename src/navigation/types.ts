@@ -24,7 +24,7 @@ export type ChatStackParamList = {
   CreateChannel: undefined;
   ChannelMessages: { channelId: number; channelName: string };
   ChannelAdmin: { channelId: number; channelName: string };
-  ChannelJoin: { channelId: number; node?: string };
+  ChannelJoin: { channelId: number; node?: string; inv?: string };
   UserProfile: { address: string };
   FollowList: { address: string; tab: 'followers' | 'following' };
 };
@@ -40,7 +40,7 @@ export type SearchStackParamList = {
   SearchHome: undefined;
   UserProfile: { address: string };
   ChannelMessages: { channelId: number; channelName: string };
-  ChannelJoin: { channelId: number; node?: string };
+  ChannelJoin: { channelId: number; node?: string; inv?: string };
   NewsDetail: { msgId: string; post?: any };
   FollowList: { address: string; tab: 'followers' | 'following' };
 };

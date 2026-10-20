@@ -5,6 +5,123 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.56.0] - 2026-10-20
+
+Client half of the private-channel invite gate (protocol §3.9.1, spec 05
+§8.4, spec 06 §6.5; needs `@ogmara/sdk` 0.64.0 and l2-node 0.140.0+, which
+rejects a Private `ChannelJoin` / federate request without the joiner's own
+signed invite). Same semantics and wording as web 0.83.0 / desktop 1.83.0.
+
+### Security
+
+- **Private channels are joined only with a personal invite.** The join
+  screen takes the invite from the personal link's `inv=` parameter or from
+  the newest pending `channel_invite` notification (`findPendingInvite`), and
+  passes the SAME raw bytes to `federateChannel(..., { invite })` and
+  `joinChannel(..., { invite })`. Without a usable invite there is **no Join
+  action**: the screen says the channel is invite-only and offers "copy my
+  address"; an expired invite and an invite for another account say so. An
+  inviter the client cannot show as creator/moderator only adds an
+  informational line (the node verifies). A private-channel rejection
+  (`invite proof required`, or any 403 — `isPrivateJoinRejection`) drops back
+  to the invite-required state instead of a raw API error; public-channel
+  errors are shown unchanged. The invite is
+  re-evaluated against the exact clock at tap time, and a 30 s tick removes
+  the Join button once it expires on screen.
+- **Gating is fail-closed.** Only a record that positively says Public (0) /
+  ReadPublic (1), for an id below the private floor (2^32), takes the old
+  permissionless join; Private, a missing / unknown type, or an id at or
+  above the floor gets the invite gate (shared `isInviteGatedChannel`,
+  identical across web / desktop / mobile).
+- **Lookup results are tagged with the (wallet, channel) they were fetched
+  for** and ignored for any other, so a lookup that outlives an account or
+  channel change never drives the screen. The 2026-10-12 account-switch
+  guards are kept (snapshot first, re-check after every await, joined-set
+  write into the starting account).
+- **No more bare copy-link for Private channels** (it never granted access).
+  The admin share-link button is Public / ReadPublic only, and hidden while
+  the channel record is unresolved.
+
+### Added
+
+- Channel admin (Private): invite validity picker (1 h / 24 h / 7 d / 14 d,
+  default 7 d) and, after a successful invite, "Copy personal invite link" for
+  that invitee with "Valid until …". Inviting waits until the channel type is
+  known; the personal link is tagged with the account + channel it was made
+  for. The SDK bundles the moderator grant when the inviter is not the creator.
+- An account already KNOWN to be in a private channel gets the shared
+  `member` state — "Open channel" instead of the invite-only dead end
+  (previewed from another host: re-federate without an invite, which the node
+  accepts for members). Evidence is local only: the creator field of the HOME
+  node's own record (never a cross-node preview, whose host is chosen by the
+  link), or the account's own joined-channel set. Unknown membership falls
+  back to the invite gate.
+- A channel's creator can host their OWN private channel on a fresh home node
+  ("You created this channel — host it on this node"): offered only for a
+  cross-node preview whose record (for this exact channel id) names the active
+  wallet as creator and when no usable invite exists; it federates with NO
+  invite (the home node verifies the creator itself) and opens the channel,
+  under the same account guards. The preview's creator claim is never used as
+  membership evidence; a hostile host claiming the viewer only earns a
+  403/502, mapped like any other error.
+- Rate-limited / busy federate or join (HTTP 429 / 503) shows "The node is
+  busy. Please try again shortly." instead of an invite or raw error.
+- Join-screen host hint falls back to the invite's anchor node (link invite,
+  then pending invite) when `?node=` is absent.
+- Tapping a `channel_invite` push notification, or a `channel_invite` entry in
+  the notification center ("invited you to a channel"), opens the join screen
+  for that channel — the in-app entry also passes its `anchor_node` as the
+  host hint (`joinRouteForInviteNotification`). The envelope is never put in a
+  route; the screen finds it via `findPendingInvite`. Malformed channel ids
+  never navigate.
+- `lib/privateInvite.ts`: the shared pure invite API, byte-identical to web
+  above the "Mobile-specific helpers" marker (`evaluateInvite`,
+  `resolveJoinInvite` incl. the `member` state, `membershipEvidence`,
+  `isMemberState`, `isJoinableInvite`, `isInviteProofRejection`,
+  `isPrivateJoinRejection`, `joinRouteForInviteNotification`,
+  `INVITE_TTL_OPTIONS`, `DEFAULT_INVITE_TTL_OPTION_MS`, `inviteTtlFromPicker`,
+  `PRIVATE_CHANNEL_ID_FLOOR`, `isInviteGatedChannel`, `isPreviewCreator`,
+  `isTransientFederateError`) plus mobile helpers
+  `isKnownPrivateMember`, `channelInvitePushRoute`; covered by
+  `privateInvite.test.ts` (the web tests verbatim, plus a real signed invite round-tripped through
+  the link encoding, a forwarded link, and negative controls).
+- `ogmara://join/{id}?node=…&inv=…` deep links reach the join screen with
+  `inv` and `node` intact (`ChannelJoin` route param; pinned by
+  `deepLinkPaths.test.ts` against React Navigation's real `getStateFromPath`).
+  Invites otherwise arrive as `channel_invite` notifications. `https://`
+  share links still do not open the app (no Android App Links / iOS
+  Universal Links configured yet).
+- i18n (all 7 locales, same strings as web/desktop):
+  `channel_invite_required`, `channel_invite_required_desc`,
+  `channel_invite_expired`, `channel_invite_wrong_account`,
+  `channel_invite_copy_my_address`, `channel_invite_address_copied`,
+  `channel_invite_copy_personal_link`, `channel_invite_validity`,
+  `channel_invite_valid_until`, `channel_invite_ttl_1h|24h|7d|14d`,
+  `channel_invite_inviter_unverifiable`, `channel_invite_creator_host`,
+  `channel_invite_busy_retry`, `channel_open_channel`,
+  `notifications_channel_invite`.
+
+### Fixed
+
+- **Inbound deep links never worked.** The linking config mapped
+  `user/:address` in both the News and Chat stacks; React Navigation's
+  `getStateFromPath` throws on duplicate patterns, so every `ogmara://` link
+  (join, channel, news, dm, user) failed to resolve. The Chat-stack duplicate
+  is removed (profiles open in the News stack); the pure config now lives in
+  `lib/deepLinkPaths.ts` and is covered by a regression test.
+
+### Removed
+
+- Dead `parseJoinUrl` share helper (no callers; its `decodeURIComponent` could
+  throw) and the now-unused host-hint parameter of `buildChannelInviteUrl`
+  (Public / ReadPublic links only).
+
+### Changed
+
+- `channel_private_invite_link` reworded: a personal invite from a member is
+  required (there is no request-access flow).
+- Version 0.56.0, Android `versionCode` 77.
+
 ## [0.55.0] - 2026-10-12
 
 ### Security

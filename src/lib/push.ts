@@ -11,6 +11,7 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import type { WalletSigner } from '@ogmara/sdk';
+import { channelInvitePushRoute } from './privateInvite';
 
 /** Push gateway URL (configurable per environment). */
 const DEFAULT_GATEWAY_URL = 'http://localhost:41722';
@@ -134,7 +135,8 @@ export async function unregisterFromGateway(
 /**
  * Parse a push notification's data payload for navigation.
  *
- * Returns a route + params based on the notification type (mention or dm).
+ * Returns a route + params based on the notification type (mention, dm, or
+ * channel_invite).
  * Per spec 05-clients.md section 6.4.
  */
 export function parseNotificationData(
@@ -150,6 +152,13 @@ export function parseNotificationData(
         channelName: `#${data.channel_id}`,
       },
     };
+  }
+
+  // Private-channel invite: open the join screen for that channel. The push
+  // payload never carries the invite envelope; the join screen fetches it via
+  // `findPendingInvite`. Nested route — ChannelJoin lives in the Chat stack.
+  if (type === 'channel_invite') {
+    return channelInvitePushRoute(data);
   }
 
   if (type === 'dm') {

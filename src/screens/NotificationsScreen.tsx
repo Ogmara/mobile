@@ -1,7 +1,7 @@
 /**
  * Notifications — in-app notification center.
  *
- * Types: mention, reply, follow, dm.
+ * Types: mention, reply, follow, dm, channel_invite.
  * Polls every 30 seconds for new notifications.
  * Tapping a notification navigates to the relevant screen.
  */
@@ -20,6 +20,7 @@ import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
 import { formatDateTime } from '../lib/datetime';
+import { joinRouteForInviteNotification } from '../lib/privateInvite';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 type Props = NativeStackScreenProps<any, 'Notifications'>;
@@ -29,6 +30,7 @@ const NOTIFICATION_ICONS: Record<string, string> = {
   reply: '↩',
   follow: '👤',
   dm: '💬',
+  channel_invite: '🔒',
 };
 
 const POLL_INTERVAL = 30000; // 30 seconds
@@ -39,6 +41,8 @@ interface Notification {
   from: string;
   msg_id?: string;
   channel_id?: number;
+  /** Inviter's home node — `channel_invite` only (federation host hint). */
+  anchor_node?: string | null;
   timestamp: number;
   content_preview?: string;
 }
@@ -103,6 +107,22 @@ export default function NotificationsScreen({ navigation }: Props) {
           address: notif.from,
         });
         break;
+      case 'channel_invite': {
+        // Open the join screen (Chat stack) with the anchor node as host hint;
+        // it finds this invite itself via `findPendingInvite` and checks the
+        // channel + wallet binding there. The envelope never goes in a route.
+        const path = joinRouteForInviteNotification(notif);
+        const m = path?.match(/^\/join\/(\d+)(?:\?node=(.*))?$/);
+        if (m) {
+          let node: string | undefined;
+          try { node = m[2] ? decodeURIComponent(m[2]) : undefined; } catch { node = undefined; }
+          navigation.navigate('ChatTab' as any, {
+            screen: 'ChannelJoin',
+            params: node ? { channelId: Number(m[1]), node } : { channelId: Number(m[1]) },
+          } as any);
+        }
+        break;
+      }
     }
   }, [navigation]);
 
@@ -120,6 +140,7 @@ export default function NotificationsScreen({ navigation }: Props) {
       case 'reply': return t('notifications_replied');
       case 'follow': return t('notifications_followed');
       case 'dm': return t('notifications_dm');
+      case 'channel_invite': return t('notifications_channel_invite');
       default: return type;
     }
   };

@@ -6,47 +6,16 @@
  *   ogmara://news/{msgId}      → NewsDetail screen
  *   ogmara://dm/{address}      → DmConversation screen
  *   ogmara://user/{address}    → UserProfile screen
+ *   ogmara://join/{id}?node=…&inv=…  → ChannelJoin screen (personal private invite)
  *
  * Used for push notification navigation, external app links,
  * and K5 wallet callbacks.
  */
 
 import { getStateFromPath, type LinkingOptions } from '@react-navigation/native';
+import { linkingConfig, normalizeLinkPath } from './deepLinkPaths';
 
-/** React Navigation linking configuration for ogmara:// deep links. */
-export const linkingConfig: LinkingOptions<{}>['config'] = {
-  screens: {
-    NewsTab: {
-      screens: {
-        NewsFeed: 'news',
-        NewsDetail: 'news/:msgId',
-        UserProfile: 'user/:address',
-      },
-    },
-    ChatTab: {
-      screens: {
-        ChannelList: 'channels',
-        ChannelMessages: 'channel/:channelId',
-        // Invite-link landing: ogmara://join/{id}?node=… (federate-on-join).
-        ChannelJoin: 'join/:channelId',
-        UserProfile: 'user/:address',
-      },
-    },
-    DmTab: {
-      screens: {
-        DmList: 'dms',
-        DmConversation: 'dm/:address',
-      },
-    },
-    SearchTab: 'search',
-    MoreTab: {
-      screens: {
-        Settings: 'settings',
-        Wallet: 'wallet',
-      },
-    },
-  },
-};
+export { linkingConfig };
 
 /** Build a linking configuration object for NavigationContainer.
  *
@@ -60,9 +29,7 @@ export function getLinkingConfig(): LinkingOptions<{}> {
     prefixes: ['ogmara://', 'https://ogmara.org/app', 'https://ogmara.org'],
     config: linkingConfig,
     getStateFromPath: (path, options) => {
-      // Strip a leading hash-route marker so `#/join/123?node=x` → `join/123?node=x`.
-      const normalized = path.replace(/^\/?#\/?/, '').replace(/^#/, '');
-      return getStateFromPath(normalized, options);
+      return getStateFromPath(normalizeLinkPath(path), options);
     },
   };
 }

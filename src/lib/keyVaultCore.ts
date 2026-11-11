@@ -234,11 +234,63 @@ export async function runKeyVaultRestore<R, K>(ctx: RunContext, deps: RestoreDep
   return 'done';
 }
 
+/** Why a backup is PAUSED (never silently skipped): the keyring refuses to export. */
+export type BackupPauseReason = 'vault_too_large' | 'opaque_overflow';
+
+/**
+ * Thrown by `readKeyring` when the keyring refuses to produce a backup
+ * (sdk-js 0.68.0 `ChannelKeyringError`): `vault_too_large` / `opaque_overflow`
+ * pause the backup (surfaced in the UI, never "backed up"); `stale` = the
+ * account changed (nothing is sent).
+ */
+export class KeyringReadError extends Error {
+  readonly reason: BackupPauseReason | 'stale';
+  constructor(reason: BackupPauseReason | 'stale') {
+    super(`keyring export refused: ${reason}`);
+    this.name = 'KeyringReadError';
+    this.reason = reason;
+  }
+}
+
+/** Result of re-opening the remote vault right before a seal. */
+export type RemoteRefresh = 'ok' | 'failed' | 'unreadable' | 'missing';
+
 export interface PublishDeps<KR, S> {
   getKey: (wallet: string) => Promise<OwnedKey | null>;
-  /** Snapshot of the live in-memory keyring (synchronous). */
+  /**
+   * Snapshot of the live in-memory keyring (synchronous). May throw
+   * {@link KeyringReadError} (backup paused / stale).
+   */
   readKeyring: () => KR;
   isEmpty: (kr: KR) => boolean;
+  /**
+   * Cheap "anything to back up?" pre-check WITHOUT building the export (the
+   * SDK export marks keys persisted). Default: `isEmpty(readKeyring())`.
+   */
+  hasKeys?: () => boolean;
+  /**
+   * Re-open the REMOTE vault with `key` and merge it into the in-memory
+   * keyring right before sealing (the vault is one last-write-wins record:
+   * sealing without it would overwrite keys another device added since this
+   * session's restore). `failed` → nothing is sent (retry); `unreadable` /
+   * `missing` → the publish is `blocked` and {@link onRemoteBlocked} is told.
+   */
+  refreshRemote?: (key: Uint8Array) => Promise<RemoteRefresh>;
+  onRemoteBlocked?: (reason: BlockReason) => void;
+  /** The keyring refused to export (`vault_too_large` / `opaque_overflow`). */
+  onPaused?: (reason: BackupPauseReason) => void;
+  /**
+   * TWO-STEP export: called with the sealed keyring ONLY after the node
+   * accepted the publish (sdk-js 0.68.0 `commitExport`). A failed / stale /
+   * blocked publish never calls it, so nothing is marked backed up.
+   */
+  committed?: (kr: KR) => boolean;
+  /**
+   * W4: build the export once BEFORE the remote re-read (the two-step export
+   * is side-effect free): a still-refused export (`paused`) costs no network
+   * and no vault open. Set while the backup is paused.
+   */
+  precheckExport?: boolean;
   /** Synchronous seal. */
   seal: (key: Uint8Array, kr: KR) => S;
   /** The signed upload. */
@@ -257,9 +309,11 @@ export interface PublishDeps<KR, S> {
  *  - `unavailable` — signed out, or no usable backup key
  *  - `blocked`     — publishing is not allowed now (`canPublish()` false)
  *  - `stale`       — the account or crypto client changed mid-flight; nothing sent
- *  - `failed`      — the node / network refused it
+ *  - `failed`      — the node / network refused it (or the remote could not be re-read first)
+ *  - `paused`      — the keyring refused to export (vault too large / too many
+ *                    unknown entries): surfaced, nothing sent, not retried
  */
-export type PublishOutcome = 'published' | 'empty' | 'unavailable' | 'blocked' | 'stale' | 'failed';
+export type PublishOutcome = 'published' | 'empty' | 'unavailable' | 'blocked' | 'stale' | 'failed' | 'paused';
 
 /**
  * One backup publish. Seals ONLY the captured account's keyring with ONLY that
@@ -269,12 +323,51 @@ export type PublishOutcome = 'published' | 'empty' | 'unavailable' | 'blocked' |
 export async function runKeyVaultPublish<KR, S>(ctx: RunContext, deps: PublishDeps<KR, S>): Promise<PublishOutcome> {
   const wallet = ctx.account;
   if (!wallet || !ctx.stillValid()) return 'unavailable';
-  if (deps.isEmpty(deps.readKeyring())) return 'empty'; // nothing to back up
+  /** readKeyring, with a refused export mapped to its outcome. */
+  const read = (): { kr: KR } | PublishOutcome => {
+    try {
+      return { kr: deps.readKeyring() };
+    } catch (e) {
+      if (!(e instanceof KeyringReadError)) throw e;
+      if (e.reason === 'stale') return 'stale';
+      deps.log?.('keyvault: backup PAUSED — keyring refused to export', { reason: e.reason });
+      deps.onPaused?.(e.reason);
+      return 'paused';
+    }
+  };
+  if (deps.hasKeys) {
+    if (!deps.hasKeys()) return 'empty';
+  } else {
+    const pre = read();
+    if (typeof pre === 'string') return pre;
+    if (deps.isEmpty(pre.kr)) return 'empty'; // nothing to back up
+  }
   const owned = await deps.getKey(wallet);
   if (!ctx.stillValid()) return 'stale';
   if (!usable(owned, wallet)) return 'unavailable';
-  // Read the keyring AFTER the await + re-check: it must be this account's.
-  const keyring = deps.readKeyring();
+  if (deps.precheckExport) {
+    const pre = read();
+    if (typeof pre === 'string') return pre;
+  }
+  if (deps.refreshRemote) {
+    if (!deps.canPublish()) return 'blocked';
+    const r = await deps.refreshRemote(owned.key);
+    if (!ctx.stillValid()) return 'stale';
+    if (!usable(owned, wallet)) return 'unavailable';
+    if (r === 'failed') {
+      deps.log?.('keyvault: remote vault not re-read before the seal — nothing sent');
+      return 'failed';
+    }
+    if (r === 'unreadable' || r === 'missing') {
+      deps.onRemoteBlocked?.(r);
+      return 'blocked';
+    }
+  }
+  // Read the keyring AFTER the await(s) + re-check: it must be this account's
+  // (and, with refreshRemote, include what the remote vault holds now).
+  const got = read();
+  if (typeof got === 'string') return got;
+  const keyring = got.kr;
   if (deps.isEmpty(keyring)) return 'empty';
   // Gate AFTER the last await: restore may have been reset / blocked while the
   // key was being derived.
@@ -288,6 +381,10 @@ export async function runKeyVaultPublish<KR, S>(ctx: RunContext, deps: PublishDe
     deps.log?.('keyvault: backup failed', { err: (e as Error)?.message });
     return 'failed';
   }
+  // Published: only now may the keyring mark what it exported as persisted. A
+  // commit refused as stale (account changed during the send) is NOT reported
+  // as a success — nothing was marked backed up for anyone.
+  if (deps.committed && !deps.committed(keyring)) return 'stale';
   // Explicit-address write, and only while the account is still active (a
   // sign-out wipes the namespace; don't resurrect a key in it).
   if (sameAccount(ctx)) deps.markSeen(wallet);
@@ -310,7 +407,8 @@ export type BackupNowResult =
   | 'blocked'
   | 'stale'
   | 'failed'
-  | 'unavailable';
+  | 'unavailable'
+  | 'paused';
 /** {@link VaultController.restoreNow} result (Settings → "Restore"). */
 export type RestoreNowResult =
   | { kind: 'restored'; n: number }
@@ -351,6 +449,16 @@ export interface VaultControllerDeps<C, R, S, K> {
   log?(step: string, data?: Record<string, unknown>): void;
   debounceMs?: number;
   failBackoffMs?: readonly number[];
+  /** Cheap pre-check (see {@link PublishDeps.hasKeys}). */
+  hasKeys?(): boolean;
+  /** See {@link PublishDeps.committed}. */
+  committed?(keyring: K): boolean;
+  /**
+   * Re-open + import the REMOTE vault before every automatic / manual seal
+   * (mobile 0.58.0, sdk-js 0.68.0 rule). Not for the user-confirmed
+   * "Replace backup" (the remote is unreadable / gone by definition there).
+   */
+  refreshBeforeSeal?: boolean;
 }
 
 export interface VaultStatus {
@@ -359,6 +467,8 @@ export interface VaultStatus {
   pendingBackup: boolean;
   publishing: boolean;
   failStreak: number;
+  /** Backup paused because the keyring refused to export (cleared by the next published backup / session clear). */
+  paused: BackupPauseReason | null;
 }
 
 export interface VaultController<C = unknown> {
@@ -427,6 +537,7 @@ export function createVaultController<C, R, S, K>(
   /** Account that asked for a publish while one was in flight. */
   let publishAgain: CapturedAccount<C> | null = null;
   let failStreak = 0;
+  let paused: BackupPauseReason | null = null;
 
   const changed = () => deps.onStateChange?.();
 
@@ -559,6 +670,14 @@ export function createVaultController<C, R, S, K>(
   }
 
   function scheduleBackup(): void {
+    // W4: while the keyring refuses to export (paused), automatic backups do
+    // not run — no debounced fetch + open + import of the whole remote vault
+    // on every key change (Hermes JS thread). A manual backup or a prune
+    // (which runs one) resumes; a published backup clears the pause.
+    if (paused !== null) {
+      pendingBackup = true;
+      return;
+    }
     const s = effectiveState();
     if (s !== 'done') {
       // Never publish before the remote was pulled + merged (or confirmed
@@ -575,8 +694,43 @@ export function createVaultController<C, R, S, K>(
     }, debounceMs);
   }
 
+  /**
+   * Re-open the remote vault under `key` and merge it (same rules as a
+   * restore: 404 + seen marker = `missing`, a vault our key cannot open =
+   * `unreadable`, a fetch / marker error = `failed`).
+   */
+  function makeRefresh(ctx: CapturedAccount<C>): (key: Uint8Array) => Promise<RemoteRefresh> {
+    return async (key) => {
+      let resp: R | null;
+      try {
+        resp = await deps.fetch(ctx.client);
+      } catch (e) {
+        deps.log?.('keyvault: pre-seal fetch failed', { err: (e as Error)?.message });
+        return 'failed';
+      }
+      if (!ctx.stillValid() || !ctx.account) return 'failed';
+      if (!resp) {
+        const seen = await deps.seenMarker(ctx.account);
+        if (seen === null || !ctx.stillValid()) return 'failed';
+        return seen ? 'missing' : 'ok';
+      }
+      let kr: K;
+      try {
+        kr = deps.open(key, resp);
+      } catch (e) {
+        if (!ctx.stillValid()) return 'failed';
+        deps.log?.('keyvault: remote vault unreadable under own key (pre-seal)', { err: (e as Error)?.message });
+        return 'unreadable';
+      }
+      // No await between this check and the merge.
+      if (!ctx.stillValid()) return 'failed';
+      deps.importKeys(kr);
+      return 'ok';
+    };
+  }
+
   /** Run one publish (caller guarantees none is in flight) and do the bookkeeping. */
-  function startPublish(): Promise<PublishOutcome> {
+  function startPublish(skipRefresh = false): Promise<PublishOutcome> {
     const ctx = deps.capture();
     const p = (async (): Promise<PublishOutcome> => {
       try {
@@ -584,6 +738,17 @@ export function createVaultController<C, R, S, K>(
           getKey: deps.getKey,
           readKeyring: deps.readKeyring,
           isEmpty: deps.isEmpty,
+          hasKeys: deps.hasKeys,
+          committed: deps.committed,
+          precheckExport: paused !== null,
+          refreshRemote: deps.refreshBeforeSeal && !skipRefresh ? makeRefresh(ctx) : undefined,
+          onRemoteBlocked: (reason) => {
+            // Only for the account the state belongs to (no await since the check in runKeyVaultPublish).
+            if (ctx.account && ctx.accountStillValid()) setState('blocked', reason, ctx);
+          },
+          onPaused: (reason) => {
+            if (ctx.account && ctx.accountStillValid()) paused = reason;
+          },
           seal: deps.seal,
           send: (sealed) => deps.send(ctx.client, sealed),
           canPublish,
@@ -608,6 +773,7 @@ export function createVaultController<C, R, S, K>(
   function afterPublish(outcome: PublishOutcome, ctx: CapturedAccount<C>): void {
     if (outcome === 'published') {
       failStreak = 0;
+      paused = null;
       cancelRetryTimer();
     } else if (outcome === 'failed') {
       if (failStreak < backoff.length && retryTimer === null) {
@@ -646,7 +812,7 @@ export function createVaultController<C, R, S, K>(
 
   /** Wait for any in-flight publish, then run exactly one — for `forRun`'s
    *  account (default: the one active now), re-checked after the wait. */
-  async function publishNow(forRun?: CapturedAccount<C>): Promise<PublishOutcome> {
+  async function publishNow(forRun?: CapturedAccount<C>, skipRefresh = false): Promise<PublishOutcome> {
     const run = forRun ?? deps.capture();
     while (publishing) {
       await publishing.catch(() => undefined);
@@ -656,7 +822,7 @@ export function createVaultController<C, R, S, K>(
     if (!run.account || !run.accountStillValid()) return 'stale';
     if (!canPublish()) return 'blocked';
     cancelBackupTimer();
-    return startPublish();
+    return startPublish(skipRefresh);
   }
 
   async function backupNow(): Promise<BackupNowResult> {
@@ -709,8 +875,9 @@ export function createVaultController<C, R, S, K>(
     deps.log?.('keyvault: user confirmed replacing the remote vault', { reason: blockReason });
     setState('done', null, run);
     pendingBackup = false;
-    // publishNow re-checks `run` after waiting for an in-flight publish.
-    return publishNow(run);
+    // publishNow re-checks `run` after waiting for an in-flight publish. No
+    // pre-seal refresh: the user chose to overwrite an unreadable / gone remote.
+    return publishNow(run, true);
   }
 
   function retry(): void {
@@ -726,6 +893,7 @@ export function createVaultController<C, R, S, K>(
     pendingBackup = false;
     publishAgain = null;
     failStreak = 0;
+    paused = null;
     cancelBackupTimer();
     cancelRetryTimer();
     setState('idle', null, null);
@@ -746,6 +914,7 @@ export function createVaultController<C, R, S, K>(
       pendingBackup,
       publishing: publishing !== null,
       failStreak,
+      paused,
     }),
   };
 }

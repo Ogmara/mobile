@@ -19,14 +19,24 @@ import {
   encPublicKeyHex,
   buildDeviceEncBinding,
   buildDeviceEncRevoke,
+  verifyEncKeyBinding,
   type WalletSignFn,
+  type DeviceEncKeyRecord,
 } from '@ogmara/sdk';
 import * as SecureStore from 'expo-secure-store';
-import { getWalletScope } from './walletScope';
+import { getWalletScope, scopedGetFor, scopedSetFor } from './walletScope';
 import { isValidAddress } from './vaultAccounts';
 import { getSetting, setSetting } from './settings';
 import { walletAddress, signClaim, getCryptoClient, e2eAvailable } from './cryptoEnv';
-import { e2elog, withRetry } from './e2eDebug';
+import { e2elog, withRetry, isRateLimit } from './e2eDebug';
+import { RebindBackoff, nodeReportsBinding, selectStaleOwnRows } from './deviceEncCore';
+
+/**
+ * Per-wallet AsyncStorage row (NEW key, `::<wallet>` scoped, wiped on sign-out)
+ * holding the own-device re-bind backoff (deviceEncCore `RebindBackoff`).
+ * Not vault / SecureStore data.
+ */
+const REBIND_BACKOFF_BASE = 'ogmara.e2e.rebindBackoff';
 
 /**
  * The device's X25519 private key, PER ACCOUNT.
@@ -128,25 +138,51 @@ async function revokeStaleEncKeys(
   if (!client) return;
   try {
     const { keys } = await client.getEncKeys(wallet);
-    const did = deviceId.toLowerCase();
-    const cur = currentEncPub.toLowerCase();
-    const stale = keys.filter(
-      (k) => (k.device_id ?? '').toLowerCase() === did && (k.enc_pub ?? '').toLowerCase() !== cur,
-    );
+    if (walletAddress() !== wallet) return;
     const network = await client.getNetwork();
+    if (walletAddress() !== wallet) return;
+    // 0.58.0 (D): revoke ONLY rows whose wallet-signed binding verifies for
+    // OUR device id (the signature covers device_id + wallet). A node serving
+    // another device's row — or a fabricated unbound one — under our device
+    // id must not be able to make this device revoke it.
+    const stale = await selectStaleOwnRows(keys, deviceId, currentEncPub,
+      async (row) => (await verifyEncKeyBinding(row as DeviceEncKeyRecord, wallet, network)).status);
     for (const k of stale) {
+      if (walletAddress() !== wallet) return;
       const revoke = await buildDeviceEncRevoke({
         walletAddress: wallet,
         encPubHex: k.enc_pub,
         walletSign: sign,
         network,
       });
-      await withRetry(() => client.publishEncKeyEnvelope(wallet, revoke), 'revoke stale enc-key');
+      await withRetry(() => {
+        if (walletAddress() !== wallet) return Promise.reject(new Error('account changed before revoke publish'));
+        return client.publishEncKeyEnvelope(wallet, revoke);
+      }, 'revoke stale enc-key');
       e2elog('revoked stale enc_pub', { deviceId, staleEncPub: k.enc_pub });
     }
   } catch (e) {
     e2elog('stale enc-key revoke skipped', { err: (e as Error)?.message });
   }
+}
+
+/** Load the re-bind backoff of `wallet` (a read error → empty: worst case one extra attempt). */
+async function loadRebindBackoff(wallet: string): Promise<RebindBackoff> {
+  return RebindBackoff.fromJson(await scopedGetFor(wallet, REBIND_BACKOFF_BASE));
+}
+
+/** One binding run per wallet at a time (it is fired un-awaited from several connect paths). */
+const bindingInflight = new Map<string, Promise<void>>();
+
+/**
+ * Called after every binding run settles (connect, account switch, node
+ * switch) — channelCrypto registers its "resume persisted epoch
+ * establishments" here (a hook, because channelCrypto already imports this
+ * module through dmCrypto).
+ */
+let bindingSettledHook: (() => void) | null = null;
+export function setBindingSettledHook(fn: (() => void) | null): void {
+  bindingSettledHook = fn;
 }
 
 /**
@@ -160,8 +196,21 @@ async function revokeStaleEncKeys(
 export async function ensureDeviceEncBinding(): Promise<void> {
   if (!e2eAvailable()) return;
   const wallet = walletAddress();
+  if (!wallet) return;
+  const running = bindingInflight.get(wallet);
+  if (running) return running;
+  const p = ensureDeviceEncBindingFor(wallet)
+    .finally(() => {
+      if (bindingInflight.get(wallet) === p) bindingInflight.delete(wallet);
+      try { bindingSettledHook?.(); } catch { /* never break binding */ }
+    });
+  bindingInflight.set(wallet, p);
+  return p;
+}
+
+async function ensureDeviceEncBindingFor(wallet: string): Promise<void> {
   const client = getCryptoClient();
-  if (!wallet || !client) return;
+  if (!client) return;
 
   const kp = await getOrCreateEncKeypair();
   // The keypair is resolved from the CURRENT scope, which may have changed
@@ -177,19 +226,73 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   // Registry-verified (not just the local marker): confirm the node actually has THIS
   // device_id bound to our CURRENT enc_pub; only skip when registry agrees AND marker set.
   let registryOk = false;
+  /** Our row exists with our CURRENT enc_pub but the node serves it `bound: false`. */
+  let ownRowUnbound = false;
   try {
     const { keys } = await client.getEncKeys(wallet);
-    const mine = keys.find((k) => (k.device_id ?? '').toLowerCase() === deviceId.toLowerCase());
-    registryOk = !!mine && (mine.enc_pub ?? '').toLowerCase() === kp.publicKeyHex.toLowerCase();
+    const mine = keys.find((k) => (k.device_id ?? '').toLowerCase() === deviceId.toLowerCase()
+      && (k.enc_pub ?? '').toLowerCase() === kp.publicKeyHex.toLowerCase())
+      ?? keys.find((k) => (k.device_id ?? '').toLowerCase() === deviceId.toLowerCase());
+    // 0.58.0 (B2): a row served `bound: false` (stored before l2-node 0.142.0,
+    // no wallet signature retained) is NOT ok — private channels no longer
+    // wrap keys to unbound rows, so re-publish the binding (a newer ts
+    // re-binds). `bound` absent = an older node that doesn't report it: ok.
+    const encMatches = !!mine && (mine.enc_pub ?? '').toLowerCase() === kp.publicKeyHex.toLowerCase();
+    ownRowUnbound = encMatches && (mine as { bound?: boolean }).bound === false;
+    registryOk = encMatches && !ownRowUnbound;
     e2elog('binding check', {
       wallet, deviceId, localEncPub: kp.publicKeyHex,
       registryEncPub: mine?.enc_pub ?? null, registryOk,
+      registryBound: (mine as { bound?: boolean } | undefined)?.bound ?? null,
       markerSet: (await getSetting('encKeyBound')) === marker,
     });
   } catch {
     if ((await getSetting('encKeyBound')) === marker) return;
   }
+  const backoffKey = RebindBackoff.key(wallet, deviceId, kp.publicKeyHex);
+  if (registryOk) {
+    // Bound now: forget any re-bind backoff for this key (best-effort).
+    const b = await loadRebindBackoff(wallet);
+    if (b.has(backoffKey)) {
+      b.clear(backoffKey);
+      await scopedSetFor(wallet, REBIND_BACKOFF_BASE, b.toJson());
+    }
+  }
   if (registryOk && (await getSetting('encKeyBound')) === marker) return;
+  if (walletAddress() !== wallet) return;
+
+  // 0.58.0 (D): RE-binding an own row the node serves `bound: false` is
+  // rate-limited — never against a node older than 0.142.0 (it cannot store
+  // a bound row, so every attempt would only spend the wallet's 10/h
+  // DeviceEnc budget), and otherwise at most once per 1 h → 4 h → 24 h per
+  // (wallet, device, enc_pub), 1 h after a 429. First-time binding (no row /
+  // a different enc_pub) is not affected.
+  let backoff: RebindBackoff | null = null;
+  if (ownRowUnbound) {
+    let reports = false;
+    try {
+      reports = nodeReportsBinding(await client.health());
+    } catch {
+      reports = false; // unknown node version → treat as old (fail closed)
+    }
+    if (walletAddress() !== wallet) return;
+    if (!reports) {
+      e2elog('re-bind skipped: node does not store wallet-bound rows (< 0.142.0)', { deviceId });
+      return;
+    }
+    backoff = await loadRebindBackoff(wallet);
+    if (walletAddress() !== wallet) return;
+    const now = Date.now();
+    if (!backoff.allowed(backoffKey, now)) {
+      e2elog('re-bind skipped: backoff', { deviceId, waitMs: backoff.remainingMs(backoffKey, now) });
+      return;
+    }
+    // Recorded BEFORE publishing: a crash or kill mid-publish must not let the
+    // next launch retry immediately.
+    backoff.record(backoffKey, now);
+    await scopedSetFor(wallet, REBIND_BACKOFF_BASE, backoff.toJson());
+    if (walletAddress() !== wallet) return;
+  }
 
   const sign: WalletSignFn = (claim) => signClaim(claim);
   const envelope = await buildDeviceEncBinding({
@@ -199,7 +302,20 @@ export async function ensureDeviceEncBinding(): Promise<void> {
     walletSign: sign,
     network: await client.getNetwork(),
   });
-  await withRetry(() => client.publishEncKeyEnvelope(wallet, envelope), 'publish binding');
+  // Account re-check INSIDE the retry: a switch during a backoff sleep (or
+  // while the wallet signed) must not publish this binding.
+  try {
+    await withRetry(() => {
+      if (walletAddress() !== wallet) return Promise.reject(new Error('account changed before binding publish'));
+      return client.publishEncKeyEnvelope(wallet, envelope);
+    }, 'publish binding');
+  } catch (e) {
+    if (backoff && isRateLimit(e)) {
+      backoff.record(backoffKey, Date.now(), true);
+      await scopedSetFor(wallet, REBIND_BACKOFF_BASE, backoff.toJson());
+    }
+    throw e;
+  }
   e2elog('published binding', { deviceId, encPub: kp.publicKeyHex });
   // Re-check once more before the DESTRUCTIVE step: revocation is not
   // reversible, and the publish above may itself have taken a while.

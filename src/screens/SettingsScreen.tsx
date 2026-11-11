@@ -46,6 +46,8 @@ import {
   keyVaultAccount,
   getKeyVaultStatus,
   subscribeKeyVaultStatus,
+  previewKeyPrune,
+  pruneKeysAndBackup,
   type BackupNowResult,
   type VaultStatus,
 } from '../lib/keyVault';
@@ -93,7 +95,7 @@ export default function SettingsScreen() {
   const [mediaAutoload, setMediaAutoload] = useState<string>('always');
   const [syncing, setSyncing] = useState(false);
   /** Which key-vault action is running (rows are disabled while one is). */
-  const [kvBusy, setKvBusy] = useState<null | 'backup' | 'restore' | 'replace'>(null);
+  const [kvBusy, setKvBusy] = useState<null | 'backup' | 'restore' | 'replace' | 'prune'>(null);
   const [kvStatus, setKvStatus] = useState<VaultStatus>(() => getKeyVaultStatus());
 
   // Profile state
@@ -213,7 +215,79 @@ export default function SettingsScreen() {
       case 'blocked': return t('e2e_backup_blocked');
       case 'stale': return t('e2e_backup_stale');
       case 'unavailable': return t('e2e_backup_unavailable');
+      // The keyring refused to export (never "backed up"): say why.
+      case 'paused': return t(getKeyVaultStatus().paused === 'opaque_overflow' ? 'e2e_backup_paused_opaque' : 'e2e_backup_paused_large');
       default: return t('e2e_backup_failed');
+    }
+  };
+
+  /** A destructive confirm as a promise: true only for the action button (cancel / backdrop → false). */
+  const confirmAsync = (body: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      showAlert(t('e2e_prune_title'), body, [
+        { text: t('cancel'), style: 'cancel', onPress: () => resolve(false) },
+        { text: t('e2e_prune_action'), style: 'destructive', onPress: () => resolve(true) },
+      ]);
+    });
+
+  /**
+   * `vault_too_large` escape hatch — the user-confirmed prune LADDER (same
+   * levels and rules as web / desktop, one level per press, least risky
+   * first): a DRY RUN of the next level that would remove something, a
+   * confirm showing its counts, then the prune and one backup retry. The last
+   * resort (restored primary-name keys: most likely the user's own history)
+   * needs a second confirm. B1: if keys arrived while a dialog was open (the
+   * fresh dry run would remove MORE), nothing is removed and the dialog is
+   * shown again with the new counts — at most 3 rounds. Busy for the whole
+   * dialog: no second confirm in parallel.
+   */
+  const handlePruneKeys = async () => {
+    if (kvBusy) return;
+    // Captured before any confirm: the prune runs only for THIS account.
+    const account = keyVaultAccount();
+    if (!account) return;
+    setKvBusy('prune');
+    const kb = (bytes: number) => Math.max(1, Math.round(bytes / 1024));
+    try {
+      for (let round = 0; round < 3; round++) {
+        const plan = previewKeyPrune();
+        if (!plan) {
+          showAlert(t('e2e_section'), t('e2e_prune_none'));
+          return;
+        }
+        const cls = plan.result.byClass;
+        let ok = false;
+        switch (plan.level) {
+          case 'nodeServed':
+            ok = await confirmAsync(t('e2e_prune_confirm', { count: cls.nodeServed.count, kb: kb(cls.nodeServed.bytes) }));
+            break;
+          case 'memberWraps':
+            ok = await confirmAsync(t('keyvault_prune_members_confirm', { count: cls.memberWraps.count, kb: kb(cls.memberWraps.bytes) }));
+            break;
+          case 'restoredAlternates':
+            ok = await confirmAsync(t('keyvault_prune_alternates_confirm', {
+              count: cls.restoredAlternates.count, kb: kb(cls.restoredAlternates.bytes), atRisk: cls.ownAlternatesAtRisk.count,
+            }));
+            break;
+          case 'restoredPrimaries':
+            // Last resort: two confirms.
+            ok = await confirmAsync(t('keyvault_prune_primaries_confirm', { count: cls.restoredPrimaries.count, kb: kb(cls.restoredPrimaries.bytes) }))
+              && await confirmAsync(t('keyvault_prune_primaries_confirm2', { count: cls.restoredPrimaries.count }));
+            break;
+        }
+        if (!ok) return;
+        const r = await pruneKeysAndBackup(account, plan);
+        if (r === 'changed') continue; // re-show with the new counts
+        if (r === 'stale') showAlert(t('e2e_section'), t('e2e_backup_stale'));
+        else showAlert(t('e2e_section'), `${t('e2e_prune_done', { count: r.removed })}\n\n${backupMessage(r.backup)}`);
+        return;
+      }
+      showAlert(t('e2e_section'), t('e2e_prune_changed'));
+    } catch (e) {
+      showAlert(t('error_generic'), e instanceof Error ? e.message : '');
+    } finally {
+      setKvBusy(null);
+      setKvStatus(getKeyVaultStatus());
     }
   };
 
@@ -650,6 +724,28 @@ export default function SettingsScreen() {
             {t('e2e_section')}
           </Text>
           <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
+            {kvStatus.paused !== null && (
+              // The keyring refused to export: backups are paused, never "done".
+              <View style={styles.kvNotice}>
+                <Text style={[styles.rowText, { color: colors.warning, fontWeight: '600' }]}>
+                  {t('e2e_blocked_title')}
+                </Text>
+                <Text style={[styles.rowHint, { color: colors.textSecondary }]}>
+                  {t(kvStatus.paused === 'opaque_overflow' ? 'e2e_backup_paused_opaque' : 'e2e_backup_paused_large')}
+                </Text>
+                {kvStatus.paused === 'vault_too_large' && (
+                  <View style={styles.kvActions}>
+                    <Button
+                      label={t('e2e_prune_button')}
+                      variant="danger"
+                      disabled={kvBusy !== null}
+                      loading={kvBusy === 'prune'}
+                      onPress={() => { void handlePruneKeys(); }}
+                    />
+                  </View>
+                )}
+              </View>
+            )}
             {kvStatus.restore === 'blocked' && (
               // Backups are paused for this account until the user decides.
               <View style={styles.kvNotice}>

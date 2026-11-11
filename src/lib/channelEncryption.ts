@@ -97,3 +97,13 @@ export function isChannelRecordUsable(detail: unknown, channelId: number): boole
   if (ch.channel_id !== undefined && Number(ch.channel_id) !== channelId) return false;
   return true;
 }
+
+/**
+ * The channel type handed to key COVER (`coverChannelMembers`): `null` while
+ * the channel record is unresolved — cover then does nothing (fail closed;
+ * the placeholder `channelType: 0` reads Public and would skip
+ * verify-before-cover for a private channel) — else whether it is private.
+ */
+export function resolveCoverType(resolved: boolean, isPrivate: boolean): boolean | null {
+  return resolved === true ? isPrivate : null;
+}

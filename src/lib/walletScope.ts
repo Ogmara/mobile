@@ -284,6 +284,16 @@ export async function scopedGetForStrict(address: string, base: string): Promise
   return AsyncStorage.getItem(`${base}${SEP}${address}`);
 }
 
+/** Remove a row from a specific account's namespace (best-effort). */
+export async function scopedRemoveFor(address: string, base: string): Promise<void> {
+  if (!address) return;
+  try {
+    await AsyncStorage.removeItem(`${base}${SEP}${address}`);
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Write into a specific account's namespace. */
 export async function scopedSetFor(address: string, base: string, value: string): Promise<void> {
   if (!address) return;

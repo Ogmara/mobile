@@ -25,6 +25,7 @@ import {
   sealKeyVault,
   openKeyVault,
   VAULT_SIGN_CLAIM,
+  ChannelKeyringError,
   type VaultKeyring,
   type OgmaraClient,
   type KeyVaultResponse,
@@ -37,7 +38,9 @@ import {
   BackupKeyCache,
   createVaultController,
   makeEnsureBackupKey,
+  KeyringReadError,
   type BackupNowResult,
+  type BackupPauseReason,
   type PublishOutcome,
   type RestoreNowResult,
   type VaultStatus,
@@ -49,12 +52,16 @@ import {
   importConvKeysFromVault,
 } from './dmCrypto';
 import {
-  exportChannelKeysForVault,
+  prepareChannelKeyExport,
   importChannelKeysFromVault,
+  channelKeysHeld,
+  previewChannelKeyPrune,
+  applyChannelKeyPrune,
 } from './channelCrypto';
+import type { PruneLevel, PrunePlan } from './channelKeyCore';
 import { e2elog } from './e2eDebug';
 
-export type { BackupNowResult, RestoreNowResult, VaultStatus, PublishOutcome };
+export type { BackupNowResult, RestoreNowResult, VaultStatus, PublishOutcome, BackupPauseReason, PruneLevel, PrunePlan };
 
 /** Per-wallet "this device has opened or published this wallet's vault" marker.
  *  Lives under `<base>::<wallet>`, so `wipeWalletScope` (sign-out) removes it. */
@@ -79,9 +86,41 @@ const ensureBackupKey = makeEnsureBackupKey(backupKeys, {
   log: e2elog,
 });
 
+/**
+ * The keyring to seal. The channel part is the SDK keyring's export
+ * (sdk-js 0.68.0): it refuses — `ChannelKeyringError` — rather than shrink
+ * the backup (`vault_too_large`, `opaque_overflow`) or export for another
+ * account (`stale`); those become {@link KeyringReadError}, which the
+ * controller surfaces as "backup paused" (never as backed up).
+ */
+/** Commit handles of prepared (not yet published) exports, by the keyring object handed to the seal. */
+const pendingCommits = new WeakMap<VaultKeyring, () => boolean>();
+
 function currentKeyring(): VaultKeyring {
-  return { conv: exportConvKeysForVault(), chan: exportChannelKeysForVault() };
+  let prepared: ReturnType<typeof prepareChannelKeyExport>;
+  try {
+    prepared = prepareChannelKeyExport();
+  } catch (e) {
+    if (e instanceof ChannelKeyringError) throw new KeyringReadError(e.code);
+    throw e;
+  }
+  const kr: VaultKeyring = { conv: exportConvKeysForVault(), chan: prepared.chan };
+  pendingCommits.set(kr, prepared.commit);
+  return kr;
 }
+
+/** The publish of `kr` succeeded: commit its channel-key export. False when the keyring refused it (stale). */
+function commitKeyring(kr: VaultKeyring): boolean {
+  const c = pendingCommits.get(kr);
+  pendingCommits.delete(kr);
+  if (!c) return false;
+  const ok = c();
+  if (!ok) e2elog('keyvault: export commit refused (account changed)');
+  return ok;
+}
+
+/** Anything to back up? Cheap: never builds the channel export (it marks keys persisted). */
+const hasKeys = (): boolean => channelKeysHeld() || Object.keys(exportConvKeysForVault()).length > 0;
 
 const isEmptyKeyring = (kr: VaultKeyring): boolean =>
   Object.keys(kr.conv).length === 0 && Object.keys(kr.chan).length === 0;
@@ -120,6 +159,11 @@ const controller = createVaultController<OgmaraClient | null, KeyVaultResponse, 
   markSeen,
   readKeyring: currentKeyring,
   isEmpty: isEmptyKeyring,
+  hasKeys,
+  committed: commitKeyring,
+  // Re-open + import the remote vault before EVERY seal (one LWW record per
+  // wallet: never overwrite keys another device backed up since our restore).
+  refreshBeforeSeal: true,
   seal: sealKeyVault,
   send: async (client, sealed) => {
     if (!client) throw new Error('no client');
@@ -186,6 +230,38 @@ export function keyVaultAccount(): KeyVaultAccount | null {
 export function replaceKeyVault(forAccount: KeyVaultAccount | null): Promise<PublishOutcome> {
   if (forAccount === null) return Promise.resolve('stale');
   return controller.replace(forAccount);
+}
+
+/**
+ * Settings → "Free up backup space" while the backup is paused as
+ * `vault_too_large`: the next prune ladder level (from `from` on) whose DRY
+ * RUN would remove something, with per-class counts — nothing removed.
+ * null = nothing removable at any remaining level.
+ */
+export function previewKeyPrune(from?: PruneLevel): PrunePlan | null {
+  return previewChannelKeyPrune(from);
+}
+
+/**
+ * After the user CONFIRMED `plan` (captured for `forAccount` before the
+ * confirm opened): prune exactly that level / scope, then run one backup
+ * (restore gate, pre-seal re-open + import — the SDK remembers pruned keys
+ * for the session, so the re-import does not bring them back — honest
+ * result). 'stale' when the account changed meanwhile, 'changed' when a
+ * fresh dry run would remove MORE than the confirmed plan (nothing removed:
+ * re-confirm with the new counts).
+ */
+export async function pruneKeysAndBackup(
+  forAccount: KeyVaultAccount | null, plan: PrunePlan,
+): Promise<{ removed: number; backup: BackupNowResult } | 'stale' | 'changed'> {
+  if (!forAccount || !forAccount.account || !forAccount.accountStillValid()) return 'stale';
+  // B1: never remove more than the user confirmed — a fresh dry run that grew
+  // (keys arrived while the dialog was open) returns 'changed', nothing removed.
+  const r = applyChannelKeyPrune(plan);
+  if (r === 'changed') return 'changed';
+  if (!r) return 'stale';
+  e2elog('keyvault: user-confirmed prune', { level: plan.level, removed: r.removedCount });
+  return { removed: r.removedCount, backup: await controller.backupNow() };
 }
 
 /** Current vault status for the active account (Settings E2E section). */

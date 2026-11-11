@@ -37,14 +37,20 @@ import {
   decryptChannelMessage,
   coverChannelMembers,
   rotateChannelKey,
+  markChannelKeyStale,
+  getChannelKeyStatus,
+  subscribeChannelKeyStatus,
   type DmDisplay,
+  type ChannelKeyStatus,
 } from '../lib/channelCrypto';
 import { chatErrorKey } from '../lib/chatErrors';
+import { statusMessageKey } from '../lib/channelKeyCore';
 import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '../lib/mediaCrypto';
 import {
-  resolveIsEncrypted, shouldAutoJoinEncryptedChannel, isChanMetaResolvedFor, isChannelRecordUsable, type ChanMetaKey,
+  resolveIsEncrypted, resolveCoverType, shouldAutoJoinEncryptedChannel, isChanMetaResolvedFor, isChannelRecordUsable, type ChanMetaKey,
 } from '../lib/channelEncryption';
 import { CHANNEL_TYPE_PRIVATE, canPost, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
+import { isInviteGatedChannel } from '../lib/privateInvite';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 import type { PayloadButtonRow } from '../lib/payloadDecoder';
@@ -180,13 +186,23 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // account must never count as resolved for the next one.
   const [chanMetaFor, setChanMetaFor] = useState<ChanMetaKey | null>(null);
   const chanMetaResolved = isChanMetaResolvedFor(chanMetaFor, { client, channelId, address: myAddress ?? null });
-  const isPrivate = chanMeta.channelType === CHANNEL_TYPE_PRIVATE;
+  // B1 (0.58.0): an id in the private namespace (>= 2^32) is private no
+  // matter what type a node reports — a hostile node calling a private channel
+  // "public" must not get plaintext sends or unverified key cover. Same rule as
+  // the join screen (`isInviteGatedChannel`); unknown types also read private.
+  const isPrivate = chanMeta.channelType === CHANNEL_TYPE_PRIVATE
+    || isInviteGatedChannel(chanMeta.channelType, channelId);
   // FAILS CLOSED (2026-08-02, see channelEncryption.ts) — mirrors the web/
   // desktop fix for the same bug (an image attached to a private channel
   // during this exact window uploaded to IPFS unencrypted).
   const isEncrypted = resolveIsEncrypted(chanMetaResolved, chanMeta.encryptionEnabled, isPrivate);
   const canEstablishKey = isPrivate ? chanMeta.isMod : true; // public: any member may seed
   const encFloor = isPrivate ? chanMeta.keyEpochFloor : 0;    // public never rotates
+  // Channel type for key COVER (verify-before-cover, mobile 0.58.0): `null`
+  // while the record is unresolved, which makes `coverChannelMembers` a no-op.
+  // The placeholder `channelType: 0` reads Public, and covering a private
+  // channel on that path would skip the member-proof verification.
+  const coverType = resolveCoverType(chanMetaResolved, isPrivate);
   // Whether the current viewer may post in this channel under the runtime
   // posting policy (protocol §3.6). False in `ReadPublic` (broadcast)
   // channels for non-creator/non-mod members. Gates message buttons the same
@@ -597,6 +613,17 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // polling forever. We read the latest state via decodedRef and bound total attempts with
   // a ref.
   const repollTicksRef = useRef(0);
+  // Channel key state ("re-keying…" while an epoch settles, ~2 min after a
+  // kick; or a problem the user should know about). Module-level in
+  // channelCrypto, reset on every account switch.
+  const [keyStatus, setKeyStatus] = useState<ChannelKeyStatus>(() => getChannelKeyStatus(channelId));
+  useEffect(() => {
+    setKeyStatus(getChannelKeyStatus(channelId));
+    return subscribeChannelKeyStatus(() => setKeyStatus(getChannelKeyStatus(channelId)));
+  }, [channelId]);
+  // Read by the interval / WS closures below without re-creating them.
+  const coverTypeRef = useRef<boolean | null>(coverType);
+  coverTypeRef.current = coverType;
   useEffect(() => {
     if (!isEncrypted) return;
     repollTicksRef.current = 0;
@@ -604,7 +631,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const anyWaiting = [...decodedRef.current.values()].some((d) => d.kind === 'waiting');
       if (!anyWaiting || repollTicksRef.current >= 100) { clearInterval(iv); return; }
       repollTicksRef.current++;
-      void coverChannelMembers(channelId).catch(() => {});
+      void coverChannelMembers(channelId, coverTypeRef.current).catch(() => {});
       setDecodeTick((x) => x + 1);
     }, 3000);
     return () => clearInterval(iv);
@@ -617,8 +644,17 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       // and re-cover remaining members so a removed member can't read new messages.
       if (event.type === 'channel_members_changed' && (event as any).channel_id === channelId) {
         const floor = (event as any).key_epoch_floor ?? 0;
-        if (isEncrypted && isPrivate && floor > 0) void rotateChannelKey(channelId, floor).catch(() => {});
-        else if (isEncrypted) void coverChannelMembers(channelId).catch(() => {});
+        // F: the next send re-reads the node's latest epoch.
+        markChannelKeyStale(channelId);
+        // The rotation gate is NOT the node-derived channel type: channelCrypto
+        // rotates only channels in the private id range or with a creator pin
+        // (a node could otherwise make members rotate a public channel, or
+        // keep a private one from rotating by calling it public / leaving the
+        // record unresolved). Any other channel just gets a cover pass.
+        if (isEncrypted && Number.isSafeInteger(floor) && floor > 0) {
+          void rotateChannelKey(channelId, floor).catch(() => {});
+        }
+        if (isEncrypted) void coverChannelMembers(channelId, coverTypeRef.current).catch(() => {});
         // Renew the late-key-arrival poll's give-up budget: a membership change is
         // exactly the signal that a key cover may be in flight for a waiting message.
         repollTicksRef.current = 0;
@@ -707,7 +743,11 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           client?.markChannelRead(channelId).catch(() => {});
         }
         // Cover any newly-joined member devices with the channel key (no-op if none).
-        if (isEncrypted) void coverChannelMembers(channelId).catch(() => {});
+        // A live message may come from a newer epoch: re-read the latest on the next send (F).
+        if (isEncrypted) {
+          markChannelKeyStale(channelId);
+          void coverChannelMembers(channelId, coverTypeRef.current).catch(() => {});
+        }
       }
     });
     return unsub;
@@ -915,9 +955,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         }
         // Encrypted attachments ride INSIDE the ciphertext via `media` (not plaintext).
         if (sentEncryptedMedia.length > 0) options.media = sentEncryptedMedia;
-        const built = await buildEncryptedChannelMsg(channelId, canEstablishKey, text || '', options, encFloor);
+        const built = await buildEncryptedChannelMsg(channelId, canEstablishKey, text || '', options, encFloor, isPrivate);
         if (built === 'waiting') {
           showInfo(t('chat_send'), t('e2e_channel_waiting'));
+          return;
+        }
+        if (built === 'rekeying') {
+          showInfo(t('chat_send'), t('e2e_channel_rekeying'));
           return;
         }
         const r = await client.sendMessageEnvelope(built);
@@ -963,7 +1007,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // pendingAttachments / pendingEncryptedMedia are declared after this callback; like
     // the original send they're read via closure (state setters keep them fresh enough
     // for the send path) and intentionally omitted from deps to avoid a TDZ reference.
-  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, pendingMentions, chanMetaResolved]);
+  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, isPrivate, pendingMentions, chanMetaResolved]);
 
   /**
    * Sends a button press (protocol §3.3): an ordinary signed message whose
@@ -992,15 +1036,18 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     if (isEncrypted) {
       const built = await buildEncryptedChannelMsg(origin.channelId, canEstablishKey, command, {
         replyTo: origin.msgId, mentions: [origin.author], viaButton: true,
-      }, encFloor);
+      }, encFloor, isPrivate);
       if (built === 'waiting') {
         throw new Error(t('e2e_channel_waiting'));
+      }
+      if (built === 'rekeying') {
+        throw new Error(t('e2e_channel_rekeying'));
       }
       await client.sendMessageEnvelope(built);
       return;
     }
     await client.pressButton(origin, command);
-  }, [client, isEncrypted, canEstablishKey, encFloor, t, chanMetaResolved, channelId]);
+  }, [client, isEncrypted, canEstablishKey, encFloor, isPrivate, t, chanMetaResolved, channelId]);
 
   const handleReply = useCallback((msg: ExtendedEnvelope) => {
     const d = decodedRef.current.get(chanCacheId(msg));
@@ -1251,6 +1298,14 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
               numberOfLines={1}
             >
               {isPrivate ? t('e2e_encrypted_badge') : t('e2e_public_by_design')}
+            </Text>
+          )}
+          {isEncrypted && keyStatus.state !== 'idle' && (
+            <Text
+              style={{ color: keyStatus.state === 'problem' ? colors.error : colors.textSecondary, fontSize: fontSize.xs }}
+              numberOfLines={2}
+            >
+              {t(statusMessageKey(keyStatus) ?? 'e2e_channel_key_failed')}
             </Text>
           )}
         </View>

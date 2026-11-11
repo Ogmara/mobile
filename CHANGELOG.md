@@ -5,6 +5,478 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.58.0] - 2026-11-03
+
+Private-channel "verify before cover" (protocol §3.9.2, clients spec §8.4
+item 5; sdk-js 0.66.0, l2-node 0.142.0+) and node-arbitrated channel key
+epochs (protocol §8.1.5; sdk-js 0.67.0 `establishEpochKey`, l2-node 0.143.0+
+`key_commitment_v1`), and the shared channel keyring (sdk-js 0.68.0
+`ChannelKeyring`), same rules as web 0.85.0 / desktop 1.85.0. All changes
+are in shipped (runtime) code. The orchestration is pure and
+dependency-injected: `lib/privateCoverCore.ts` (verify-before-cover),
+`lib/epochWiring.ts` (the SDK epoch protocol's deps + outcome handling),
+`lib/channelKeyCore.ts` (peer rule, heal, floor coalescing, send / cover /
+resume decisions) and `lib/deviceEncCore.ts` (re-bind backoff), pinned by their `*.test.ts`;
+`channelCrypto.ts` / `deviceEnc.ts` wire them to the SDK and storage.
+
+### Security
+
+- **Channel key epochs are arbitrated by the node; this app's own
+  fork-resolution protocol is gone.** Audits reproduced PERMANENT key forks
+  with per-device first-write-wins storage (concurrent rotators after a kick
+  each won some devices). Every establishment, rotation and adoption now runs
+  the SDK's shared `establishEpochKey` against the node's one winner per
+  (channel, epoch) (lowest `(key_ts, key_commitment)`, final after 120 s). The
+  removed `privateCoverCore.ts` `establishEpoch` and its tests are replaced by
+  `epochWiring.ts`, which supplies every dependency: a timeout on each injected
+  call plus an account guard (an account switch mid-establish publishes
+  nothing more), a per-account pending-key store (zeroed on switch), a shared
+  per-account escalation gate and token bucket, `highestEpochSeen` from
+  AUTHENTICATED evidence only — messages decrypted under a TRUSTED key
+  (author-verified AND pair-consistent), verified wraps, our own
+  establishments and node pair matches of author-verified keys; never a raw
+  `key_epoch` from a message, a commitment-less (legacy) key, or a
+  vault-restored key whose own-slot wrap was not re-verified — so a
+  commitment-less wrap a hostile node serves at epoch 100000 does not, by
+  itself, make every node look "lagging" after a restart. (It does not stop
+  that node from later reporting a commitment that matches the planted key;
+  see the N1 residual below.) Holding a key for an epoch makes THAT epoch
+  known to exist: a node answering `none` for it yields `node_lagging` and
+  never gets a second key there. `peerCommitments` queries up to 3 other
+  nodes from the user's known-node history on the same Klever network under
+  the cross-client peer rule: a commitment is an answer, 403/404 ("does not
+  carry the channel / not a member there") is skipped, 401 / network /
+  timeout / 5xx are failures; `[]` when there are no peers or all were
+  skipped, the answers when at least one answered, and an error (key stays
+  unconfirmed) only when none answered and at least one failed. Peer probes
+  never solve proof-of-work (a challenge counts as a failure). The epoch
+  NUMBER being established (never the key) is persisted per wallet
+  (`ogmara.pchan.establishing::<wallet>`, new AsyncStorage row) before each
+  call and resumed after a restart before anything else, so a crash after the
+  own-device publish still covers the remaining members with the SAME key.
+  Establishment is refused on nodes without `key_commitment_v1`.
+- **Inbound channel keys are verified.** Our own slot is read with `?proof=1`;
+  a wrap at an arbitrated epoch is accepted only if `verifyChannelKeyWrap`
+  passes (signed 0x61 bound to this channel / wallet / device, author a
+  verified member — for private channels via the member-proof verifier —
+  commitment matching the unwrapped key). Previously a node could plant a key
+  of its choosing into this device's slot. Commitment-less (legacy, pre-0.143)
+  records are still unwrapped for history but never count as evidence.
+- **Strict publish policy.** Every channel-scope key envelope is built with
+  `buildChannelEpochKeyEnvelope` (commitment + `key_ts`); the broken
+  commitment-less call site in `channelCrypto.ts` is gone. Covering a new
+  member at an EXISTING epoch reuses that epoch's `(keyTs, keyCommitment)`
+  pair, and only after checking that the node's winner hashes to the key we
+  hold. Keys carry their pair in memory; a key restored from the key vault
+  (whose SDK format carries keys only) gets the pair back from the node's
+  commitment, verified locally (`H(scope, epoch, key_ts, key) == commitment`).
+  A key of a LEGACY epoch cannot be covered on an arbitrating node: channels
+  that may rotate then rotate (gated) when a member is uncovered.
+- **Rotation is a no-op for public channels.** `rotateChannelKey` (and every
+  follow-up rotation: escalate, split, node-lagging recovery, unconfirmed
+  exhaustion, legacy, epoch-too-low, heal) runs only for ids in the private
+  namespace (>= 2^32) or channels with a creator pin; the effective floor of a
+  public channel is 0. The screen's rotation gate no longer uses the
+  node-derived channel type. A hostile node can no longer make members rotate
+  a public encrypted channel with a members-changed event.
+- **Split handling + heal trigger.** `split` (a peer node finalized a
+  different key) and `node_lagging` rotate through the escalation gate (once
+  per channel per 10 min). A message at our LATEST epoch, whose key this app
+  CONFIRMED, that does not decrypt triggers a gated rotation past it — only
+  once per epoch (the attempt is persisted per wallet in
+  `ogmara.pchan.healed::<wallet>` BEFORE rotating and marked done once the
+  rotation produced a key past it), so an old bad message can no longer
+  re-heal on every remount / restart (E+2, E+3 …). An attempt that never
+  finished (app killed, account switch, a joined flow for another epoch, a
+  terminal problem) may be retried after 10 min, at most 3 times, still
+  through the escalation gate.
+- **Unified client guard: nothing beyond the node's highest epoch + 256.**
+  Every establish / rotate plan (send, rotation, heal, legacy, escalation,
+  recovery) first reads the node's highest epoch and refuses — nothing
+  persisted, nothing published — an epoch above it + 256 (the node's own
+  acceptance bound, SDK `NODE_EPOCH_MAX_AHEAD`); a node-served
+  `key_epoch_floor` above that bound is never trusted (send / rotation
+  refused, "switch to another node").
+- **A held key is never overwritten.** A different key arriving for an epoch
+  we already hold (a verified wrap, a flow result, a vault restore) is kept
+  as an alternate: every held key decrypts, sending uses a CONFIRMED one, the
+  mismatch is logged and — at our latest epoch, where rotation is allowed —
+  rotated past (gated, recorded in the heal ledger). See "Shared channel
+  keyring" below for the store, the vault format and its caps.
+- **Escalation slots are spent only on a real start**: a gated plan (heal,
+  key mismatch, legacy cover rotation, seeding past a legacy epoch) takes the
+  gate only when it really starts a flow — not when it joins one already in
+  flight or a confirmed key at (or above) the epoch is already held. The
+  automatic re-key retry budget (12) resets only on a COMPLETE result; an
+  outcome with uncovered members keeps counting.
+- **Floor-driven rotations are coalesced.** A node-supplied
+  `channel_members_changed` floor starts at most one rotation per channel at
+  a time, keeps ONE queued follow-up (the highest floor seen meanwhile) and
+  waits at least 60 s between two starts.
+- **Own-device re-bind is rate-limited.** Re-binding an own enc row the node
+  serves `bound: false` never happens against nodes < 0.142.0 (checked via
+  `/health` version), and otherwise at most 1 h → 4 h → 24 h apart per
+  (wallet, device, enc_pub), 1 h after a 429 (the node allows 10 DeviceEnc
+  envelopes per hour per wallet). Backoff persisted in the new per-wallet row
+  `ogmara.e2e.rebindBackoff::<wallet>`. One binding run per wallet at a time.
+- **Stale-key revocation only for our own verified rows.** After binding a
+  new enc key this device revokes only rows for its device id whose
+  wallet-signed binding VERIFIES (the signature covers device id + wallet);
+  a node serving another device's or a fabricated row under our device id can
+  no longer make us revoke it.
+
+- **A node can no longer get this app to wrap a private channel's key to a
+  wallet it merely claims is a member.** Before covering new joiners,
+  establishing an epoch or rotating, every other member listed by the node is
+  run through the SDK's `filterVerifiedMembers`, which re-verifies the signed
+  membership evidence (`POST /channels/{id}/member-proofs`) locally. Enc keys
+  are fetched, and keys wrapped, ONLY for members that verify, plus this
+  wallet's own devices (always included explicitly, never sent to the
+  verifier). Anything unverifiable — bad evidence, an old node that 404s the
+  endpoint, a 429, a network error — is not covered (fail closed); that member
+  stays in the existing "waiting for key" state until a later pass verifies
+  them. Public channels are unchanged.
+- **Which channels count as private is no longer the node's call alone.**
+  Every channel id in the private namespace (>= 2^32, l2-node
+  `PRIVATE_CHANNEL_ID_FLOOR`) is treated as private for key cover, sending and
+  encryption whatever type the node reports (same rule as the join screen's
+  `isInviteGatedChannel`) — a node calling a private channel "public" gets
+  neither plaintext sends nor unverified key cover. A channel this wallet ever
+  pinned a creator for (under either network) is verified too. Rotation always
+  verifies. The node-reported network must be `mainnet` or `testnet`; anything
+  else, or an unreadable trust state, skips the cover pass entirely instead of
+  falling back to "public".
+- **Only wallet-signed enc keys receive private-channel keys.** Each enc-key
+  row goes through `verifyEncKeyBinding` — rows the node serves `bound: true`
+  are selected FIRST, then the 10 newest (the node's per-wallet cap), so newer
+  unbound junk rows can no longer push a member's real bound rows out of the
+  examined window:
+  `invalid` rows AND `bound: false` rows are never wrapped to in a private
+  channel — a node can mint an unsigned row for any wallet, this one included.
+  Two bound rows for one device are ordered by the wallet-signed timestamp,
+  not the node's `created_at`. Verdicts are cached per account (bounded LRU,
+  keyed by wallet, device, key, signed ts and signature). This device
+  re-publishes its `DeviceEncBinding` on connect whenever the node serves its
+  own row as `bound: false` (built-in wallets only; account re-checked inside
+  the publish retry), so own devices bound before l2-node 0.142.0 re-bind
+  themselves.
+- **Creator pin + seen removals, per wallet.** The creator established by the
+  first verification (or, for a private channel this wallet creates — id in the
+  private namespace only — the wallet itself) is pinned per `network:channel`
+  and passed as `pinnedCreator` on every later pass; a pin always wins and is
+  never overwritten (a pass that raced a different pin is discarded). Verified
+  Kick/Ban timestamps (`seenRemovals`) are merged (union, max) and carried
+  across passes and nodes. Both live in NEW AsyncStorage keys
+  `ogmara.pchan.creatorPins::<wallet>` and `ogmara.pchan.seenRemovals::<wallet>`
+  (explicit-address writes, serialized; a load waits for queued writes; sign-
+  out's scope wipe removes them). Vault / SecureStore keys and formats are
+  untouched. A storage read error skips the pass instead of reading as
+  "nothing stored". Cap refusals (4096 pins, 512 channels / 2048 removals per
+  channel) are logged. `allowUnderivedCreator` is never set. Seen removals
+  are stored ONE ROW PER CHANNEL (`ogmara.pchan.seen.<network>:<id>::<wallet>`
+  plus a count index `ogmara.pchan.seenIndex::<wallet>`), read lazily per
+  channel, with a wallet-wide cap of 65536 entries (a channel past it keeps
+  its newest) — a single blob of every channel could exceed Android
+  AsyncStorage's ~2 MB row limit. The pre-release single-blob row
+  `ogmara.pchan.seenRemovals::<wallet>` is merged into the per-channel rows
+  (never over a fuller row) and removed after they are written.
+- **Account switch mid-flow publishes nothing.** Cover, establish and rotate
+  capture the account (wallet, scope, reset generation, client, signer) before
+  resolving the device context and re-check it after every await AND inside
+  every retried request (`guarded` — a switch during a 429 backoff sleep never
+  sends on the retry): member list, member-proofs, enc keys, key-envelope
+  publishes, key read-backs, trust-state writes. The SDK proof cache and the
+  binding-verdict cache are replaced (not cleared) on every switch.
+- **Unknown channel type → no cover.** The screen passes the channel type only
+  once the channel record is resolved (`resolveCoverType`); the late-key
+  re-poll used to cover while the record was still the placeholder (Public).
+- **A channel-key fetch finishing after an account switch is discarded**
+  instead of being cached into the new account's session (and its key-vault
+  backup). Pre-existing; found while wiring the account guard. The fetch
+  de-dup entry is only removed by its own promise.
+
+### Changed
+
+- **Shared channel keyring (sdk-js 0.68.0).** This app's own channel key
+  cache and vault mapping (`ChannelKeyring` / `exportVault` / `importVault`
+  in `channelKeyCore.ts`, with its own results, alias forms and caps) are
+  gone; channel keys now live in the SDK's `ChannelKeyring` — the same class
+  web and desktop use — behind the thin adapter `ChannelKeyStore`
+  (`channelKeyCore.ts`). Mapping: a verified own-slot wrap → source `wrap`;
+  an `establishEpochKey` result → `establish` (final only when the node
+  reports it final, otherwise PROVISIONAL: held, not backed up, not sent
+  under except the early-use first key); a commitment-less node key →
+  `legacy`; vault entries → `importFromVault`. Results `added/same` →
+  stored, `mismatch` → a different key held at the epoch (conflict /
+  promoted, compared BY BYTES — the keyring hands out copies), `full` →
+  `refused` (node-served keys only; respected, no fallback). The keyring
+  never lowers a key, so "this key's pair lost at the node"
+  (`KeyCommitmentConflictError` on cover) is kept by the adapter and cleared
+  when the node reports the pair as ours again. Every put / import / export
+  carries the account generation; the keyring is cleared on every account
+  switch. Vault SecureStore / AsyncStorage keys are unchanged; the vault
+  `chan` map format stays compatible (`S:E` plus aliases: reads `#alt1..`,
+  the pre-release mobile `~<n>`, `#ovf`, `#pri`, `#ns`; unknown entries kept
+  verbatim — now up to 8192, the old mobile cap of 1024 is gone).
+- **Trust after a restart.** Every restored key is a `vault` key: it
+  decrypts, but is not evidence, not sent / covered under and not the
+  rotation base until this app re-reads OUR OWN slot's wrap for that epoch
+  (`?proof=1`, `verifyChannelKeyWrap`) and it carries the same bytes — then
+  it is re-put as `wrap` and the node's pair is recorded. This replaces the
+  earlier rule that a node-matched commitment hash alone made a vault key
+  evidence (a hostile node can compute a matching pair for any key of its
+  own). Cover requires an author-verified key: we never vouch (by wrapping
+  it to members) for a key a node served. A wrap from our own slot whose
+  verified author is our own wallet is put with `ownSlot` (ours: never
+  member-capped); before the first wrap ANOTHER member authored is cached
+  for a channel, the latest held epoch is re-verified that way (once per
+  channel per account generation). `final` is set only from the node's
+  commitment `final` flag for exactly that pair.
+- **Every keyring query is bounded to the node's highest epoch + 256**
+  (send key, cover key, rotation base, heal target, evidence used for
+  targets): a malicious member's verified wrap far ahead no longer moves the
+  rotation base. A send, cover, rotation or heal without the node's latest
+  epoch answer fails closed (`waiting` / skipped) instead of picking from an
+  unbounded view. "Already rotated" after a kick counts only TRUSTED keys
+  (a planted key at the floor can no longer suppress the rotation). Every
+  keyring PUT of a key that is not ours (a legacy node key, another member's
+  wrap) passes `maxEpoch` = node highest + 256 (above it: refused); the fetch
+  / decrypt-miss path reads the node's highest first and caches nothing
+  without it (`waiting`). Vault restores pass no ceiling (the record spans
+  every channel). A decrypt miss fetches at most 3 times per (channel,
+  epoch) per minute (then "waiting" and a vault restore request; bounded,
+  cleared on account switch); an epoch above the ceiling is never requested;
+  a failed node-highest read is not repeated for 30 s.
+- **Legacy key envelopes are bound to the requested epoch** (SDK
+  `acceptFetchedEnvelope`): the envelope's own epoch must equal the epoch
+  asked for; for a "latest" read the node's label must agree with it.
+  Previously the node's label won.
+- **Key backup re-opens the remote vault before every seal.** Each
+  automatic or manual backup first fetches and opens the node's current
+  vault and merges it (the vault is one last-write-wins record: a key
+  another device backed up after our restore is no longer overwritten). A
+  failed fetch sends nothing (retried); a vault our key cannot open, or a
+  404 for a vault this device has seen, pauses backups (existing
+  Retry / Replace flow). "Replace backup" alone skips this step. The export
+  is TWO-STEP (`prepareExport` → publish → `commitExport`): keys are marked
+  backed up only after the node accepted the publish; a failed / stale /
+  blocked publish commits nothing. The "anything to back up?" check uses the
+  keyring's `heldEpochCount` / `opaqueCount` (no export).
+- **Backup paused instead of shrunk.** When the keyring refuses to export
+  (`vault_too_large`: the keys that must be backed up exceed the budget;
+  `opaque_overflow`: more unreadable entries than it can keep) the backup is
+  PAUSED — shown in Settings → Encryption & Key Backup and in the "Back up"
+  result, nothing sent, not retried as a failure (new i18n keys
+  `e2e_backup_paused_large` / `e2e_backup_paused_opaque`, all 7 languages).
+  For `vault_too_large` Settings offers "Free up backup space" — the same
+  PRUNE LADDER as web / desktop, one level per press, least risky first,
+  each a DRY RUN whose per-class counts / KB the confirm shows: (a)
+  node-served keys no author vouched for (default); (b) other members'
+  unconfirmed wraps in the ONE most flooded channel; (c) restored older
+  alternates, warning how many may be the user's own outranked keys
+  (`ownAlternatesAtRisk`); (d) LAST RESORT restored primary-name keys
+  (most likely own history) behind two confirms. Each channel's 16 newest
+  epochs and every own / verified / provisional key are always kept. The
+  SDK remembers pruned keys for the session, so the backup that follows
+  (with its pre-seal re-import) does not bring them back. A confirmed level
+  is applied only if a fresh dry run (same level and channel) removes NO MORE
+  than the confirm showed — in total, in bytes and in every class; otherwise
+  nothing is removed and the dialog is shown again with the new counts (at
+  most 3 rounds, `e2e_prune_changed`). Settings stays busy for the whole
+  dialog (no second confirm in parallel). Texts: mobile
+  `e2e_prune_*` plus web's `keyvault_prune_members_confirm`,
+  `keyvault_prune_alternates_confirm`, `keyvault_prune_primaries_confirm`,
+  `keyvault_prune_primaries_confirm2` (all 7 languages).
+- **Sending never blocks on an unverifiable key.** When the latest held key
+  is node-served / restored and its own-slot wrap does not re-verify, the
+  send falls back to the highest TRUSTED + FINAL key at or above the floor
+  (as web); our own pending rotation still waits for FINAL. "Already
+  rotated" after a kick counts only FINAL trusted keys. The early-use first
+  key requires the VERIFIED establishment targets to be complete, non-empty
+  and all our own wallet (the node's member list alone is no proof).
+- **Paused backups cost nothing in the background.** While the keyring
+  refuses to export, key changes no longer trigger the debounced fetch +
+  open + import of the remote vault; a manual backup first re-checks the
+  (side-effect-free) export and only then contacts the node.
+- **Legacy epochs are never sent under (decision for all three clients).**
+  At an epoch the node reports LEGACY (commitment-less) this app no longer
+  sends under the held key — there is no commitment, so the key may be one
+  a node chose. Whoever may establish (creator / mod, or any member of a
+  channel that may rotate) moves the channel to a new ARBITRATED epoch above
+  the node's highest, through the escalation gate (slot spent only on a real
+  start; target above the trusted base, the node's highest and the
+  authenticated highest — for cover and send alike); everyone else waits.
+  The pre-release legacy-send exception (and
+  any `bestForSendLegacy` / `allowUnverified` use) is gone. Legacy keys still
+  decrypt history.
+- **W1 (re-audit): an automatic resume never replays the plan's escalation
+  gate / heal-ledger write** (`resumePlanOpts`). Before, a heal / mismatch /
+  legacy-cover plan's resume re-ran its `gate` and `beforeStart`: each retry
+  spent an escalation slot and recorded another heal attempt, or was refused
+  by the gate and left the epoch unfinished.
+- Tests: the old keyring tests are gone (covered by the SDK's keyring and
+  property tests); `channelKeyStore.test.ts` pins the wiring against the
+  REAL SDK keyring and `sealKeyVault` / `openKeyVault`.
+- **Re-keying waits for FINAL.** After a kick / rotation, sending waits until
+  the node reports the new epoch's winner final (~120 s); the channel header
+  and the send attempt show "Re-keying the channel… This can take about 2
+  minutes" (new i18n key `e2e_channel_rekeying`, all 7 languages). The very
+  first key of a brand-new channel whose creator is its only member is used
+  immediately (SDK early-use hook, only for that case). Problems are surfaced
+  in the header (`e2e_channel_key_node_behind` for epoch-too-high /
+  unrecoverable lagging node, `e2e_channel_key_failed` otherwise — "Sending
+  again will retry": problem states are retried by the next send; automatic
+  resumes give up after 12 attempts and then show this state instead of
+  "re-keying…" forever).
+- **Latest epoch re-read on send.** When the last check is older than 30 s,
+  or after a members-changed / live message event for the channel, a send
+  first reads the node's latest epoch and adopts a newer arbitrated epoch
+  (verified wrap) instead of sending under a stale one.
+- `ensureChannelKeyForSend` / `buildEncryptedChannelMsg` can return
+  `'rekeying'`; new exports `getChannelKeyStatus`, `subscribeChannelKeyStatus`,
+  `markChannelKeyStale`, `resumeChannelKeyWork`.
+- `coverChannelMembers(channelId, isPrivate | null)`,
+  `rotateChannelKey(channelId, floor)` (always verifies),
+  `ensureChannelKeyForSend(channelId, canEstablish, floor, isPrivate)` and
+  `buildEncryptedChannelMsg(…, floor, isPrivate)` take the channel type
+  explicitly where it matters (required, so no caller silently falls back).
+- Private cover passes are throttled to one per 60 s per channel (public stays
+  at 10 s). A pass stops at the first failed `member-proofs` fetch (429, 503,
+  network, old node) instead of trying the remaining chunks; members not yet
+  covered for the current epoch are verified first, and a per-channel offset
+  rotates through very large channels so the tail is eventually reached.
+- Verification runs in chunks of 100 wallets (the node's per-request cap) and
+  yields to the UI between chunks and every 16 fresh binding verifications.
+- A pass whose response exhausted the verifier's budget backs that channel's
+  cover off for 60 s, doubling to 10 min, reset by the next clean pass.
+- Account-change and "pass skipped" are distinct errors in the E2E trace
+  (`AccountChangedError` / `CoverSkippedError`).
+
+### Known limitations
+
+- **Shared keyring (sdk-js 0.68.0) — limitations:**
+  - After a restart a vault key needs one own-slot wrap read per epoch before
+    it is sent / covered under (a node round trip on the first send). If the
+    node no longer serves our wrap for that epoch, the key only decrypts; the
+    send settles through the SDK (adopt / rotate, gated) instead.
+  - Sending needs the node's latest-epoch answer (l2-node 0.143.0+); on an
+    older node or while it cannot be read the send shows "waiting".
+  - Members of OLD (legacy-epoch) channels cannot send until one gated move
+    to an arbitrated epoch has run (by a member who may establish; at most
+    once per channel per 10 min through the gate) and is final (~2 min).
+    A public channel whose sender is not a mod waits for a mod to send.
+    Sending on pre-0.143 nodes is not supported.
+  - `vault_too_large` / `opaque_overflow` stop backups until resolved. The
+    prune ladder can remove history only the pruned keys could open; level
+    (c) may remove the user's own outranked keys (the confirm says how many
+    at most) and level (d) most likely own history — both only after
+    explicit confirmation. `opaque_overflow` has no in-app remedy (update the
+    app that wrote the unknown entries).
+  - Vault restores carry no per-channel epoch ceiling (the SDK takes one
+    `maxEpoch` per record); a restored member flood is pruneable only via the
+    ladder.
+  - The ceiling (node highest + 256) is the HOME node's word: a hostile home
+    node controls its reported highest and therefore also lifts the
+    keyring's `maxEpoch` ceiling for its own users (same class as "a hostile
+    home node can withhold keys").
+  - On nodes older than l2-node 0.143 the decrypt-miss path never fetches
+    missing keys (no node-highest answer → nothing cached); only keys from
+    the vault decrypt there. Ship only after the fleet runs l2-node 0.143+.
+  - The node-highest cache is per channel, not per node: after a node switch
+    the previous node's value is used for up to 30 s.
+  - Older clients (web <= 0.84, desktop <= 1.84, mobile <= 0.57) reading a
+    backup written by this version: see sdk-js 0.68.0 "Older clients" —
+    values survive their re-export, old mobile keeps at most 1024 unknown
+    entries.
+  - Each backup now costs one extra vault fetch + open + import (and the
+    SDK export) on the JS thread; on Hermes that is noticeable only for very
+    large vaults (debounced, 4 s).
+- **Regression for pre-l2-node-0.139 private channels:** their `ChannelCreate`
+  has no id derivation, and mobile keeps no own copy of it, so without an
+  existing pin every member fails closed — new joiners of such channels are
+  no longer covered by this app.
+- **New joiners wait longer.** Up to 60 s between private cover passes, longer
+  while a node rate-limits (`member-proofs` is 20 requests / 60 s per wallet,
+  one request per 100 members per pass) or after a budget exhaustion.
+- Own devices still on a `bound: false` row are not covered in private
+  channels until the automatic re-bind lands (next connect); other members'
+  pre-0.142 devices stay uncovered until those devices run a re-binding client.
+- Hermes runs the verifier's Ed25519 checks as pure JS on the UI thread;
+  within one 100-wallet chunk there is no yield point (the SDK exposes none).
+  A legitimate chunk costs a few hundred verifications, a hostile one up to
+  the SDK budget (2000) — seconds of jank, then the backoff applies.
+- **Re-keying takes ~2 minutes.** After every kick / rotation, sending is
+  blocked behind "re-keying…" until the epoch is final on the node.
+- **OPEN RESIDUAL (accepted): a network partition during a rotation can split
+  an epoch for good** — no node-to-node sync carries key envelopes. Mitigated,
+  not prevented: `peerCommitments` catches a split before confirming (only
+  with a reachable peer node in the picker history; a peer whose `/health`
+  cannot be read is not counted, so with no reachable peer the check is off),
+  and the heal trigger rotates when a message at a confirmed epoch does not
+  decrypt. Both are gated to one rotation per channel per 10 min — anyone able
+  to post garbage ciphertext at the latest epoch (or a single hostile peer)
+  can force one gated re-keying per 10 min.
+- **Unreachable peers silently disable split detection.** A peer whose
+  `/health` cannot be read when the list is built is left out (the list is
+  rebuilt up to 5 times, 60 s apart); with no reachable same-network peer,
+  only the heal trigger remains. Peer requests follow HTTP redirects (the
+  SDK's `fetch` has no redirect option); the URLs come only from the user's
+  own node history.
+- **A hostile home node can still drive floor rotations** — at most one per
+  channel per 60 s (one in flight, one queued); each blocks sending ~2 min.
+- Residual (W3) CLOSED by the legacy decision above: a commitment-less wrap
+  a hostile node serves is still unwrapped (it decrypts history) but is never
+  a send key; a node that falsely reports an epoch as legacy only triggers
+  one gated move.
+- Residual (W4): keys whose `(keyTs, commitment)` pair cannot be recovered
+  (vault key, node lacks the epoch) only decrypt; they are never used to
+  cover and never count as evidence. Sending under such a key is refused:
+  holding it makes its epoch known, so a node answering `none` gets
+  `node_lagging`. In a PRIVATE channel that self-heals through one gated
+  rotation past the epoch; in a PUBLIC encrypted channel (no rotation) the
+  user cannot send on that node at all and the header says "switch to
+  another node" (`e2e_channel_key_node_behind`, also used for epoch-too-high
+  and unrecoverable lag) — "Sending again will retry" is not shown there.
+- Residual (N1): a hostile home node can plant a commitment-less key far
+  ahead (e.g. epoch 100000) and later report a commitment matching it, so
+  that key would confirm. Sending only ever picks a held key at most 256
+  epochs above the node's highest known epoch (the node's own acceptance
+  bound); a hostile node that also reports a matching "highest" still wins
+  for its own users (same class as "a hostile home node can withhold keys").
+- The key vault (SDK format) stores keys only; a restored key's
+  `(keyTs, commitment)` pair is recovered from the home node. If that node no
+  longer has the epoch (evicted / lagging), the key still decrypts history
+  but is not used to cover or send.
+- Legacy (pre-0.143) epochs: their keys still decrypt (never send, see
+  above), and new members cannot be covered at them; a public encrypted channel whose latest
+  epoch is legacy keeps new joiners waiting until a member who may seed sends
+  (which opens a new arbitrated epoch, gated). Establishment is refused on
+  nodes without `key_commitment_v1` (keys restored from the vault then cannot
+  be confirmed for sending there).
+- After an adoption, this device re-covers the current members once (the
+  node answers already-present wraps without storing them again); after its
+  own establishment only members that joined since are wrapped to.
+- Own devices whose enc row the node serves `bound: false` re-bind at most
+  once per 1 h / 4 h / 24 h; until then they are not covered in private
+  channels. A stale own row stored before 0.142.0 (unbound, unsigned) is no
+  longer revoked automatically.
+- Persisted establishing epochs are resumed sequentially in the background
+  after connect; at most 12 automatic resume attempts per channel per session.
+- Residual W3 (from the SDK): a node that WITHHOLDS a Kick/Ban or omits a
+  `ChannelLeave` can keep an old, once-valid join covered; `seenRemovals`
+  narrows this, it does not close it.
+- A node can push a member's real enc-key rows out of the 8 examined by
+  serving newer junk rows — that member is then not covered (fail closed, no
+  key exposure).
+- Deferred (audit N3): a pin / seen-removals write already queued when the
+  account signs out can land after `wipeWalletScope` and re-create the
+  `ogmara.pchan.*::<wallet>` keys. Those keys then become candidates in
+  vault.ts `parseAddressesFromScopedKeys`; that scan is bounded and its slot
+  probe filters them out. Same race as the existing `addJoinedChannelFor`.
+- Deferred (audit N5): a channel-key fetch discarded after an account switch
+  returns `missing`, and the decrypt path then calls `requestVaultRestore()`
+  for the CURRENT account. Harmless: one extra restore attempt.
+
 ## [0.57.0] - 2026-10-20
 
 Key-vault data-loss fixes (protocol §2.5, spec 05 §8.5), same rules as web

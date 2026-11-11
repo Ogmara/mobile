@@ -30,6 +30,7 @@ import { useConnection } from '../context/ConnectionContext';
 import { debugLog } from '../lib/debug';
 import { createChannelOnChain, getChannelIdFromTx } from '../lib/kleverTx';
 import { addJoinedChannelFor } from '../lib/joinedChannels';
+import { pinOwnPrivateChannel } from '../lib/channelCrypto';
 import { isSameAccount } from '../lib/accountGuard';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
@@ -128,6 +129,10 @@ export default function CreateChannelScreen() {
       // this is correct even if a switch lands now: the channel was created
       // by — and belongs in the joined set of — the starting account.
       await addJoinedChannelFor(start.wallet!, resp.channel_id).catch(() => {});
+      // Verify-before-cover (0.58.0): pin ourselves as this private channel's
+      // creator from our own first contact — a pin always wins over whatever
+      // ChannelCreate a node later serves. Explicit account, like above.
+      if (channelType === 2) await pinOwnPrivateChannel(start.wallet!, client, resp.channel_id);
       // Created successfully under the starting account; if the user has
       // since switched, don't pop a success dialog over the other account.
       if (!stillSame()) return;

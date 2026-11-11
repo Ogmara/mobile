@@ -5,6 +5,35 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.58.1] - 2026-11-11
+
+### Security
+
+Dependency scan (`npm audit`), **build tooling only — none of it ships in the
+APK**. A plain non-force `npm audit fix` (lockfile only, no `package.json`
+dependency change) took the findings from 19 to 14 and cleared the one
+critical and three of the four highs: `shell-quote` (critical, via
+`react-devtools-core`), `node-forge` and `undici` (high, via `@expo/cli`), plus
+a `ws` bump. Verified: `tsc` clean, 359/359 tests, and `expo export --platform
+android` produces a Hermes bundle of the same size whose only byte differences
+are the same ~30-byte non-deterministic region and footer checksum that two
+exports of one tree also differ in (the JS payload is unchanged).
+
+**Still open — 14 findings, no fix reachable without a breaking upgrade:**
+- `image-size` (high; DoS via crafted JXL/HEIF/ICNS images): pinned by
+  `metro@0.83.3` (`^1.x`). Fixed only in current metro (0.88 no longer depends
+  on it), i.e. Expo SDK 54 → 58 with a React Native bump. Reachability: used
+  by Metro when bundling image assets on the developer machine; needs a
+  malicious image committed to this repo.
+- 12 moderate + 1 low (`@expo/*`, `expo-constants`, `expo-notifications`,
+  `glob`, `minimatch`, `uuid`, `xcode`, `deepmerge`, …): resolved by the same
+  SDK upgrade (`npm audit` points at `expo@58.0.24`; re-verified that the
+  patched `@expo/cli`/`@expo/metro-config` exist under SDK 58). Build/dev
+  tooling reached through `expo`/`react-native`.
+- Deferred, not ignored: a four-major Expo jump needs the full Metro/Hermes
+  retest, native-module compatibility check and an on-device smoke test, so
+  it is not applied blind (`npm audit fix --force` was NOT run).
+
 ## [0.58.0] - 2026-11-03
 
 Private-channel "verify before cover" (protocol §3.9.2, clients spec §8.4

@@ -17,6 +17,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   AppState,
+  type TextInputInstance,
 } from 'react-native';
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import { useTranslation } from 'react-i18next';
@@ -157,7 +158,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [replyTo, setReplyTo] = useState<ReplyContext | null>(null);
   const [info, setInfo] = useState<{ title?: string; message: string } | null>(null);
   const showInfo = useCallback((title: string, message: string) => setInfo({ title, message }), []);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
   // Addresses resolved by the @-mention / -command pickers, merged with any raw
   // `@klv1…` typed by hand when the message is sent. Mobile previously sent an
   // EMPTY mentions[] on every message — so no mobile user could generate a

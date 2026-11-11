@@ -17,7 +17,7 @@ import {
   ActivityIndicator,
   AppState,
   Image,
-  type ViewToken,
+  type ListViewToken as ViewToken,
 } from 'react-native';
 import NewsReactionBar from '../components/NewsReactionBar';
 import PostImage from '../components/PostImage';
@@ -638,7 +638,7 @@ export default function NewsFeedScreen() {
         ListFooterComponent={
           loadingOlder ? (
             <ActivityIndicator style={{ paddingVertical: spacing.md }} color={colors.accentPrimary} />
-          ) : null
+          ) : undefined
         }
         contentContainerStyle={posts.length === 0 ? styles.emptyContainer : styles.list}
         ListEmptyComponent={

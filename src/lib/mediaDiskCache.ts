@@ -63,7 +63,7 @@ export function getCachedMediaUri(tag: string): string | null {
 export function putCachedMedia(tag: string, bytes: Uint8Array): string {
   ensureDir();
   const file = cacheFile(tag);
-  file.write(bytes);
+  file.writeSync(bytes);
   return file.uri;
 }
 

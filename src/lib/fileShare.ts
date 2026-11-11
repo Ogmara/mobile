@@ -33,13 +33,13 @@ export async function shareFileFromUri(uri: string, filename: string): Promise<v
       const commaIdx = uri.indexOf(',');
       const bytes = base64ToBytes(uri.slice(commaIdx + 1));
       const file = new File(Paths.cache, safeName);
-      file.write(bytes);
+      file.writeSync(bytes);
       localUri = file.uri;
     } else if (uri.startsWith('http')) {
       const resp = await fetch(uri);
       const bytes = new Uint8Array(await resp.arrayBuffer());
       const file = new File(Paths.cache, safeName);
-      file.write(bytes);
+      file.writeSync(bytes);
       localUri = file.uri;
     }
     if (await Sharing.isAvailableAsync()) {

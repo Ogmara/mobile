@@ -217,7 +217,7 @@ export default function NodeSelector({ visible, onClose }: Props) {
                   <Text style={[styles.hint, { color: colors.textSecondary }]}>
                     Long-press or tap ✕ to remove a node
                   </Text>
-                ) : null
+                ) : undefined
               }
             />
           )}

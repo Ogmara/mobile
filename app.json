@@ -2,17 +2,11 @@
   "expo": {
     "name": "Ogmara",
     "slug": "ogmara",
-    "version": "0.58.1",
+    "version": "0.59.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "scheme": "ogmara",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0E1621"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "org.ogmara.app",
@@ -22,17 +16,24 @@
     },
     "android": {
       "package": "org.ogmara.app",
-      "versionCode": 80,
+      "versionCode": 81,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0E1621"
-      },
-      "edgeToEdgeEnabled": true
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#0E1621",
+          "resizeMode": "contain"
+        }
+      ],
       "expo-localization",
       "expo-secure-store",
       "expo-local-authentication",
@@ -46,7 +47,10 @@
             "photo"
           ]
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-status-bar",
+      "expo-font"
     ]
   }
 }

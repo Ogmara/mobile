@@ -17,7 +17,7 @@ import Animated, {
   useSharedValue,
   withSpring,
 } from 'react-native-reanimated';
-import * as MediaLibrary from 'expo-media-library';
+import * as MediaLibrary from 'expo-media-library/legacy';
 import { File, Paths } from 'expo-file-system';
 import { base64ToBytes } from '../lib/mediaCrypto';
 import { sanitizeFilename } from '../lib/sanitize';
@@ -45,7 +45,7 @@ export async function saveImageToDevice(uri: string): Promise<boolean> {
       const ext = meta.split(';')[0].split('/')[1] || 'jpg';
       const bytes = base64ToBytes(uri.slice(commaIdx + 1));
       tempFile = new File(Paths.cache, sanitizeFilename(`ogmara-${Date.now()}.${ext}`));
-      tempFile.write(bytes);
+      tempFile.writeSync(bytes);
       localUri = tempFile.uri;
     } else if (uri.startsWith('http')) {
       const resp = await fetch(uri);
@@ -53,7 +53,7 @@ export async function saveImageToDevice(uri: string): Promise<boolean> {
       const buf = new Uint8Array(await resp.arrayBuffer());
       const ext = (resp.headers.get('content-type') || '').split('/')[1]?.split(';')[0] || 'jpg';
       tempFile = new File(Paths.cache, sanitizeFilename(`ogmara-${Date.now()}.${ext}`));
-      tempFile.write(buf);
+      tempFile.writeSync(buf);
       localUri = tempFile.uri;
     }
     await MediaLibrary.saveToLibraryAsync(localUri);

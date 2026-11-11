@@ -406,7 +406,7 @@ export default function WalletBalanceScreen() {
 
       {/* Send dialog */}
       {sendDialog && (
-        <Modal visible transparent animationType="fade" onRequestClose={() => !sending && setSendDialog(null)}>
+        <Modal visible transparent animationType="fade" onRequestClose={() => { if (!sending) setSendDialog(null); }}>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => !sending && setSendDialog(null)}>
             <View style={[styles.dialog, { backgroundColor: colors.bgSecondary }]} onStartShouldSetResponder={() => true}>
               <Text style={[styles.dialogTitle, { color: colors.textPrimary }]}>{t('transfer_send')} {sendDialog.assetId}</Text>

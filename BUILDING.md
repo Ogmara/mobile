@@ -61,6 +61,12 @@ rm -rf ../sdk-js/node_modules/@noble
 > ```bash
 > npx expo prebuild --clean --platform android
 > ```
+> After every prebuild also set `android.enableMinifyInReleaseBuilds=false` in
+> `android/gradle.properties` (the SDK 58 template enables R8, which we do not
+> ship untested) and check `android/app/debug.keystore` still has md5
+> `4d3dbe5438b4d52b2707d5c039d09afb` (the signing key that lets `adb install -r`
+> upgrade in place; the template's own debug keystore is identical).
+>
 > This overwrites `android/` from scratch, including `versionCode`/
 > `versionName` (resets to `1`/whatever `app.json` says) — redo Step 1's
 > `android/app/build.gradle` edit *after* prebuild, not before. Not needed

@@ -5,6 +5,67 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.59.0] - 2026-11-11
+
+Platform upgrade: **Expo SDK 54 → 58** (React Native 0.81.5 → 0.88.1, React
+19.1 → 19.3, TypeScript 5.9 → 6.0, reanimated 4.1 → 4.7, gesture-handler
+2.28 → 3.3, screens 4.24 → 4.30, async-storage 2.1 → 2.2, every `expo-*`
+module to its SDK 58 release). `npm audit` goes from 14 findings to **0**.
+
+### Security
+
+- Closes the 14 findings left by 0.58.1 (build/dev tooling only, none shipped
+  in the APK): `image-size` (high; current Metro no longer depends on it) and
+  the 12 moderate + 1 low `@expo/*` / `glob` / `uuid` / `xcode` / `deepmerge`
+  findings, all resolved by the SDK 58 dependency set.
+- `minimatch` (GHSA-g3hv-75wg-m249, moderate DoS) is pinned to `^11.0.1` for
+  `@expo/fingerprint` via `overrides` because that package still pins `^10`;
+  remove the override once Expo's fingerprint depends on `>=11.0.1`
+  (`package.json` `//overrides-minimatch`).
+
+### Fixed
+
+- **Saving an image to the gallery always failed** after the upgrade
+  (`expo-media-library` ≥ 56 made the root import the new API; the old
+  `saveToLibraryAsync` now throws). The viewer uses
+  `expo-media-library/legacy`.
+- **`File.write()` became asynchronous in `expo-file-system` 58**; the
+  fire-and-forget call sites (share-as-file, image save, decrypted-media disk
+  cache) now use `writeSync()` so the file is complete before it is shared,
+  saved or rendered (otherwise a half-written cached image could be served for
+  the whole cache TTL).
+- Type fixes for the new React Native typings (`TextInputInstance` refs,
+  `ListViewToken`, list footers, `Buffer` access, a handler return type).
+
+### Changed
+
+- `app.json`: splash screen is configured through the `expo-splash-screen`
+  plugin (the top-level `splash` key is no longer read; background stays
+  `#0E1621`); `userInterfaceStyle` needs `expo-system-ui` (added);
+  `edgeToEdgeEnabled` and `newArchEnabled` removed (edge-to-edge is mandatory on
+  Android 16, the old architecture is gone). Added the now-required direct peer
+  dependencies `expo-font` and `react-native-worklets`.
+- Android status/navigation bars are transparent (edge-to-edge) and the splash
+  uses the AndroidX SplashScreen API — verify the look on a device.
+- Expo plugins `expo-sharing` and `expo-status-bar` were added to `app.json`
+  by prebuild (no new permissions; incoming-share handling stays off). The
+  external-storage permissions in the manifest are now capped at Android 12L
+  (`maxSdkVersion="32"`), narrower than before.
+- Native project regenerated with `expo prebuild --clean`. The debug keystore
+  is unchanged (checked by md5), so `adb install -r` still upgrades in place and
+  keeps the wallet. R8 minification stays **off** (the SDK 58 template turns it
+  on; it is untested here and would make this APK behave differently from every
+  APK tested so far) — see BUILDING.md.
+
+### Known limitations
+
+- Not exercised on a device yet; manual smoke test required (launch, wallet
+  unlock, vault restore, push token registration, image save/share, splash and
+  status bar look, key-epoch flows).
+- `Gesture.Pinch/Pan/Tap` in the image viewer are deprecated in
+  gesture-handler 3 (still work); `shouldShowAlert` in the notification
+  handler is deprecated; `FileInfo.modificationTime` is deprecated.
+
 ## [0.58.1] - 2026-11-11
 
 ### Security

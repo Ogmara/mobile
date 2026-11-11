@@ -17,6 +17,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   AppState,
+  type TextInputInstance,
 } from 'react-native';
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import { useTranslation } from 'react-i18next';
@@ -120,7 +121,7 @@ export default function DmConversationScreen({ route, navigation }: Props) {
   // P5: encrypted attachments pending send (descriptors hold per-file keys).
   const [pendingEncryptedMedia, setPendingEncryptedMedia] = useState<MediaDescriptor[]>([]);
   const [uploading, setUploading] = useState(false);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
 
   // Async decryption cache: `${msgIdHex}:${last_edited_at}` → display outcome. Decoding
   // is async (key fetch/unwrap), so it can't happen inline in the render path.

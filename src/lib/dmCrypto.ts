@@ -486,7 +486,7 @@ interface RawDmPayload {
 /** Base64-decode shim for Hermes (atob is available on recent RN; fall back if not). */
 function b64Decode(s: string): Uint8Array | null {
   try {
-    const bin = typeof atob === 'function' ? atob(s) : globalThis.Buffer?.from(s, 'base64').toString('binary');
+    const bin = typeof atob === 'function' ? atob(s) : (globalThis as { Buffer?: { from(s: string, enc: string): { toString(enc: string): string } } }).Buffer?.from(s, 'base64').toString('binary');
     if (bin == null) return null;
     const b = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);

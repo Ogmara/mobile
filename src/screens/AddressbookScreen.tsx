@@ -130,7 +130,7 @@ export default function AddressbookScreen() {
             <Text style={[styles.hint, { color: colors.textSecondary }]}>
               Long-press to remove a contact
             </Text>
-          ) : null
+          ) : undefined
         }
       />
 

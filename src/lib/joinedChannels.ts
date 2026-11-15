@@ -72,6 +72,20 @@ export async function loadJoinedChannels(): Promise<Set<number>> {
   return new Set();
 }
 
+/**
+ * Load a SPECIFIC account's joined set (explicit address, not the active
+ * scope) — for async flows that captured the account at start.
+ */
+export async function loadJoinedChannelsFor(address: string): Promise<Set<number>> {
+  try {
+    const raw = await scopedGetFor(address, STORAGE_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return new Set(arr);
+  } catch { /* ignore */ }
+  return new Set();
+}
+
 /** Check whether the joined-channel storage has been initialized. */
 export async function isJoinedStorageInitialized(): Promise<boolean> {
   return (await scopedGet(STORAGE_KEY)) !== null;

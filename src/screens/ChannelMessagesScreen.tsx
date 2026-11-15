@@ -55,6 +55,7 @@ import { isInviteGatedChannel } from '../lib/privateInvite';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 import type { PayloadButtonRow } from '../lib/payloadDecoder';
+import { uploadMedia, type UploadClient } from '../lib/mediaUpload';
 
 type Props = NativeStackScreenProps<ChatStackParamList, 'ChannelMessages'>;
 
@@ -1172,28 +1173,12 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         return;
       }
 
-      // Plaintext path (non-encrypted channels): RN FormData needs {uri, type, name}.
-      const formData = new FormData();
-      formData.append('file', {
-        uri: asset.uri,
-        type: mimeType,
-        name: filename,
-      } as any);
-
-      const headers = await client.authHeaders('POST', '/api/v1/media/upload');
-      const nodeUrl = (client as any).nodeUrl || '';
-      const resp = await fetch(`${nodeUrl}/api/v1/media/upload`, {
-        method: 'POST',
-        headers: { ...headers },
-        body: formData,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        throw new Error(`Upload failed (${resp.status}): ${text.slice(0, 150)}`);
-      }
-
-      const uploadResp = await resp.json();
+      // Plaintext path (non-encrypted channels); multipart body built in JS
+      // (lib/multipart.ts) because SDK 58's fetch rejects RN FormData uri parts.
+      const uploadResp = await uploadMedia(
+        client as unknown as UploadClient,
+        { uri: asset.uri, mimeType, fileName: filename, sizeHint: asset.fileSize },
+      );
       setPendingAttachments((prev) => [...prev, {
         cid: uploadResp.cid,
         mime_type: mimeType,

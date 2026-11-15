@@ -10,8 +10,9 @@
  * Hermes/RN constraints (no `crypto.subtle`):
  * - Read file bytes from the picked asset's `base64` (ImagePicker `{ base64: true }`).
  * - `encryptFile` / `decryptMedia` are pure-JS (@noble) — safe on Hermes.
- * - Upload: build a `Blob` from the cipher bytes and append to a `FormData` with an
- *   `encrypted=1` field (RN 0.81 `fetch` + `Blob` multipart).
+ * - Upload: the cipher bytes are posted as a hand-built multipart body with an
+ *   `encrypted=1` field (`mediaUpload.ts` / `multipart.ts`; SDK 58's fetch rejects
+ *   RN FormData parts).
  * - Render: fetch the ciphertext (retrying a 404/network error — a freshly-uploaded
  *   cross-node CID can take a few seconds to become fetchable), `decryptMedia`, and
  *   persist the plaintext to a TTL-bounded disk cache (`mediaDiskCache.ts`) so a cold
@@ -22,6 +23,7 @@
 
 import { encryptFile, decryptMedia, type MediaDescriptor } from '@ogmara/sdk';
 import { getCryptoClient } from './cryptoEnv';
+import { uploadMedia, type UploadClient } from './mediaUpload';
 import { e2elog } from './e2eDebug';
 import { getCachedMediaUri, putCachedMedia, clearDiskCache } from './mediaDiskCache';
 
@@ -102,35 +104,16 @@ export async function encryptAndUploadFile(file: PickedFile): Promise<MediaDescr
 
   const { cipher, key, nonce } = encryptFile(file.bytes);
 
-  // RN's `Blob` polyfill only accepts strings/other Blobs as parts — passing
-  // an ArrayBuffer/Uint8Array throws "Creating blobs from 'ArrayBuffer' and
-  // 'ArrayBufferView' are not supported". There's no on-disk file for the
-  // cipher (it only exists in memory), so — mirroring the plaintext upload
-  // paths in ChannelMessagesScreen/ComposePostScreen, which use the picked
-  // asset's real `file://` uri — we hand RN's networking layer a `data:`
-  // URI instead of a Blob; both bridges (Android/iOS) read bytes directly
-  // from a `{ uri, type, name }` FormData part without any JS-side re-encode.
-  const formData = new FormData();
-  // Filename is irrelevant for an encrypted blob (the real name lives in the descriptor).
-  formData.append('file', {
-    uri: `data:application/octet-stream;base64,${bytesToBase64(cipher)}`,
-    type: 'application/octet-stream',
-    name: 'blob.bin',
-  } as unknown as Blob);
-  formData.append('encrypted', '1');
-
-  const headers = await client.authHeaders('POST', '/api/v1/media/upload');
-  const nodeUrl = (client as unknown as { nodeUrl?: string }).nodeUrl || '';
-  const resp = await fetch(`${nodeUrl}/api/v1/media/upload`, {
-    method: 'POST',
-    headers: { ...headers }, // no content-type — FormData sets the boundary
-    body: formData,
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Upload failed (${resp.status}): ${text.slice(0, 150)}`);
-  }
-  const json = await resp.json();
+  // Multipart body is built in JS (multipart.ts): Expo SDK 58's global fetch
+  // rejects RN `{ uri, type, name }` FormData parts, and there is no on-disk
+  // file for the cipher anyway. The filename is irrelevant for an encrypted
+  // blob (the real name lives in the descriptor).
+  const json = await uploadMedia(
+    client as unknown as UploadClient,
+    { bytes: cipher, mimeType: 'application/octet-stream', fileName: 'blob.bin', fields: { encrypted: '1' },
+      // ciphertext = plaintext + 16-byte tag, so allow the tag on top of the plaintext cap
+      maxBytes: MAX_ENCRYPTED_MEDIA_BYTES + 16 },
+  );
   if (!json?.cid) throw new Error('Upload returned no cid');
 
   return {

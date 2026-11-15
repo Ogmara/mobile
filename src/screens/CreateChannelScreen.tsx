@@ -128,7 +128,11 @@ export default function CreateChannelScreen() {
       // Explicit account, not the active scope (see addJoinedChannelFor), so
       // this is correct even if a switch lands now: the channel was created
       // by — and belongs in the joined set of — the starting account.
-      await addJoinedChannelFor(start.wallet!, resp.channel_id).catch(() => {});
+      await addJoinedChannelFor(start.wallet!, resp.channel_id).catch((e) => {
+        // Not fatal (the list also completes itself from the node), but a failed
+        // write here is exactly what leaves a new channel off the list — log it.
+        debugLog('warn', `Could not save created channel ${resp.channel_id} to the joined set: ${e instanceof Error ? e.message : String(e)}`);
+      });
       // Verify-before-cover (0.58.0): pin ourselves as this private channel's
       // creator from our own first contact — a pin always wins over whatever
       // ChannelCreate a node later serves. Explicit account, like above.

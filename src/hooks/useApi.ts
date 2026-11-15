@@ -5,7 +5,7 @@
  * Supports manual refetch and pull-to-refresh patterns.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 interface UseApiResult<T> {
   data: T | null;
@@ -31,16 +31,24 @@ export function useApi<T>(
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Request generation: only the newest call may write state. Without it a
+  // slow response for the PREVIOUS deps (e.g. the previous account's channel
+  // list) could land after the current one and replace it.
+  const generation = useRef(0);
+
   const fetch = useCallback(async () => {
+    const mine = ++generation.current;
     try {
       setError(null);
       const result = await fetcher();
-      setData(result);
+      if (mine === generation.current) setData(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unknown error');
+      if (mine === generation.current) setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (mine === generation.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, deps);
 

@@ -25,7 +25,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useApi } from '../hooks/useApi';
-import { loadJoinedChannels, addJoinedChannelFor, removeJoinedChannel, isJoinedStorageInitialized } from '../lib/joinedChannels';
+import { mergeMissingJoined } from '../lib/channelListMerge';
+import { loadJoinedChannels, loadJoinedChannelsFor, addJoinedChannelFor, removeJoinedChannel, isJoinedStorageInitialized } from '../lib/joinedChannels';
 import { isSameAccount } from '../lib/accountGuard';
 import {
   ensureChannelOrgLoaded, ensureCollapsedStateLoaded, getChannelOrg, resolveChannelLayout,
@@ -67,9 +68,22 @@ export default function ChatScreen() {
   const { data, refreshing, onRefresh } = useApi(
     async () => {
       if (!client) return { channels: [], total: 0, page: 1 };
-      return client.listChannels();
+      // 50 per page like desktop/web (the default of 20 pushed newer channels
+      // off the page), then complete the page with every joined channel it
+      // lacks: a freshly created or synced private channel is in the joined
+      // set but may still not be in the first page.
+      const resp = await client.listChannels(1, 50);
+      if (!signer || !walletAddress) return resp;
+      const joined = await loadJoinedChannelsFor(walletAddress);
+      const channels = await mergeMissingJoined(resp.channels, joined, async (id) => {
+        const r = await client.getChannel(id);
+        // A non-member gets a limited stub flagged `restricted`: not a channel we can list.
+        if ((r as { restricted?: boolean } | null)?.restricted) return null;
+        return r?.channel ?? null;
+      });
+      return channels === resp.channels ? resp : { ...resp, channels };
     },
-    [client, signer],
+    [client, signer, walletAddress],
   );
 
   // Refresh when tab gains focus (connection may have established since first render)

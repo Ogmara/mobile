@@ -36,6 +36,7 @@ import { sanitizeFilename } from '../lib/sanitize';
 import { showAlert } from '../components/AlertHost';
 import { debugLog } from '../lib/debug';
 import Button from '../components/Button';
+import { uploadMedia, type UploadClient } from '../lib/mediaUpload';
 
 /** Avatars are small by nature; anything larger is a mistake, not a portrait. */
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
@@ -122,25 +123,17 @@ export default function EditProfileScreen() {
    */
   const uploadAvatar = async (): Promise<string | null> => {
     if (!pickedAvatar || !client) return null;
-    const formData = new FormData();
-    // React Native FormData takes {uri, type, name}, never a Blob.
-    formData.append('file', {
-      uri: pickedAvatar.uri,
-      type: pickedAvatar.mimeType || 'image/jpeg',
-      name: sanitizeFilename(pickedAvatar.fileName || 'avatar.jpg'),
-    } as any);
-    const headers = signer ? await client.authHeaders('POST', '/api/v1/media/upload') : {};
-    const nodeUrl = (client as any).nodeUrl || '';
-    const resp = await fetch(`${nodeUrl}/api/v1/media/upload`, {
-      method: 'POST',
-      headers: { ...headers },
-      body: formData,
-    });
-    if (!resp.ok) {
-      const body = await resp.text().catch(() => '');
-      throw new Error(`Upload failed (${resp.status}): ${body.slice(0, 150)}`);
-    }
-    const result = await resp.json();
+    const result = await uploadMedia(
+      client as unknown as UploadClient,
+      {
+        uri: pickedAvatar.uri,
+        mimeType: pickedAvatar.mimeType || 'image/jpeg',
+        fileName: sanitizeFilename(pickedAvatar.fileName || 'avatar.jpg'),
+        maxBytes: MAX_AVATAR_BYTES,
+        sizeHint: pickedAvatar.fileSize,
+      },
+      !!signer,
+    );
     if (!result?.cid) throw new Error('Upload returned no CID');
     return result.cid as string;
   };
@@ -183,7 +176,8 @@ export default function EditProfileScreen() {
       navigation.goBack();
     } catch (e) {
       debugLog('warn', `Profile save failed: ${e instanceof Error ? e.message : ''}`);
-      showAlert(t('error_generic'), e instanceof Error ? e.message.slice(0, 200) : '');
+      const msg = e instanceof Error ? e.message : '';
+      showAlert(t('error_generic'), msg === 'FILE_TOO_LARGE' ? t('profile_avatar_too_large') : msg.slice(0, 200));
     } finally {
       setSaving(false);
     }

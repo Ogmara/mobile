@@ -27,6 +27,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
+import { uploadMedia, type UploadClient } from '../lib/mediaUpload';
 
 type Props = NativeStackScreenProps<NewsStackParamList, 'ComposePost'>;
 
@@ -99,26 +100,12 @@ export default function ComposePostScreen({ route, navigation }: Props) {
         }
         try {
           const safeName = sanitizeFilename(att.fileName);
-          // React Native FormData needs {uri, type, name} — not a Blob
-          const formData = new FormData();
-          formData.append('file', {
-            uri: att.uri,
-            type: att.mimeType,
-            name: safeName,
-          } as any);
-
-          const headers = signer ? await client.authHeaders('POST', '/api/v1/media/upload') : {};
-          const nodeUrl = (client as any).nodeUrl || '';
-          const uploadResp = await fetch(`${nodeUrl}/api/v1/media/upload`, {
-            method: 'POST',
-            headers: { ...headers },
-            body: formData,
-          });
-          if (!uploadResp.ok) {
-            const errText = await uploadResp.text().catch(() => '');
-            throw new Error(`Upload failed (${uploadResp.status}): ${errText.slice(0, 150)}`);
-          }
-          const result = await uploadResp.json();
+          // Body is built in JS (lib/multipart.ts): SDK 58's fetch rejects RN FormData uri parts.
+          const result = await uploadMedia(
+            client as unknown as UploadClient,
+            { uri: att.uri, mimeType: att.mimeType, fileName: safeName, sizeHint: att.fileSize },
+            !!signer,
+          );
           const attachment: Attachment = {
             cid: result.cid,
             mime_type: att.mimeType,
@@ -134,7 +121,7 @@ export default function ComposePostScreen({ route, navigation }: Props) {
             showAlert(t('news_upload_unavailable'), t('news_upload_fallback'));
             return uploaded;
           }
-          showAlert(t('error_generic'), `${att.fileName}: ${msg}`);
+          showAlert(t('error_generic'), `${att.fileName}: ${msg === 'FILE_TOO_LARGE' ? 'file too large (max 50MB)' : msg}`);
         }
       }
       return uploaded;

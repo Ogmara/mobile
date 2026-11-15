@@ -5,6 +5,46 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.59.1] - 2026-11-15
+
+### Fixed
+
+- **Every upload failed with "Unsupported FormDataPart implementation"** after
+  the SDK 58 upgrade: Expo's new global `fetch` no longer accepts React
+  Native's `{ uri, type, name }` FormData parts. Uploads (chat attachments,
+  encrypted media, post attachments, avatar) now build the multipart body in
+  JS (`lib/multipart.ts`, `lib/mediaUpload.ts`) and post it as bytes with an
+  explicit boundary; header values are stripped of CR/LF/quotes so a file name
+  cannot inject headers.
+- **A joined channel could be missing from the channel list.** The list asked
+  the node for 20 channels per page (desktop and web ask for 50) and only
+  showed joined channels that were in that page, so a freshly created or synced
+  private channel could stay invisible even after a restart. The list now asks
+  for 50 and fetches any joined channel it lacks by id (capped at 40 per load).
+  A failed save of the new channel to the joined set is now logged in the debug
+  log instead of being swallowed. The by-id fetch takes the most recently
+  joined channels first when the cap bites, and skips the limited stub the node
+  returns for a private channel the account is not a member of.
+- A slow channel-list response for the previous account could overwrite the
+  current account's list (`useApi` had no stale-response guard); only the newest
+  request may now write state.
+- Upload size is now checked in the upload helper, using the larger of the file
+  system's size and the picker's, before the file is read; when neither is known
+  (the file system reports 0, not null) the file is still read but rejected by
+  length before anything is sent. The avatar cap (5 MB) is enforced there too
+  (it was skipped when the picker gave no size), and the "file too large" error
+  shows a readable message in the profile and post screens.
+
+### Known issues
+
+- l2-node applies a 10 MiB request-body limit to every route, including media
+  upload, while the apps and `max_upload_size_mb` allow 50 MB, so uploads over
+  10 MB are rejected by the node (pre-existing; needs a node-side per-route limit).
+- Expo's `fetch` ignores `cache: 'no-store'`; on iOS the shared URL cache could
+  serve an authenticated GET across accounts. Android is not affected. To close
+  before an iOS release (node `Cache-Control: no-store` on authenticated
+  responses or a request header in the SDK).
+
 ## [0.59.0] - 2026-11-11
 
 Platform upgrade: **Expo SDK 54 → 58** (React Native 0.81.5 → 0.88.1, React

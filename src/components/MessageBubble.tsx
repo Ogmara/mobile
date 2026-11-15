@@ -506,7 +506,18 @@ export default function MessageBubble({
 // noticeably cramped for wide content like bot-posted charts (app is
 // portrait-locked per app.json, so a static Dimensions read is fine — no
 // rotation to react to).
-const MAX_INLINE_IMAGE_WIDTH = Dimensions.get('window').width * 0.9 - spacing.md * 2;
+//
+// The width must be derived from the bubble's REAL maximum, not the window:
+// the bubble is capped at 90% of the message list's CONTENT width (the list
+// pads both sides by `spacing.md`, see `styles.list` in ChannelMessagesScreen /
+// DmConversationScreen) and the image sits inside the bubble's own horizontal
+// padding. Using the window width made the image wider than the bubble's inner
+// area, so it started inside the padding and ran out past the bubble's right edge.
+const LIST_SIDE_PADDING = spacing.md;
+const BUBBLE_SIDE_PADDING = spacing.md;
+const MAX_INLINE_IMAGE_WIDTH = Math.floor(
+  (Dimensions.get('window').width - LIST_SIDE_PADDING * 2) * 0.9 - BUBBLE_SIDE_PADDING * 2,
+);
 
 const styles = StyleSheet.create({
   container: {

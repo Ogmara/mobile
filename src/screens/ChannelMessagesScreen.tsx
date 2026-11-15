@@ -881,6 +881,16 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
   // ── Message Actions ──
 
+  // Declared BEFORE `handleSend` and listed in its deps: with them left out of the
+  // deps (and read through a stale closure) an attachment-only send saw empty
+  // pending lists and silently did nothing — it only worked once text had been
+  // typed, because typing re-created the callback.
+  // Media attachments for current message (must include size_bytes for SDK Attachment type)
+  const [pendingAttachments, setPendingAttachments] = useState<Array<{ cid: string; mime_type: string; size_bytes: number; filename: string }>>([]);
+  // P5: encrypted-channel attachments — descriptors hold per-file keys, sent via `media`.
+  const [pendingEncryptedMedia, setPendingEncryptedMedia] = useState<MediaDescriptor[]>([]);
+  const [uploading, setUploading] = useState(false);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
     // Allow sending text, attachments (plaintext or encrypted), or both
@@ -1006,10 +1016,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const key = chatErrorKey(msg);
       showInfo(t('chat_send'), key ? t(key) : msg.slice(0, 150));
     }
-    // pendingAttachments / pendingEncryptedMedia are declared after this callback; like
-    // the original send they're read via closure (state setters keep them fresh enough
-    // for the send path) and intentionally omitted from deps to avoid a TDZ reference.
-  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, isPrivate, pendingMentions, chanMetaResolved]);
+  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, isPrivate, pendingMentions, chanMetaResolved, pendingAttachments, pendingEncryptedMedia]);
 
   /**
    * Sends a button press (protocol §3.3): an ordinary signed message whose
@@ -1130,11 +1137,6 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   const [tipTarget, setTipTarget] = useState<string | null>(null);
   // Emoji picker
   const [showEmoji, setShowEmoji] = useState(false);
-  // Media attachments for current message (must include size_bytes for SDK Attachment type)
-  const [pendingAttachments, setPendingAttachments] = useState<Array<{ cid: string; mime_type: string; size_bytes: number; filename: string }>>([]);
-  // P5: encrypted-channel attachments — descriptors hold per-file keys, sent via `media`.
-  const [pendingEncryptedMedia, setPendingEncryptedMedia] = useState<MediaDescriptor[]>([]);
-  const [uploading, setUploading] = useState(false);
 
   const handleTip = useCallback((msg: ExtendedEnvelope) => {
     if (msg.author === myAddress) return; // can't tip yourself

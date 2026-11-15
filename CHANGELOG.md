@@ -5,6 +5,23 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.59.2] - 2026-11-15
+
+### Fixed
+
+- **A message with only an attachment (no text) could not be sent** in channels.
+  `handleSend` read `pendingAttachments` / `pendingEncryptedMedia` through a
+  stale closure (they were declared after the callback and left out of its
+  dependency list), so an attachment-only send saw empty lists and silently did
+  nothing; it only worked once text had been typed because typing re-created the
+  callback. The state is now declared before the callback and is in its deps
+  (the DM screen already had this right).
+- **Inline images were not placed inside the message bubble** (shifted right and
+  running past the bubble's right edge). The image width was derived from the
+  window width, but the bubble is capped at 90% of the message list's content
+  width and the image sits inside the bubble's own padding; the width now uses
+  those real bounds.
+
 ## [0.59.1] - 2026-11-15
 
 ### Fixed

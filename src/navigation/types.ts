@@ -7,7 +7,8 @@ export type NewsStackParamList = {
    *  jump to the top — set by ComposePost after a successful post/edit, since
    *  the WS echo of the user's own write is intentionally not applied. */
   NewsFeed: { refresh?: number; tag?: string; group?: string; topics?: 'all' } | undefined;
-  NewsDetail: { msgId: string; post?: any };
+  /** `commentId` (64-hex) scrolls to that comment (news-comment permalink). */
+  NewsDetail: { msgId: string; post?: any; commentId?: string };
   Topics: undefined;
   ComposePost: {
     editMsgId?: string;
@@ -22,7 +23,12 @@ export type NewsStackParamList = {
 export type ChatStackParamList = {
   ChannelList: undefined;
   CreateChannel: undefined;
-  ChannelMessages: { channelId: number; channelName: string };
+  /** `msgId` (64-hex, from a permalink / mention push) opens the jump to
+   *  that message (spec 06 §6.5). Declared identically in the Search stack.
+   *  `channelName` is absent when opened from a link; the screen resolves it.
+   *  `fromLink` is set ONLY by the inbound-link / push path: such an open never
+   *  auto-joins an encrypted channel (an explicit Join bar instead). */
+  ChannelMessages: { channelId: number; channelName?: string; msgId?: string; fromLink?: string };
   ChannelAdmin: { channelId: number; channelName: string };
   ChannelJoin: { channelId: number; node?: string; inv?: string };
   UserProfile: { address: string };
@@ -39,9 +45,15 @@ export type DmStackParamList = {
 export type SearchStackParamList = {
   SearchHome: undefined;
   UserProfile: { address: string };
-  ChannelMessages: { channelId: number; channelName: string };
+  /** `msgId` (64-hex, from a permalink / mention push) opens the jump to
+   *  that message (spec 06 §6.5). Declared identically in the Search stack.
+   *  `channelName` is absent when opened from a link; the screen resolves it.
+   *  `fromLink` is set ONLY by the inbound-link / push path: such an open never
+   *  auto-joins an encrypted channel (an explicit Join bar instead). */
+  ChannelMessages: { channelId: number; channelName?: string; msgId?: string; fromLink?: string };
   ChannelJoin: { channelId: number; node?: string; inv?: string };
-  NewsDetail: { msgId: string; post?: any };
+  /** `commentId` (64-hex) scrolls to that comment (news-comment permalink). */
+  NewsDetail: { msgId: string; post?: any; commentId?: string };
   FollowList: { address: string; tab: 'followers' | 'following' };
 };
 

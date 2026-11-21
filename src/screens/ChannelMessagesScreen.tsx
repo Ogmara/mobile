@@ -4,6 +4,19 @@
  * Features: real-time updates via WebSocket, message edit/delete/react/reply,
  * date grouping, author grouping, reactions display, optimistic updates.
  * Decodes MessagePack payloads to show human-readable text.
+ *
+ * History is windowed (spec 06 §6.5, mobile 0.60.0): the newest page, older
+ * pages via `before` as the list scrolls up, and — for a permalink / mention
+ * push (`msgId` param) — ONE `around` fetch that opens a detached "jump
+ * window" centred on the target, paged with `before` / `after` until it meets
+ * the live tail. Two layers, never mixed:
+ *   - the LIVE layer (`messages` ∪ `cachedMessages`): newest page, older
+ *     pages, WS and optimistic rows — contiguous up to the tail, the only
+ *     thing ever persisted to the message cache;
+ *   - the JUMP WINDOW (`jumpWindow`): a slice of old history, rendered INSTEAD
+ *     of the live layer while detached and never persisted. Live messages keep
+ *     landing in the live layer meanwhile (held back from view, counted in the
+ *     banner), so "Jump to present" just switches back.
  */
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
@@ -17,8 +30,11 @@ import {
   TouchableOpacity,
   StyleSheet,
   AppState,
+  Share,
+  ActivityIndicator,
   type TextInputInstance,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import { useTranslation } from 'react-i18next';
 import ComposerSuggestions from '../components/ComposerSuggestions';
@@ -50,8 +66,17 @@ import { encryptAndUploadFile, base64ToBytes, MAX_ENCRYPTED_MEDIA_BYTES } from '
 import {
   resolveIsEncrypted, resolveCoverType, shouldAutoJoinEncryptedChannel, isChanMetaResolvedFor, isChannelRecordUsable, type ChanMetaKey,
 } from '../lib/channelEncryption';
-import { CHANNEL_TYPE_PRIVATE, canPost, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
+import { CHANNEL_TYPE_PRIVATE, canPost, normalizeMsgId, type Envelope, type MediaDescriptor } from '@ogmara/sdk';
+import {
+  JUMP_PAGE_LIMIT, JUMP_WINDOW_LIMIT, classifyAround, classifyJumpFailure, httpStatusOf, jumpAccountKey,
+  mergeWindowPage, moreAfter, moreBefore, capNewest, oldestRealId, newestRealId, type JumpFailure,
+} from '../lib/jumpWindow';
+import { buildChatShareUrl } from '../lib/share';
+import Toast, { useToast } from '../components/Toast';
+import NodeSelector from '../components/NodeSelector';
+import Button from '../components/Button';
 import { isInviteGatedChannel } from '../lib/privateInvite';
+import { loadJoinedChannels } from '../lib/joinedChannels';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ChatStackParamList } from '../navigation/types';
 import type { PayloadButtonRow } from '../lib/payloadDecoder';
@@ -63,21 +88,28 @@ type Props = NativeStackScreenProps<ChatStackParamList, 'ChannelMessages'>;
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
 /** Group consecutive messages from the same author within 2 minutes */
 const GROUP_WINDOW_MS = 2 * 60 * 1000;
-/** Max local messages to prevent unbounded memory */
-const MAX_LOCAL_MESSAGES = 200;
 /**
- * What `mergeMessages` should treat as "a full page" for this screen's
- * fetch. NOT the 200 requested below (mobile has no pagination — see the
- * `useApi` call) — the node hard-clamps `getChannelMessages` at 100
- * regardless of what's asked for (`l2-node/src/api/routes.rs`), so 100 is
- * the real ceiling a response can ever reach. Using 200 here would make
+ * Cap on the LIVE layer (newest page + older pages + WS + optimistic rows).
+ * Over it the OLDEST rows are shed (`capNewest`) and "older history exists"
+ * is re-armed; scrolling up stops loading older pages once it is reached.
+ */
+const MAX_LIVE_ROWS = 500;
+/** Rows per `before` page while scrolling up. */
+const OLDER_PAGE_LIMIT = 50;
+/** Cap on the detached jump window; over it the edge FARTHEST from the page
+ *  just loaded is shed and that direction re-armed (`mergeWindowPage`). */
+const MAX_WINDOW_ROWS = 200;
+/** How long a permalink target keeps its highlight unless the user scrolls. */
+const PERMALINK_HIGHLIGHT_MS = 10_000;
+/**
+ * Size of the newest page (the `useApi` fetch below) and what
+ * `mergeMessages` treats as "a full page". The node hard-clamps
+ * `getChannelMessages` at 100 (`l2-node/src/api/routes.rs`), so 100 is the
+ * real ceiling a response can reach — asking for more would make
  * `mergeMessages`'s "disconnected island" discard branch
- * (`fresh.length >= requestedLimit`) UNREACHABLE for channels — harmless
- * today only because `MAX_ROWS_PER_CONV` (50) is already smaller than 100,
- * so the final cap trims away the difference either way, but the module's
- * own stated safety invariant ("`MAX_ROWS_PER_CONV` MUST stay <= the
- * smallest real page") should hold explicitly, not by accident of a second
- * constant. Re-derive this if the node's clamp ever changes.
+ * (`fresh.length >= requestedLimit`) unreachable. The module's safety
+ * invariant (`MAX_ROWS_PER_CONV` <= the smallest real page) holds explicitly.
+ * Re-derive this if the node's clamp ever changes.
  */
 const CHANNEL_REQUESTED_LIMIT = 100;
 
@@ -91,6 +123,30 @@ function msgIdToHex(msgId: unknown): string {
     return (msgId as number[]).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
   return String(msgId);
+}
+
+/** Message timestamp in ms (numbers on the wire; a string is parsed). */
+function tsOf(m: { timestamp: unknown }): number {
+  const t = m.timestamp;
+  if (typeof t === 'number') return t;
+  const n = new Date(t as string).getTime();
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Hex id of a row, for the window helpers. */
+const idOf = (m: { msg_id: unknown }): string => msgIdToHex(m.msg_id);
+
+/**
+ * Fold a newest-page response into the live layer WITHOUT losing live rows:
+ * rows the page cannot know about — unconfirmed sends and WS rows newer than
+ * the page's newest — are kept; everything else is the page.
+ */
+function mergeNewestPage<T extends { msg_id: unknown; timestamp: unknown; _optimistic?: boolean }>(prev: readonly T[], fresh: T[]): T[] {
+  const ids = new Set(fresh.map(idOf));
+  let newest = -Infinity;
+  for (const m of fresh) newest = Math.max(newest, tsOf(m));
+  const keep = prev.filter((m) => !ids.has(idOf(m)) && (m._optimistic || tsOf(m) > newest));
+  return keep.length === 0 ? fresh : [...fresh, ...keep];
 }
 
 /** Cache key for a decrypted channel message — includes the edit stamp so edits re-decrypt. */
@@ -141,12 +197,81 @@ type ListItem =
 export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // Ensure channelId is always a number (React Navigation may serialize as string)
   const channelId = Number(route.params.channelId);
-  const { channelName } = route.params;
+  const routeChannelName = route.params.channelName;
+  // Permalink / mention-push target. Inbound links were already validated by
+  // `parsePermalink` (deepLinkPaths.ts); re-normalised here because params can
+  // also come from in-app `navigate` calls.
+  const targetMsgId = normalizeMsgId(route.params.msgId);
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client, signer, address: myAddress, onWsEvent, nodeUrl, walletAddress } = useConnection();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ExtendedEnvelope[]>([]);
+  // Older history beyond the live layer's oldest row (`has_more_before`,
+  // legacy `has_more`), and whether a `before` page is in flight.
+  const [hasMoreOlder, setHasMoreOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingOlderRef = useRef(false);
+  // Set inside a `setMessages` updater when `capNewest` shed old rows; the
+  // effect below re-arms `hasMoreOlder` from it (updaters stay pure of setState).
+  const liveTrimmedRef = useRef(false);
+
+  // ── Permalink jump state (spec 06 §6.5) ──
+  // `loading`: the single `around` fetch is in flight (the live view stays on
+  // screen under a "Jumping…" line). `detached`: `jumpWindow` is rendered
+  // instead of the live layer. Null in the normal flow.
+  const [jump, setJump] = useState<{ channelId: number; target: string; phase: 'loading' | 'detached' } | null>(null);
+  const [jumpWindow, setJumpWindow] = useState<ExtendedEnvelope[]>([]);
+  const [windowMoreBefore, setWindowMoreBefore] = useState(false);
+  const [windowMoreAfter, setWindowMoreAfter] = useState(false);
+  const [loadingNewer, setLoadingNewer] = useState(false);
+  const loadingNewerRef = useRef(false);
+  // Others' live messages that arrived while detached (banner count).
+  const [jumpNewCount, setJumpNewCount] = useState(0);
+  // Why a jump could not land (plan §9). `node-outdated`: a pre-0.150.0 node
+  // ignored `around` and the target is not in its newest page.
+  const [jumpNotice, setJumpNotice] = useState<'not-on-node' | 'node-outdated' | Exclude<JumpFailure, 'error'> | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  // The landed target stays visible (via_button exemption) after its `msgId`
+  // param was cleared; dropped with the rest of the jump state.
+  const [pinnedId, setPinnedId] = useState<string | null>(null);
+  // Set right before this screen clears its OWN `msgId` param after landing,
+  // so the jump effect treats that as "done", not as "link removed".
+  const selfClearedTargetRef = useRef(false);
+  const [nodePickerOpen, setNodePickerOpen] = useState(false);
+  // Once a jump touched this channel, the list keeps its visible rows in place
+  // when rows are inserted at the bottom (forward pages, re-attach).
+  const [jumpSession, setJumpSession] = useState(false);
+  // Bumped on every jump start / reset and on unmount; any `around` / `after`
+  // / `before` response for an older token is dropped.
+  const jumpTokenRef = useRef(0);
+  const detached = !!jump && jump.phase === 'detached' && jump.channelId === channelId;
+  const [toast, showToast] = useToast();
+
+  // Latest values for async continuations (read after an await, never stale).
+  const jumpRef = useRef(jump);
+  jumpRef.current = jump;
+  const detachedRef = useRef(detached);
+  detachedRef.current = detached;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const jumpWindowRef = useRef(jumpWindow);
+  jumpWindowRef.current = jumpWindow;
+  const channelIdRef = useRef(channelId);
+  channelIdRef.current = channelId;
+  const clientRef = useRef(client);
+  clientRef.current = client;
+  const walletRef = useRef(walletAddress);
+  walletRef.current = walletAddress;
+  const signerRef = useRef(signer);
+  signerRef.current = signer;
+  /** Identity a request is made for: wallet, auth, and the live signing key —
+   *  `switchAccount` swaps the signer on the SAME client object in place
+   *  before the tree remounts, so the signer catches a switch mid-await. */
+  const accountKeyNow = useCallback(
+    () => `${jumpAccountKey(walletRef.current, !!signerRef.current)}|${clientRef.current?.address ?? ''}`,
+    [],
+  );
   // Local message-history cache (`lib/messageCache.ts`) — paints a resumed
   // channel instantly from the last-seen snapshot instead of blanking on
   // every (re-)open. Kept as a SEPARATE state from `messages` (which is the
@@ -187,6 +312,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // `isMod` is per-account, hence `address` — a record fetched for a previous
   // account must never count as resolved for the next one.
   const [chanMetaFor, setChanMetaFor] = useState<ChanMetaKey | null>(null);
+  // Name from the channel record — the header fallback when the screen was
+  // opened from a link or push (no `channelName` param).
+  const [channelTitle, setChannelTitle] = useState<string | null>(null);
+  // This account is known to be a member (members list / creator / local
+  // joined set) — see the Join bar for link-opened channels.
+  const [knownMember, setKnownMember] = useState(false);
+  const channelName = routeChannelName || channelTitle || String(channelId);
   const chanMetaResolved = isChanMetaResolvedFor(chanMetaFor, { client, channelId, address: myAddress ?? null });
   // B1 (0.58.0): an id in the private namespace (>= 2^32) is private no
   // matter what type a node reports — a hostile node calling a private channel
@@ -255,7 +387,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     async () => {
       if (!client) return { channelId, nodeUrl, messages: [], has_more: false };
       try {
-        const resp = await client.getChannelMessages(channelId, 200);
+        // Newest page (positional form; the node clamps to 100). Older pages
+        // are fetched on scroll (`loadOlder`), a permalink by `around`.
+        const resp = await client.getChannelMessages(channelId, CHANNEL_REQUESTED_LIMIT);
         return { channelId, nodeUrl, ...resp, messages: normalizeEnvelopes(resp.messages) };
       } catch (e) {
         // 403/404 means access was actually revoked (removed from a private
@@ -304,11 +438,22 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // revalidated by a full, unconditional fetch like this one.
   useEffect(() => {
     if (data && data.channelId === channelId && data.nodeUrl === nodeUrl && data.messages) {
-      const fresh = data.messages as ExtendedEnvelope[];
-      setMessages(fresh);
+      const fresh = (data.messages as ExtendedEnvelope[]).slice(0, CHANNEL_REQUESTED_LIMIT);
+      // Merged, not replaced: a live message or an unconfirmed send that
+      // landed while this page was in flight must not vanish.
+      setMessages((prev) => mergeNewestPage(prev, fresh));
+      setHasMoreOlder(moreBefore(data));
       setCachedMessages((prev) => mergeMessages(prev, fresh, CHANNEL_REQUESTED_LIMIT) as ExtendedEnvelope[]);
     }
   }, [data, channelId, nodeUrl]);
+
+  // `capNewest` shed the oldest live rows: older history exists again.
+  useEffect(() => {
+    if (liveTrimmedRef.current) {
+      liveTrimmedRef.current = false;
+      setHasMoreOlder(true);
+    }
+  }, [messages]);
 
   // Mentions belong to the draft for THIS channel, so they are cleared ONLY on a
   // real channel change.
@@ -336,6 +481,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // route `channelId`) with a `reply_to` pointing at a message that
     // belongs to the channel just left — an orphaned cross-channel reply.
     setMessages([]);
+    setHasMoreOlder(false);
+    setJumpSession(false);
     // Seed the cache view too, so the newly-open channel paints instantly
     // from its last-seen snapshot instead of a blank screen while the fetch
     // above is in flight. `cancelled` guards against a slow read for a
@@ -359,11 +506,16 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // THIS channel: a signed write keyed on a channel id the node can't confirm
   // (unknown / inaccessible channel, failed detail fetch) has no business being
   // sent. Fires once the record lands, not on the raw route param.
+  //
+  // Not while a permalink jump is loading or detached: the viewer is not at
+  // the live end (spec 06 §6.5). Runs once the jump ends — re-attached to the
+  // tail, "Jump to present", or a jump that fell back to the newest page.
+  const jumpActive = jump !== null;
   useEffect(() => {
-    if (client && signer && chanMetaResolved) {
+    if (client && signer && chanMetaResolved && !jumpActive) {
       client.markChannelRead(channelId).catch(() => {});
     }
-  }, [client, signer, channelId, chanMetaResolved]);
+  }, [client, signer, channelId, chanMetaResolved, jumpActive]);
 
   // Load channel encryption metadata + my role (gates encrypt-on-send + key seeding).
   useEffect(() => {
@@ -372,6 +524,8 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // isEncrypted's fail-closed guard needs this false until proven otherwise.
     setChanMetaFor(null);
     setChanMeta({ channelType: 0, encryptionEnabled: false, keyEpochFloor: 0, isMod: false, creator: '' });
+    setChannelTitle(null);
+    setKnownMember(false);
     let cancelled = false;
     (async () => {
       try {
@@ -409,7 +563,19 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           isMod,
           creator: ch?.creator ?? '',
         });
+        // Header title for a channel opened from a link (no `channelName`).
+        const title = typeof ch?.display_name === 'string' && ch.display_name ? ch.display_name : ch?.slug;
+        setChannelTitle(typeof title === 'string' && title ? title : null);
         setChanMetaFor({ client, channelId, address: myAddress ?? null });
+        // Positive membership evidence (W2: decides whether a link-opened
+        // encrypted channel needs the explicit Join bar). The member list is
+        // capped at 200, so the local joined set is consulted too.
+        if (role || (myAddress && ch?.creator === myAddress)) {
+          setKnownMember(true);
+        } else if (myAddress) {
+          const joined = await loadJoinedChannels().catch(() => null);
+          if (!cancelled && joined?.has(channelId)) setKnownMember(true);
+        }
       } catch {
         // FAIL CLOSED: do NOT mark resolved on failure. isEncrypted stays true
         // for the rest of this mount instead of falling back to the
@@ -435,15 +601,51 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // was set by the first channel and never reset, so every later encrypted
   // channel opened on the same screen instance was never joined. An entry is
   // removed on failure so a later open can retry.
+  //
+  // NEVER from a link (owner decision): a channel opened from an inbound link
+  // or push (`fromLink`, set only by the link-resolution path, or a `msgId`
+  // target) is not joined silently — the user gets a Join bar instead and
+  // joins with an explicit tap (`handleJoinFromLink`).
   const autoJoinedRef = useRef<Set<string>>(new Set());
   const shouldAutoJoin = shouldAutoJoinEncryptedChannel(chanMetaResolved, chanMeta.encryptionEnabled, isPrivate);
+  const openedFromLink = route.params.fromLink !== undefined || route.params.msgId !== undefined;
+  const [joiningFromLink, setJoiningFromLink] = useState(false);
+  const joinedKey = `${nodeUrl}|${myAddress}|${channelId}`;
+  const showJoinBar = openedFromLink && shouldAutoJoin && !!signer && !!myAddress
+    && !knownMember && !autoJoinedRef.current.has(joinedKey);
   useEffect(() => {
-    if (!client || !signer || !myAddress || !shouldAutoJoin) return;
+    if (!client || !signer || !myAddress || !shouldAutoJoin || openedFromLink) return;
     const key = `${nodeUrl}|${myAddress}|${channelId}`;
     if (autoJoinedRef.current.has(key)) return;
     autoJoinedRef.current.add(key);
     client.joinChannel(channelId).catch(() => { autoJoinedRef.current.delete(key); });
-  }, [client, signer, myAddress, nodeUrl, shouldAutoJoin, channelId]);
+  }, [client, signer, myAddress, nodeUrl, shouldAutoJoin, channelId, openedFromLink]);
+
+  /** Explicit join for a link-opened encrypted public channel (W2). */
+  const handleJoinFromLink = useCallback(async () => {
+    if (!client || !signer || !myAddress || joiningFromLink) return;
+    const cid = channelId;
+    const key = joinedKey;
+    const account = accountKeyNow();
+    setJoiningFromLink(true);
+    try {
+      await client.joinChannel(cid);
+      // A join that resolved after a channel / account change is not this view's.
+      if (channelIdRef.current !== cid || accountKeyNow() !== account) return;
+      autoJoinedRef.current.add(key);
+      setKnownMember(true);
+      // The epoch key is wrapped to members: retry decryption.
+      void coverChannelMembers(cid, coverTypeRef.current).catch(() => {});
+      setDecodeTick((x) => x + 1);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '';
+      debugLog('warn', `Join from link failed: ${msg}`);
+      const k = chatErrorKey(msg);
+      showInfo(t('permalink_join_channel'), k ? t(k) : msg.slice(0, 150));
+    } finally {
+      setJoiningFromLink(false);
+    }
+  }, [client, signer, myAddress, joiningFromLink, channelId, joinedKey, accountKeyNow, showInfo, t]);
 
   // Union of the live layer (`messages` — fetched + optimistic + WS-applied)
   // and the cache layer (`cachedMessages` — already reconciled against the
@@ -466,13 +668,22 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     return [...messages, ...cachedOnly];
   }, [messages, cachedMessages]);
 
+  // Every row this screen holds: the live layer plus the jump window. Used for
+  // decrypt, author names and reply resolution — so a REPLACED window (a new
+  // jump, a page from either end) is decrypted like any other row. NEVER
+  // persisted: the cache write below reads `allMsgs` (live layer) only.
+  const knownMsgs = useMemo(
+    () => (jumpWindow.length === 0 ? allMsgs : [...allMsgs, ...jumpWindow]),
+    [allMsgs, jumpWindow],
+  );
+
   // Resolve display names for message authors — over `allMsgs`, not just
   // `messages`, so an author only present via a cached row gets resolved
   // too instead of showing a truncated address until a live message from
   // them arrives.
   useEffect(() => {
     if (!client) return;
-    const authors = new Set(allMsgs.map((m) => m.author));
+    const authors = new Set(knownMsgs.map((m) => m.author));
     for (const addr of authors) {
       if (profileFetchedRef.current.has(addr)) continue;
       profileFetchedRef.current.add(addr);
@@ -483,7 +694,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         }
       }).catch(() => {});
     }
-  }, [client, allMsgs]);
+  }, [client, knownMsgs]);
 
   // Persist the merged view to disk, debounced. Each effect invocation is
   // its own closure over THIS render's `channelId`/`nodeUrl`/`allMsgs` — the
@@ -575,7 +786,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         return next;
       });
     };
-    for (const m of allMsgs) {
+    for (const m of knownMsgs) {
       const id = chanCacheId(m);
       if (m._optimistic) {
         const optText = typeof m.payload === 'string' ? m.payload : '';
@@ -605,7 +816,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       });
     }
     return () => { cancelled = true; };
-  }, [allMsgs, decodeTick, channelId]);
+  }, [knownMsgs, decodeTick, channelId]);
 
   // Late channel-key arrival: re-poll while anything is still 'waiting' (bounded; renewed
   // by the `channel_members_changed` WS handler below since a cross-node cold topic-mesh +
@@ -638,6 +849,18 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     }, 3000);
     return () => clearInterval(iv);
   }, [isEncrypted, channelId]);
+
+  /**
+   * Apply an edit / delete / reaction to the row with `targetId` in BOTH
+   * layers — the live layer and the jump window — without ever copying a row
+   * from one into the other. Unknown target → no-op.
+   */
+  const applyToRow = useCallback((targetId: unknown, fn: (m: ExtendedEnvelope) => ExtendedEnvelope) => {
+    const hex = msgIdToHex(targetId);
+    const hit = (m: ExtendedEnvelope) => msgIdToHex(m.msg_id) === hex;
+    setMessages((prev) => (prev.some(hit) ? prev.map((m) => (hit(m) ? fn(m) : m)) : prev));
+    setJumpWindow((prev) => (prev.some(hit) ? prev.map((m) => (hit(m) ? fn(m) : m)) : prev));
+  }, []);
 
   // Listen for real-time messages on this channel (including edit/delete)
   useEffect(() => {
@@ -677,38 +900,28 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         if (msgType === 'ChatEdit' || msgType === 2) {
           const targetId = (env as any).target_msg_id || env.msg_id;
           if (targetId) {
-            setMessages((prev) => prev.map((m) => {
-              if (msgIdToHex(m.msg_id) === msgIdToHex(targetId)) {
-                // Clear every cached decode, not just content: protocol §3.7 /
-                // frontend spec §6.1.3 rely on a bot being able to edit
-                // `buttons` in place (a sub-menu swap) — without resetting
-                // `_decodedButtons` too, the stale pre-edit row would stay
-                // rendered and tappable forever, silently sending whatever
-                // command the bot had already retired. `_decodedContent`
-                // survives this in practice today only because the async
-                // decrypt cache (keyed by `last_edited_at`) takes priority
-                // over it in `renderItem` — buttons have no such fallback.
-                return {
-                  ...m, payload: env.payload, edited: true, last_edited_at: env.timestamp as number,
-                  _decodedContent: undefined, _decodedAttachments: undefined,
-                  _decodedButtons: undefined, _decodedViaButton: undefined,
-                };
-              }
-              return m;
-            }));
+            applyToRow(targetId, (m) => {
+              // Clear every cached decode, not just content: protocol §3.7 /
+              // frontend spec §6.1.3 rely on a bot being able to edit
+              // `buttons` in place (a sub-menu swap) — without resetting
+              // `_decodedButtons` too, the stale pre-edit row would stay
+              // rendered and tappable forever, silently sending whatever
+              // command the bot had already retired. `_decodedContent`
+              // survives this in practice today only because the async
+              // decrypt cache (keyed by `last_edited_at`) takes priority
+              // over it in `renderItem` — buttons have no such fallback.
+              return {
+                ...m, payload: env.payload, edited: true, last_edited_at: env.timestamp as number,
+                _decodedContent: undefined, _decodedAttachments: undefined,
+                _decodedButtons: undefined, _decodedViaButton: undefined,
+              };
+            });
           }
           return;
         }
         if (msgType === 'ChatDelete' || msgType === 3) {
           const targetId = (env as any).target_msg_id || env.msg_id;
-          if (targetId) {
-            setMessages((prev) => prev.map((m) => {
-              if (msgIdToHex(m.msg_id) === msgIdToHex(targetId)) {
-                return { ...m, deleted: true };
-              }
-              return m;
-            }));
-          }
+          if (targetId) applyToRow(targetId, (m) => ({ ...m, deleted: true }));
           return;
         }
         // Handle reaction events
@@ -717,31 +930,37 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
           const reactionDecoded = decodeChatMessage(env.payload);
           const emoji = (reactionDecoded as any)?.emoji || (env as any).emoji;
           if (targetId && emoji) {
-            setMessages((prev) => prev.map((m) => {
-              if (msgIdToHex(m.msg_id) !== msgIdToHex(targetId)) return m;
+            applyToRow(targetId, (m) => {
               const reactions = { ...(m.reactions || {}) };
               reactions[emoji] = (reactions[emoji] || 0) + 1;
               return { ...m, reactions };
-            }));
+            });
           }
           return;
         }
 
-        // New message — deduplicate and add
+        // New message — deduplicate and add to the LIVE layer. While a jump
+        // window is shown this is the held-back buffer: not rendered, no
+        // auto-scroll, no read marker; the banner counts others' messages.
+        const envId = msgIdToHex(env.msg_id);
+        const isNew = !messagesRef.current.some((m) => msgIdToHex(m.msg_id) === envId);
         setMessages((prev) => {
-          if (prev.some((m) => msgIdToHex(m.msg_id) === msgIdToHex(env.msg_id))) return prev;
+          if (prev.some((m) => msgIdToHex(m.msg_id) === envId)) return prev;
           // Remove optimistic messages from same author with similar timestamp
           const filtered = prev.filter((m) => {
             if (!m._optimistic) return true;
             return !(m.author === env.author &&
               Math.abs(new Date(m.timestamp).getTime() - new Date(env.timestamp).getTime()) < 10000);
           });
-          const next = [env, ...filtered];
-          return next.length > MAX_LOCAL_MESSAGES ? next.slice(0, MAX_LOCAL_MESSAGES) : next;
+          const capped = capNewest([env, ...filtered], MAX_LIVE_ROWS, tsOf);
+          if (capped.trimmed) liveTrimmedRef.current = true;
+          return capped.rows;
         });
 
-        // Mark read while viewing
-        if (signer) {
+        if (jumpRef.current !== null) {
+          if (detachedRef.current && isNew && env.author !== myAddress) setJumpNewCount((n) => n + 1);
+        } else if (signer) {
+          // Mark read while viewing the live end.
           client?.markChannelRead(channelId).catch(() => {});
         }
         // Cover any newly-joined member devices with the channel key (no-op if none).
@@ -753,15 +972,318 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       }
     });
     return unsub;
-  }, [onWsEvent, channelId, client, signer, isEncrypted, isPrivate]);
+  }, [onWsEvent, channelId, client, signer, isEncrypted, isPrivate, applyToRow, myAddress]);
+
+  // ── Paging + permalink jump (spec 06 §6.5) ──
+
+  const listRef = useRef<FlatList<ListItem>>(null);
+  const hasMoreOlderRef = useRef(hasMoreOlder);
+  hasMoreOlderRef.current = hasMoreOlder;
+  const windowMoreBeforeRef = useRef(windowMoreBefore);
+  windowMoreBeforeRef.current = windowMoreBefore;
+  const windowMoreAfterRef = useRef(windowMoreAfter);
+  windowMoreAfterRef.current = windowMoreAfter;
+  // Request ids: only the newest `before` / `after` request may clear its
+  // in-flight flag (a reset drops an older request's result AND its flag).
+  const olderReqRef = useRef(0);
+  const newerReqRef = useRef(0);
+  // Target still to be scrolled to once it is rendered; `landed` turns on
+  // forward paging only after the landing scroll, so the initial layout of a
+  // short window cannot page the view away from the target.
+  const pendingScrollRef = useRef<{ id: string; token: number } | null>(null);
+  const [scrollNonce, setScrollNonce] = useState(0);
+  const [landed, setLanded] = useState(false);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRetriesRef = useRef(0);
+
+  const clearHighlight = useCallback(() => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = null;
+    setHighlightId(null);
+  }, []);
+  useEffect(() => () => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+  }, []);
+
+  /** Drop every piece of jump state (new jump, link removed, present). */
+  const resetJump = useCallback(() => {
+    jumpTokenRef.current++;
+    newerReqRef.current++;
+    olderReqRef.current++;
+    loadingNewerRef.current = false;
+    loadingOlderRef.current = false;
+    pendingScrollRef.current = null;
+    setJump(null);
+    setJumpWindow([]);
+    setWindowMoreBefore(false);
+    setWindowMoreAfter(false);
+    setLoadingNewer(false);
+    setLoadingOlder(false);
+    setJumpNewCount(0);
+    setJumpNotice(null);
+    setLanded(false);
+    setPinnedId(null);
+    clearHighlight();
+  }, [clearHighlight]);
+
+  /** Fold rows that are contiguous with the live tail (a window that reached
+   *  it, or a legacy node's newest page) into the live layer. */
+  const foldIntoLive = useCallback((rows: ExtendedEnvelope[], olderExists: boolean) => {
+    if (rows.length > 0) {
+      setMessages((prev) => {
+        const ids = new Set(prev.map(idOf));
+        const add = rows.filter((m) => !ids.has(idOf(m)));
+        if (add.length === 0) return prev;
+        const capped = capNewest([...prev, ...add], MAX_LIVE_ROWS, tsOf);
+        if (capped.trimmed) liveTrimmedRef.current = true;
+        return capped.rows;
+      });
+    }
+    if (olderExists) setHasMoreOlder(true);
+  }, []);
+
+  /** Scroll to + highlight `target` once it is rendered. */
+  const landOn = useCallback((target: string, token: number) => {
+    pendingScrollRef.current = { id: target, token };
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlightId(target);
+    setPinnedId(target);
+    highlightTimerRef.current = setTimeout(() => {
+      highlightTimerRef.current = null;
+      setHighlightId(null);
+    }, PERMALINK_HIGHLIGHT_MS);
+    scrollRetriesRef.current = 0;
+    setScrollNonce((n) => n + 1);
+    // Forward paging switches on after the landing scroll; this is the
+    // fallback should that scroll never run (target not rendered).
+    setTimeout(() => { if (jumpTokenRef.current === token) setLanded(true); }, 1500);
+  }, []);
+
+  /** The jump is finished and the view is the live one again: drop the
+   *  link's `msgId` so a re-render / remount does not jump again (N3). */
+  const clearOwnTarget = useCallback(() => {
+    selfClearedTargetRef.current = true;
+    navigation.setParams({ msgId: undefined });
+  }, [navigation]);
+
+  // The window met the live tail: fold it into the live layer and resume the
+  // normal flow (held-back live messages are already there).
+  const attachToTail = useCallback((windowRows: ExtendedEnvelope[]) => {
+    jumpTokenRef.current++;
+    foldIntoLive(windowRows, windowMoreBeforeRef.current);
+    setJump(null);
+    setJumpWindow([]);
+    setWindowMoreBefore(false);
+    setWindowMoreAfter(false);
+    setJumpNewCount(0);
+    setLanded(false);
+    clearOwnTarget();
+  }, [foldIntoLive, clearOwnTarget]);
+
+  /** "Jump to present": drop the window and show the live layer at its tail. */
+  const jumpToPresent = useCallback(() => {
+    resetJump();
+    // Drop the link's target so it is not jumped to again on a re-render.
+    navigation.setParams({ msgId: undefined });
+    requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: false }));
+  }, [resetJump, navigation]);
+
+  // Start / drop the jump. Keyed on (channel, target, node client, account):
+  // a new link or a node switch jumps again; an ACCOUNT change under the same
+  // link drops it instead — a jump opened as one account is never re-run as
+  // another (spec 06 §6.10). App.tsx also remounts the tree on a switch.
+  const lastJumpKeyRef = useRef<{ channelId: number; target: string | null; wallet: string | null } | null>(null);
+  useEffect(() => {
+    const prev = lastJumpKeyRef.current;
+    const wallet = walletAddress ?? null;
+    lastJumpKeyRef.current = { channelId, target: targetMsgId, wallet };
+    if (selfClearedTargetRef.current) {
+      selfClearedTargetRef.current = false;
+      // Our own clear after landing (same channel / account): keep the landed
+      // view, highlight and pin; nothing to start.
+      if (prev && prev.channelId === channelId && prev.wallet === wallet && !targetMsgId) return;
+    }
+    resetJump();
+    if (prev && targetMsgId && prev.channelId === channelId && prev.target === targetMsgId && prev.wallet !== wallet) {
+      navigation.setParams({ msgId: undefined });
+      return;
+    }
+    if (!client || !targetMsgId || !Number.isSafeInteger(channelId) || channelId <= 0) return;
+    const cid = channelId;
+    const target = targetMsgId;
+    const token = jumpTokenRef.current;
+    const account = accountKeyNow();
+    // Re-checked after every await: same jump, channel, node and account.
+    const stale = () => token !== jumpTokenRef.current || channelIdRef.current !== cid
+      || clientRef.current !== client || accountKeyNow() !== account;
+    // Stale only because the account / signer changed (no re-run of this
+    // effect follows for a signer-only change): leave the "Jumping…" state
+    // instead of showing it forever. A newer jump owns the state otherwise.
+    const abandon = () => { if (token === jumpTokenRef.current) setJump(null); };
+    setJumpSession(true);
+    setJump({ channelId: cid, target, phase: 'loading' });
+    void (async () => {
+      let resp;
+      try {
+        resp = await client.getChannelMessages(cid, { around: target, limit: JUMP_WINDOW_LIMIT });
+      } catch (e) {
+        if (stale()) { abandon(); return; }
+        // Plan §9: tell "no access" apart from "channel gone" via the channel
+        // record (a private channel answers with its restricted view, a
+        // deleted one 404s); Join is offered only for a public channel.
+        const status = httpStatusOf(e);
+        let failure: JumpFailure = 'error';
+        if (status === 403 || status === 404) {
+          let record: Parameters<typeof classifyJumpFailure>[1];
+          try {
+            const detail = await client.getChannelDetail(cid);
+            const ch = (detail as { channel?: { channel_id?: unknown; channel_type?: unknown } } | null)?.channel;
+            record = ch && Number(ch.channel_id) === cid
+              ? { found: true, isPublic: !isInviteGatedChannel(ch.channel_type as number | undefined, cid) }
+              : { found: false, status: null };
+          } catch (e2) {
+            record = { found: false, status: httpStatusOf(e2) };
+          }
+          if (stale()) { abandon(); return; }
+          failure = classifyJumpFailure(status, record);
+        }
+        setJump(null);
+        if (failure === 'error') showToast(t('permalink_load_failed'));
+        else setJumpNotice(failure);
+        return;
+      }
+      if (stale()) { abandon(); return; }
+      // Defensive cap, as for every other page.
+      const rows = normalizeEnvelopes(resp.messages || []).slice(0, JUMP_WINDOW_LIMIT) as ExtendedEnvelope[];
+      const lowerId = (m: unknown) => idOf(m as ExtendedEnvelope).toLowerCase();
+      const outcome = classifyAround({ target_found: resp.target_found, messages: rows as unknown as Envelope[] }, target, lowerId);
+      if (outcome === 'found') {
+        if (resp.has_more_after !== false) {
+          // Detached: the window REPLACES the view; the live layer keeps
+          // collecting live messages behind it.
+          setJumpWindow(rows);
+          setWindowMoreBefore(moreBefore(resp));
+          setWindowMoreAfter(true);
+          setJump({ channelId: cid, target, phase: 'detached' });
+        } else {
+          // The window already reaches the live tail: nothing to detach from.
+          foldIntoLive(rows, moreBefore(resp));
+          setJump(null);
+          clearOwnTarget();
+        }
+        landOn(target, token);
+        return;
+      }
+      // Both other outcomes served the newest page instead.
+      setJump(null);
+      if (outcome === 'legacy' && rows.some((m) => lowerId(m) === target)) {
+        // Pre-0.150.0 node, but the target is in its newest page.
+        foldIntoLive(rows, moreBefore(resp));
+        landOn(target, token);
+        clearOwnTarget();
+        return;
+      }
+      // `target_found: false` → honest "not on your current node", never
+      // "not found"; a legacy node that missed it → "can't jump here".
+      setJumpNotice(outcome === 'not-on-node' ? 'not-on-node' : 'node-outdated');
+    })();
+    return () => { jumpTokenRef.current++; };
+    // `t` / `showToast` / helpers are stable enough; listing them would
+    // re-run (and re-fetch) the jump on a language change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId, targetMsgId, client, walletAddress]);
+
+  /** Older page (`before`) — the live layer, or the jump window's top edge. */
+  const loadOlder = useCallback(async () => {
+    const c = clientRef.current;
+    if (!c || loadingOlderRef.current) return;
+    const inWindow = detachedRef.current;
+    if (jumpRef.current !== null && !inWindow) return; // jump loading: wait for it
+    if (!(inWindow ? windowMoreBeforeRef.current : hasMoreOlderRef.current)) return;
+    const rows = inWindow ? jumpWindowRef.current : messagesRef.current;
+    if (!inWindow && rows.length >= MAX_LIVE_ROWS) return;
+    const oldest = oldestRealId(rows, idOf, tsOf);
+    if (!oldest) return;
+    const token = jumpTokenRef.current;
+    const cid = channelIdRef.current;
+    const account = accountKeyNow();
+    const req = ++olderReqRef.current;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const resp = await c.getChannelMessages(cid, { before: oldest, limit: OLDER_PAGE_LIMIT });
+      // Dropped if the channel, node, account or jump changed meanwhile — the
+      // page belongs to the view that asked for it.
+      if (token !== jumpTokenRef.current || channelIdRef.current !== cid || clientRef.current !== c
+        || accountKeyNow() !== account || detachedRef.current !== inWindow) return;
+      const page = normalizeEnvelopes(resp.messages || []).slice(0, OLDER_PAGE_LIMIT) as ExtendedEnvelope[];
+      if (inWindow) {
+        // Over the cap the NEWEST end of the window is shed: re-arm forward paging.
+        const willTrim = mergeWindowPage(jumpWindowRef.current, page, 'older', MAX_WINDOW_ROWS, idOf).trimmed;
+        setJumpWindow((prev) => mergeWindowPage(prev, page, 'older', MAX_WINDOW_ROWS, idOf).rows);
+        setWindowMoreBefore(moreBefore(resp));
+        if (willTrim) setWindowMoreAfter(true);
+      } else {
+        setMessages((prev) => {
+          const ids = new Set(prev.map(idOf));
+          const add = page.filter((m) => !ids.has(idOf(m)));
+          return add.length === 0 ? prev : [...add, ...prev];
+        });
+        setHasMoreOlder(moreBefore(resp));
+      }
+    } catch (e) {
+      debugLog('warn', `Older messages failed: ${e instanceof Error ? e.message : ''}`);
+    } finally {
+      if (olderReqRef.current === req) {
+        loadingOlderRef.current = false;
+        setLoadingOlder(false);
+      }
+    }
+  }, [accountKeyNow]);
+
+  /** Newer page (`after`) from the jump window's bottom edge; re-attaches at the tail. */
+  const loadNewer = useCallback(async () => {
+    const c = clientRef.current;
+    if (!c || !detachedRef.current || loadingNewerRef.current || !windowMoreAfterRef.current) return;
+    const newest = newestRealId(jumpWindowRef.current, idOf, tsOf);
+    if (!newest) return;
+    const token = jumpTokenRef.current;
+    const cid = channelIdRef.current;
+    const account = accountKeyNow();
+    const req = ++newerReqRef.current;
+    loadingNewerRef.current = true;
+    setLoadingNewer(true);
+    try {
+      const resp = await c.getChannelMessages(cid, { after: newest, limit: JUMP_PAGE_LIMIT });
+      if (token !== jumpTokenRef.current || channelIdRef.current !== cid || clientRef.current !== c
+        || accountKeyNow() !== account || !detachedRef.current) return;
+      const page = normalizeEnvelopes(resp.messages || []).slice(0, JUMP_PAGE_LIMIT) as ExtendedEnvelope[];
+      const merged = mergeWindowPage(jumpWindowRef.current, page, 'newer', MAX_WINDOW_ROWS, idOf);
+      if (moreAfter(resp, page.length, JUMP_PAGE_LIMIT)) {
+        setJumpWindow((prev) => mergeWindowPage(prev, page, 'newer', MAX_WINDOW_ROWS, idOf).rows);
+        // The oldest end was shed: older history exists again.
+        if (merged.trimmed) setWindowMoreBefore(true);
+      } else {
+        attachToTail(merged.rows);
+      }
+    } catch (e) {
+      // Keep `windowMoreAfter` so the next scroll retries.
+      debugLog('warn', `Newer messages failed: ${e instanceof Error ? e.message : ''}`);
+    } finally {
+      if (newerReqRef.current === req) {
+        loadingNewerRef.current = false;
+        setLoadingNewer(false);
+      }
+    }
+  }, [accountKeyNow, attachToTail]);
 
   // Build lookup map for reply context resolution — over `allMsgs`, so a
   // reply to a message only present via the cache still resolves.
   const msgById = useMemo(() => {
     const map = new Map<string, ExtendedEnvelope>();
-    for (const msg of allMsgs) map.set(msgIdToHex(msg.msg_id), msg);
+    for (const msg of knownMsgs) map.set(msgIdToHex(msg.msg_id), msg);
     return map;
-  }, [allMsgs]);
+  }, [knownMsgs]);
 
   /** Resolve reply context for a message */
   const resolveReply = useCallback((msg: ExtendedEnvelope): ReplyContext | null => {
@@ -794,10 +1316,12 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
   // Sort messages chronologically and build list items with date separators + grouping.
   // O(n) optimistic dedup: build a Set of non-optimistic signatures first,
   // then filter optimistic messages that have a real counterpart.
+  // What the list shows: the jump window while detached, else the live layer.
+  const viewMsgs = detached ? jumpWindow : allMsgs;
   const listItems = useMemo((): ListItem[] => {
     // Build dedup set for O(n) optimistic filtering: "author|timestamp_bucket"
     const realMsgKeys = new Set<string>();
-    for (const m of allMsgs) {
+    for (const m of viewMsgs) {
       if (!m._optimistic) {
         // 10-second bucket for matching optimistic to confirmed messages
         const bucket = Math.floor(new Date(m.timestamp).getTime() / 10000);
@@ -805,13 +1329,14 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       }
     }
 
-    const filtered = allMsgs.filter((m) => {
+    const filtered = viewMsgs.filter((m) => {
       if (!m._optimistic) return true;
       const bucket = Math.floor(new Date(m.timestamp).getTime() / 10000);
       return !realMsgKeys.has(`${m.author}|${bucket}`);
     });
 
-    // Sort oldest-first for processing
+    // Sort oldest-first for processing (`filtered` is a fresh array — the
+    // state arrays themselves are never sorted in place).
     const sorted = filtered.sort((a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
@@ -845,7 +1370,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     // rationale ("the user only wants to see the bot's reply, not THEIR OWN
     // tap") this scoping is not a deviation from intent, just from the
     // other clients' broader implementation of it.
-    const visible = sorted.filter((m) => !(m._decodedViaButton && m.author === myAddress));
+    // A permalink target always renders, even when it is the viewer's own
+    // button press — the user explicitly asked to see that message.
+    const visible = sorted.filter((m) => !(m._decodedViaButton && m.author === myAddress && msgIdToHex(m.msg_id) !== (pinnedId ?? targetMsgId)));
 
     const items: ListItem[] = [];
     let lastDate = '';
@@ -877,7 +1404,37 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
     // Reverse for inverted FlatList (newest at top)
     return items.reverse();
-  }, [allMsgs, t, myAddress]);
+  }, [viewMsgs, t, myAddress, targetMsgId, pinnedId]);
+
+  // Land on a permalink target once its row is in the list: centred, no
+  // animation. Variable-height rows → `scrollToIndex`, with the failure
+  // handler below estimating the offset first when the row is not measured.
+  useEffect(() => {
+    const p = pendingScrollRef.current;
+    if (!p) return;
+    const index = listItems.findIndex((it) => it.type === 'message' && it.key.toLowerCase() === p.id);
+    if (index < 0) return;
+    const timer = setTimeout(() => {
+      if (pendingScrollRef.current !== p) return;
+      pendingScrollRef.current = null;
+      try {
+        listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.5 });
+      } catch { /* handled by onScrollToIndexFailed */ }
+      if (jumpTokenRef.current === p.token) setLanded(true);
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [listItems, scrollNonce]);
+
+  const handleScrollToIndexFailed = useCallback((info: { index: number; averageItemLength: number }) => {
+    if (scrollRetriesRef.current >= 3) return;
+    scrollRetriesRef.current++;
+    listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+    setTimeout(() => {
+      try {
+        listRef.current?.scrollToIndex({ index: info.index, animated: false, viewPosition: 0.5 });
+      } catch { /* give up quietly — the row stays highlighted */ }
+    }, 120);
+  }, []);
 
   // ── Message Actions ──
 
@@ -921,11 +1478,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       try {
         await client.editMessage(channelId, editingMsg.msgId, text);
         // Optimistic update — clear cached content so it re-decodes
-        setMessages((prev) => prev.map((m) =>
-          msgIdToHex(m.msg_id) === editingMsg.msgId
-            ? { ...m, payload: text, edited: true, last_edited_at: Date.now(), _decodedContent: undefined }
-            : m,
-        ));
+        applyToRow(editingMsg.msgId, (m) => ({ ...m, payload: text, edited: true, last_edited_at: Date.now(), _decodedContent: undefined }));
         setEditingMsg(null);
         setInput('');
         // editMessage carries no mentions of its own; anything pending belonged
@@ -1006,9 +1559,13 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         _decodedAttachments: sentAttachments.length > 0 ? sentAttachments : undefined,
         _decodedEncryptedMedia: sentEncryptedMedia.length > 0 ? sentEncryptedMedia : undefined,
       };
+      // Sending from a jump window: back to the present first, so the
+      // optimistic bubble shows at the live tail, not under old history.
+      if (detachedRef.current) jumpToPresent();
       setMessages((prev) => {
-        const next = [optimistic, ...prev];
-        return next.length > MAX_LOCAL_MESSAGES ? next.slice(0, MAX_LOCAL_MESSAGES) : next;
+        const capped = capNewest([optimistic, ...prev], MAX_LIVE_ROWS, tsOf);
+        if (capped.trimmed) liveTrimmedRef.current = true;
+        return capped.rows;
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
@@ -1016,7 +1573,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
       const key = chatErrorKey(msg);
       showInfo(t('chat_send'), key ? t(key) : msg.slice(0, 150));
     }
-  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, isPrivate, pendingMentions, chanMetaResolved, pendingAttachments, pendingEncryptedMedia]);
+  }, [input, client, signer, channelId, myAddress, editingMsg, replyTo, t, isEncrypted, canEstablishKey, encFloor, isPrivate, pendingMentions, chanMetaResolved, pendingAttachments, pendingEncryptedMedia, jumpToPresent, applyToRow]);
 
   /**
    * Sends a button press (protocol §3.3): an ordinary signed message whose
@@ -1090,18 +1647,14 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     if (!client || msg.author !== myAddress) return;
     try {
       await client.deleteMessage(channelId, msgIdToHex(msg.msg_id));
-      setMessages((prev) => prev.map((m) =>
-        msgIdToHex(m.msg_id) === msgIdToHex(msg.msg_id)
-          ? { ...m, deleted: true }
-          : m,
-      ));
+      applyToRow(msg.msg_id, (m) => ({ ...m, deleted: true }));
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : '';
       debugLog('warn', `Delete failed: ${errMsg}`);
       const key = chatErrorKey(errMsg);
       showInfo(t('chat_delete'), key ? t(key) : errMsg.slice(0, 150));
     }
-  }, [client, channelId, myAddress, t]);
+  }, [client, channelId, myAddress, t, applyToRow]);
 
   const handleReact = useCallback(async (msg: ExtendedEnvelope, emoji: string) => {
     if (!client) return;
@@ -1109,19 +1662,18 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     if (!CHAT_REACTIONS.includes(emoji)) return;
     try {
       await client.reactToMessage(channelId, msgIdToHex(msg.msg_id), emoji);
-      setMessages((prev) => prev.map((m) => {
-        if (msgIdToHex(m.msg_id) !== msgIdToHex(msg.msg_id)) return m;
+      applyToRow(msg.msg_id, (m) => {
         const reactions = { ...(m.reactions || {}) };
         reactions[emoji] = (reactions[emoji] || 0) + 1;
         return { ...m, reactions };
-      }));
+      });
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : '';
       debugLog('warn', `React failed: ${errMsg}`);
       const key = chatErrorKey(errMsg);
       if (key) showInfo(t('chat_react'), t(key));
     }
-  }, [client, channelId, t]);
+  }, [client, channelId, t, applyToRow]);
 
   const cancelEdit = useCallback(() => {
     setEditingMsg(null);
@@ -1205,6 +1757,32 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
     navigation.navigate('UserProfile', { address: addr });
   }, [navigation]);
 
+  // Share links (spec 06 §6.5). A private / encrypted channel's link only
+  // opens for members — say so rather than hiding the action (plan §8.6).
+  // `isEncrypted` fails closed while the record loads, which only makes this
+  // note appear early, never the reverse.
+  const membersOnly = isPrivate || isEncrypted;
+  const handleCopyLink = useCallback(async (msg: ExtendedEnvelope) => {
+    const url = buildChatShareUrl(channelId, msgIdToHex(msg.msg_id));
+    if (!url) { showToast(t('share_link_failed')); return; }
+    try {
+      await Clipboard.setStringAsync(url);
+      showToast(t(membersOnly ? 'share_link_copied_members' : 'share_link_copied'));
+    } catch {
+      showToast(t('share_link_failed'));
+    }
+  }, [channelId, membersOnly, showToast, t]);
+  const handleShareLink = useCallback(async (msg: ExtendedEnvelope) => {
+    const url = buildChatShareUrl(channelId, msgIdToHex(msg.msg_id));
+    if (!url) { showToast(t('share_link_failed')); return; }
+    if (membersOnly) showToast(t('share_link_members_note'));
+    try {
+      await Share.share({ message: url });
+    } catch (e) {
+      debugLog('warn', `Share link failed: ${e instanceof Error ? e.message : ''}`);
+    }
+  }, [channelId, membersOnly, showToast, t]);
+
   const renderItem = useCallback(({ item }: { item: ListItem }) => {
     if (item.type === 'date') {
       return (
@@ -1220,6 +1798,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
 
     const { envelope, isGrouped } = item;
     const isOwn = envelope.author === myAddress;
+    const envHex = msgIdToHex(envelope.msg_id).toLowerCase();
+    // Unconfirmed sends (`local-…`) have no permalink.
+    const linkable = !envelope._optimistic && /^[0-9a-f]{64}$/.test(envHex);
     // Text comes from the async decrypt cache (handles v1 plaintext + v2 encrypted).
     const disp = decoded.get(chanCacheId(envelope));
     const content = !disp ? (envelope._decodedContent || '')
@@ -1250,6 +1831,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         onReact={handleReact}
         onTip={handleTip}
         onAuthorPress={handleAuthorPress}
+        onCopyLink={linkable ? handleCopyLink : undefined}
+        onShareLink={linkable ? handleShareLink : undefined}
+        highlighted={highlightId !== null && envHex === highlightId}
         // Omitted entirely (not just disabled) when the viewer can't post
         // here — see `canPostHere`'s doc comment above.
         buttons={canPostHere ? envelope._decodedButtons : undefined}
@@ -1258,7 +1842,7 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         onPressButton={canPostHere ? pressButton : undefined}
       />
     );
-  }, [myAddress, colors, profileNames, client, decoded, t, resolveReply, handleReply, handleEdit, handleDelete, handleReact, handleTip, handleAuthorPress, canPostHere, pressButton]);
+  }, [myAddress, colors, profileNames, client, decoded, t, resolveReply, handleReply, handleEdit, handleDelete, handleReact, handleTip, handleAuthorPress, canPostHere, pressButton, handleCopyLink, handleShareLink, highlightId]);
 
   const keyExtractor = useCallback((item: ListItem) => item.key, []);
 
@@ -1307,20 +1891,123 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         )}
       </View>
 
-      <FlatList
-        data={listItems}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
-        inverted
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={{ color: colors.textSecondary }}>
-              {t('chat_no_messages')}
+      {/* Link-opened encrypted public channel: join only on an explicit tap. */}
+      {showJoinBar && (
+        <View style={[styles.joinBar, { backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
+          <Text style={{ color: colors.textPrimary, fontSize: fontSize.sm, flex: 1 }}>
+            {t('channel_join_to_read')}
+          </Text>
+          <Button
+            size="sm"
+            label={t('permalink_join_channel')}
+            loading={joiningFromLink}
+            onPress={() => { void handleJoinFromLink(); }}
+          />
+        </View>
+      )}
+
+      <View style={styles.listWrap}>
+        <FlatList
+          ref={listRef}
+          data={listItems}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          inverted
+          contentContainerStyle={styles.list}
+          // Inverted: the END is the top (older history), the START the
+          // bottom (newer — only paged while a jump window is detached).
+          onEndReached={() => { void loadOlder(); }}
+          onEndReachedThreshold={0.5}
+          onStartReached={detached && landed ? () => { void loadNewer(); } : undefined}
+          onStartReachedThreshold={0.5}
+          // Once a jump touched this channel: keep the visible rows in place
+          // when rows are inserted at the bottom (forward pages, re-attach).
+          // Detached: no auto-scroll to the newest row, which would chain
+          // forward pages to the tail on its own.
+          maintainVisibleContentPosition={
+            detached ? { minIndexForVisible: 0 }
+              : jumpSession ? { minIndexForVisible: 0, autoscrollToTopThreshold: 40 }
+                : undefined
+          }
+          onScrollToIndexFailed={handleScrollToIndexFailed}
+          onScrollBeginDrag={highlightId ? clearHighlight : undefined}
+          ListFooterComponent={loadingOlder ? <ActivityIndicator style={styles.pageSpinner} color={colors.textSecondary} /> : undefined}
+          ListHeaderComponent={loadingNewer ? <ActivityIndicator style={styles.pageSpinner} color={colors.textSecondary} /> : undefined}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={{ color: colors.textSecondary }}>
+                {t('chat_no_messages')}
+              </Text>
+            </View>
+          }
+        />
+
+        {/* Permalink jump: the single `around` fetch in flight. */}
+        {jump?.phase === 'loading' && jump.channelId === channelId && (
+          <View style={[styles.jumpPill, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]} accessibilityRole="progressbar">
+            <ActivityIndicator size="small" color={colors.textSecondary} />
+            <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm, marginLeft: spacing.xs }}>
+              {t('permalink_jumping')}
             </Text>
           </View>
-        }
-      />
+        )}
+
+        {/* Detached from the live tail: the way back + held-back live count. */}
+        {detached && (
+          <View style={[styles.jumpBanner, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+            <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm, flexShrink: 1 }} numberOfLines={1}>
+              {t('permalink_viewing_older')}
+            </Text>
+            <Button
+              size="sm"
+              label={jumpNewCount > 0 ? t('permalink_jump_present_new', { count: jumpNewCount }) : t('permalink_jump_present')}
+              icon="↓"
+              onPress={jumpToPresent}
+            />
+          </View>
+        )}
+
+        {/* Why a jump could not land (plan §9). */}
+        {jumpNotice && (
+          <View style={[styles.jumpNotice, { backgroundColor: colors.bgSecondary, borderColor: colors.warning }]} accessibilityLiveRegion="polite">
+            <View style={styles.jumpNoticeRow}>
+              <Text style={{ color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: '600', flex: 1 }}>
+                {t({
+                  'not-on-node': 'permalink_not_on_node',
+                  'node-outdated': 'permalink_node_outdated',
+                  'no-access': 'permalink_no_access',
+                  'no-access-joinable': 'permalink_no_access',
+                  'channel-gone': 'permalink_channel_gone',
+                }[jumpNotice])}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setJumpNotice(null)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel={t('close')}
+              >
+                <Text style={{ color: colors.textSecondary, fontSize: fontSize.md }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {(jumpNotice === 'not-on-node' || jumpNotice === 'node-outdated') && (
+              <Button
+                size="sm"
+                variant="secondary"
+                label={t('permalink_choose_node')}
+                onPress={() => setNodePickerOpen(true)}
+              />
+            )}
+            {jumpNotice === 'no-access-joinable' && (
+              <Button
+                size="sm"
+                label={t('permalink_join_channel')}
+                onPress={() => navigation.navigate('ChannelJoin', { channelId })}
+              />
+            )}
+          </View>
+        )}
+
+        <Toast message={toast} bottom={spacing.md} />
+      </View>
 
       {signer ? (
         <View style={{ backgroundColor: colors.bgSecondary, borderTopWidth: 1, borderTopColor: colors.border }}>
@@ -1464,6 +2151,9 @@ export default function ChannelMessagesScreen({ route, navigation }: Props) {
         />
       )}
       <InfoModal visible={!!info} title={info?.title} message={info?.message || ''} onClose={() => setInfo(null)} />
+      {/* "Try another node" for a message this node does not hold. Picking
+          one swaps the client, which re-runs the jump on the new node. */}
+      <NodeSelector visible={nodePickerOpen} onClose={() => setNodePickerOpen(false)} />
     </KeyboardAwareView>
   );
 }
@@ -1480,7 +2170,54 @@ const styles = StyleSheet.create({
   },
   headerTextCol: { flex: 1, marginRight: spacing.sm },
   headerTitle: { fontSize: fontSize.lg, fontWeight: '700' },
+  listWrap: { flex: 1 },
+  joinBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   list: { paddingHorizontal: spacing.md, paddingBottom: spacing.md },
+  pageSpinner: { paddingVertical: spacing.sm },
+  jumpPill: {
+    position: 'absolute',
+    top: spacing.sm,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  jumpBanner: {
+    position: 'absolute',
+    top: spacing.sm,
+    left: spacing.md,
+    right: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.xs,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  jumpNotice: {
+    position: 'absolute',
+    bottom: spacing.sm,
+    left: spacing.md,
+    right: spacing.md,
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  jumpNoticeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 60 },
   dateSeparator: {
     flexDirection: 'row',

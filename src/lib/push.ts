@@ -12,6 +12,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import type { WalletSigner } from '@ogmara/sdk';
 import { channelInvitePushRoute } from './privateInvite';
+import { chatPushTarget } from './deepLinkPaths';
 
 /** Push gateway URL (configurable per environment). */
 const DEFAULT_GATEWAY_URL = 'http://localhost:41722';
@@ -145,11 +146,25 @@ export function parseNotificationData(
   const type = data.type as string;
 
   if (type === 'mention') {
+    // Untrusted payload: the (channel_id, msg_id) pair is validated through
+    // the SDK's permalink parser (`chatPushTarget`), so a tap opens the jump
+    // to the mentioned message; a malformed msg_id just opens the channel.
+    // Nested route (like `channel_invite`) so it works before the Chat tab
+    // was ever opened; `initial: false` keeps the channel list underneath.
+    const target = chatPushTarget(data.channel_id, data.msg_id);
+    if (!target) return null;
     return {
-      screen: 'ChannelMessages',
+      screen: 'ChatTab',
       params: {
-        channelId: Number(data.channel_id),
-        channelName: `#${data.channel_id}`,
+        screen: 'ChannelMessages',
+        initial: false,
+        params: {
+          channelId: target.channelId,
+          channelName: String(target.channelId),
+          // Inbound (push) open: never a silent join of an encrypted channel.
+          fromLink: '1',
+          ...(target.msgId ? { msgId: target.msgId } : {}),
+        },
       },
     };
   }

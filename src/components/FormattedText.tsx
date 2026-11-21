@@ -10,6 +10,7 @@ import React, { useMemo } from 'react';
 import { Text, Image, Linking, StyleSheet, View, TouchableOpacity } from 'react-native';
 import { parseMessageContent, type TextSegment, type Attachment } from '@ogmara/sdk';
 import { useTheme, spacing, fontSize, radius } from '../theme';
+import { inAppUrlForShareLink } from '../lib/share';
 
 /** Image MIME types that render inline. */
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
@@ -36,11 +37,15 @@ export default function FormattedText({ content, attachments, mediaBaseUrl, colo
       case 'url': {
         // Defense-in-depth: only allow http/https links
         const safe = seg.url.startsWith('http://') || seg.url.startsWith('https://');
+        // An Ogmara share link opens in-app (spec 06 §6.5): rebuilt by the
+        // SDK as `ogmara://…`, which re-enters through the app's own deep-link
+        // handling (parsePermalink → navigation). Anything else → browser.
+        const inApp = safe ? inAppUrlForShareLink(seg.url) : null;
         return (
           <Text
             key={idx}
             style={safe ? [styles.link, { color: colors.accentPrimary }] : undefined}
-            onPress={safe ? () => Linking.openURL(seg.url) : undefined}
+            onPress={safe ? () => { Linking.openURL(inApp ?? seg.url).catch(() => {}); } : undefined}
           >
             {seg.display}
           </Text>

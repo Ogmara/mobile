@@ -85,6 +85,13 @@ interface Props {
   onTip?: (msg: BubbleMessage) => void;
   onAuthorPress?: (address: string) => void;
   onReplyPress?: (msgId: string) => void;
+  /** "Copy link" in the long-press menu (spec 06 §6.5). Omitted for a row
+   *  that has no permalink (an unconfirmed send). */
+  onCopyLink?: (msg: BubbleMessage) => void;
+  /** "Share…" in the long-press menu — the OS share sheet with the link. */
+  onShareLink?: (msg: BubbleMessage) => void;
+  /** Permalink target: an accent bar + tint until the caller clears it. */
+  highlighted?: boolean;
   /** Hide author + avatar for grouped consecutive messages */
   isGrouped?: boolean;
   /**
@@ -214,6 +221,9 @@ export default function MessageBubble({
   onTip,
   onAuthorPress,
   onReplyPress,
+  onCopyLink,
+  onShareLink,
+  highlighted,
   isGrouped,
   buttons,
   buttonMsgId,
@@ -252,8 +262,10 @@ export default function MessageBubble({
         setDeleteConfirmOpen(true);
         break;
       case 'tip': onTip?.(message); break;
+      case 'copy-link': onCopyLink?.(message); break;
+      case 'share-link': onShareLink?.(message); break;
     }
-  }, [message, onReply, onEdit, onDelete, onTip, t]);
+  }, [message, onReply, onEdit, onDelete, onTip, onCopyLink, onShareLink]);
 
   const handleReact = useCallback((emoji: string) => {
     setReactPickerOpen(false);
@@ -288,7 +300,11 @@ export default function MessageBubble({
       onLongPress={handleLongPress}
       delayLongPress={400}
       activeOpacity={0.8}
-      style={[styles.container, isOwn && styles.containerOwn]}
+      style={[
+        styles.container,
+        isOwn && styles.containerOwn,
+        highlighted && [styles.highlighted, { borderLeftColor: colors.accentPrimary, backgroundColor: colors.bgTertiary }],
+      ]}
     >
       {/* Author name (hidden for grouped messages or own messages) */}
       {!isOwn && !isGrouped && (
@@ -458,6 +474,16 @@ export default function MessageBubble({
                 <Text style={[styles.sheetItemText, { color: colors.textPrimary }]}>💰 {t('chat_tip')}</Text>
               </TouchableOpacity>
             )}
+            {onCopyLink && (
+              <TouchableOpacity style={[styles.sheetItem, { borderBottomColor: colors.border }]} onPress={() => handleMenuAction('copy-link')}>
+                <Text style={[styles.sheetItemText, { color: colors.textPrimary }]}>🔗 {t('share_message_link')}</Text>
+              </TouchableOpacity>
+            )}
+            {onShareLink && (
+              <TouchableOpacity style={[styles.sheetItem, { borderBottomColor: colors.border }]} onPress={() => handleMenuAction('share-link')}>
+                <Text style={[styles.sheetItemText, { color: colors.textPrimary }]}>↗ {t('share_message_share')}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.sheetItem} onPress={() => setMenuOpen(false)}>
               <Text style={[styles.sheetItemText, { color: colors.textSecondary }]}>{t('cancel')}</Text>
             </TouchableOpacity>
@@ -527,6 +553,13 @@ const styles = StyleSheet.create({
   },
   containerOwn: {
     alignSelf: 'flex-end',
+  },
+  // Permalink target (colours applied inline from the theme).
+  highlighted: {
+    borderLeftWidth: 3,
+    paddingLeft: spacing.xs,
+    paddingRight: spacing.xs,
+    borderRadius: radius.sm,
   },
   authorRow: {
     flexDirection: 'row',

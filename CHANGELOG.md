@@ -5,6 +5,120 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.60.0] - 2026-11-20
+
+Message permalinks (spec 06 §6.5; mobile phase of
+`docs/planning/message-permalinks-plan.md`). Ports the web 0.86.0 / desktop
+1.86.0 behaviour onto the React Native screens; needs l2-node 0.150.0+ for the
+`around` jump and `@ogmara/sdk` 0.71.0 (`buildPermalink` / `parsePermalink`).
+
+### Added
+
+- **Open a link to a chat message.** `ogmara://chat/<id>?msg=<hex>` (and the
+  same route behind `https://ogmara.org/app/#/…`) opens the channel with ONE
+  `GET …/messages?around=<msg>&limit=50`, centres and highlights the message,
+  and shows a "Viewing older messages · Jump to present" banner. Scrolling up
+  pages older history (`before`, gated on `has_more_before`, else `has_more`),
+  scrolling down pages newer (`after`, gated on `has_more_after`); when the
+  window reaches the newest message it rejoins the live view. Live messages
+  that arrive meanwhile are held back (the banner counts other people's) and
+  the channel is marked read only once the view is back at the live end.
+  Outcomes get their own notice: "This message isn't on your current node"
+  (`target_found: false`) with a node picker that retries the jump on the
+  chosen node; an older node without `around` (no `target_found`) lands on the
+  message if it is in the newest page, else says the node can't jump there; no
+  access / channel gone are told apart via the channel record, with Join for a
+  public channel.
+- **Mention notifications open the mentioned message**, not just the channel.
+  The push's `channel_id` / `msg_id` are validated through `parsePermalink`;
+  a bad `msg_id` opens the channel only.
+- **Older history in channels.** The channel view used to fetch a flat page
+  and stop; it now loads the newest page (100) and older pages of 50 as you
+  scroll up.
+- **Copy link / Share…** in the message long-press menu. For a private or
+  encrypted channel the toast says only members can open the link.
+- **News:** a Share button on the post, the post's comments listed under it
+  (as served inline by the node, max 200) each with a copy-link button, and
+  `ogmara://news/<hex>?c=<hex>` scrolls to and highlights that comment. A post
+  opened from a link is now loaded from the node — it used to show "Not found"
+  without a feed-provided copy.
+- Ogmara share links inside messages and posts open in the app instead of the
+  browser.
+- **No silent join from links.** An encrypted public channel opened from an
+  inbound link or a push (internal `fromLink` marker, set only by the
+  link-resolution path) is no longer auto-joined; a "join to read" bar with a
+  Join button joins on tap. In-app navigation keeps the automatic join.
+- Posting a comment on a news post reloads the comment list.
+- 21 new strings in all 7 locales.
+
+### Changed
+
+- **Every inbound link goes through `parsePermalink`** (`lib/deepLinkPaths.ts`,
+  `resolveInboundPath`) before navigation: chat / news / join links are rebuilt
+  from the parsed target, so a link's own query keys never reach a screen; a
+  malformed target is dropped silently and the bare channel / post / join page
+  opens if its id is valid; anything else is ignored. The route table moves to
+  `chat/:channelId` with `channel/` kept as an alias for existing push links;
+  the Chat and News stacks keep their list screen underneath a linked screen.
+  Only the exact share base is accepted for https links
+  (`https://ogmara.org/app` followed by the `#/` route); the bare-host prefix
+  and non-hash paths are ignored.
+  The join page still treats `node` as UNTRUSTED (`validateNodeUrl` before any
+  fetch, host-only display) and never switches the user's node — it federates,
+  as before.
+- `lib/share.ts` builds every link with the SDK's `buildPermalink` (chat,
+  news post, news comment, public invite); identical bytes to web / desktop.
+- `ChannelMessages` route params gain `msgId?` (both stack declarations) and
+  `channelName` becomes optional (resolved from the channel record);
+  `NewsDetail` gains `commentId?`.
+
+### Fixed
+
+- Bookmarks, the news feed and user profiles showed the raw key
+  `message_deleted` for a deleted item; they now use the existing
+  "deleted" string.
+- The newest-page fetch replaced the message list, dropping a live message or
+  an unconfirmed send that landed while it was in flight; it is now merged.
+- The live-message cap sliced by array position, which with fetched (oldest-
+  first) and live (newest-first) rows mixed could drop the NEWEST rows; it now
+  keeps the newest by timestamp and re-arms "older history" when it sheds.
+- The launch link was re-applied on every unlock (the navigation container
+  remounts behind the lock screen); a link that arrives while locked is now
+  opened after unlock, and a cold-start link is re-dispatched when the tab tree
+  remounts for the restored account (first restore only — never across an
+  account switch).
+- A link that brought the app to the foreground right before the auto-lock
+  engaged is replayed after unlock; a push tapped while locked is opened after
+  unlock only once the navigator has remounted. The cold-start re-dispatch runs
+  at most once per process.
+- Deleted news comments show "This message was deleted" with no link button;
+  a deleted reposted original used a missing string key and now shows the same
+  text.
+- A jump whose account changed mid-request no longer leaves "Jumping…" up; a
+  landed jump that rejoined the live view clears its target from the route so
+  it is not re-run.
+- A jump is dropped, never re-run, when the account changes; every page /
+  jump result is discarded if the channel, node, account or jump changed while
+  it was in flight. The jump window is never written to the message cache —
+  only the contiguous live view is.
+
+### Security
+
+- `npm audit --omit=dev` and `npm audit`: 0 vulnerabilities. No dependency
+  changes.
+
+### Known limitations
+
+- OS-level `https://ogmara.org/app` links (Android App Links / iOS Universal
+  Links) are not registered yet (plan Phase 7: `intentFilters` with
+  `autoVerify`, `associatedDomains`, website `.well-known` files — blocked on
+  the release keystore fingerprint and Apple Team ID); `ogmara://` links work.
+- A comment beyond the node's 200-comment inline cap opens the post without
+  scrolling.
+- Deferred: the `channel_invite` push route still opens the join screen as
+  the only screen in the Chat stack (no list underneath, no `initial: false`)
+  and is not routed through the permalink validator beyond its id check.
+
 ## [0.59.2] - 2026-11-15
 
 ### Fixed

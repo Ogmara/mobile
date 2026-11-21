@@ -14,11 +14,11 @@ import './src/lib/base64-polyfill'; // global atob/btoa for Hermes (SC discovery
 import { patchEd25519 } from './src/lib/ed25519-polyfill';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, Linking, type AppStateStatus } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
-import { NavigationContainer, type NavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainer, getActionFromState, type NavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { ThemeProvider, useTheme } from './src/theme';
 import { ConnectionProvider, useConnection } from './src/context/ConnectionContext';
@@ -30,13 +30,16 @@ import { isLockEnabled, getLockTimeout } from './src/lib/appLock';
 import { initDebugMode, installGlobalErrorHandler, debugLog } from './src/lib/debug';
 import { vaultMigrationsReady, verifyVaultIntegrity } from './src/lib/vaultMigration';
 import { setupNotificationChannel, parseNotificationData } from './src/lib/push';
-import { getLinkingConfig } from './src/lib/deepLinks';
+import { getLinkingConfig, linkingConfig, noteInboundUrl, stateForInboundUrl, takeRecentInboundUrl } from './src/lib/deepLinks';
 import TabNavigator from './src/navigation/TabNavigator';
 import LockScreen from './src/screens/LockScreen';
 
 // Initialize i18n (side-effect import)
 import './src/i18n/init';
 import AlertHost from './src/components/AlertHost';
+
+/** The cold-start link re-dispatch (see AppContent) runs at most once per process. */
+let coldStartRedispatchUsed = false;
 
 /** Inner app — needs ThemeProvider to be a parent. */
 function AppContent() {
@@ -46,6 +49,8 @@ function AppContent() {
   const lockedRef = useRef<boolean | null>(null);
   const lastBackgroundRef = useRef<number>(0);
   const navigationRef = useRef<NavigationContainerRef<{}>>(null);
+  // Inbound link to open after unlock (see the linking block below).
+  const pendingLinkRef = useRef<string | null>(null);
 
   // Load initial state
   useEffect(() => {
@@ -92,6 +97,11 @@ function AppContent() {
         const timeout = await getLockTimeout().catch(() => 300);
         const lockEnabled = await isLockEnabled().catch(() => false);
         if (lockEnabled && elapsed >= timeout) {
+          // A link that brought the app to the foreground was just handled by
+          // the navigator, which now unmounts behind the lock screen: replay it
+          // after unlock instead of losing it.
+          const recent = takeRecentInboundUrl(2000);
+          if (recent) pendingLinkRef.current = recent;
           setLocked(true);
         }
       }
@@ -108,6 +118,28 @@ function AppContent() {
   // Handle notification taps — navigate to the relevant screen
   // Stores pending navigation if app is locked, executes after unlock
   const pendingNavRef = useRef<{ screen: string; params: Record<string, unknown> } | null>(null);
+
+  // Inbound OS links (spec 06 §6.5). The NavigationContainer's own linking
+  // handles a link while it is mounted; two cases it cannot see are covered
+  // here: a link that arrives while the app is LOCKED (the container is
+  // unmounted behind the lock screen) is held and dispatched after unlock, and
+  // a cold-start link the tab tree lost when it remounted for the restored
+  // account (see the wallet effect below). Both go through
+  // `stateForInboundUrl` → `resolveInboundPath` → `parsePermalink`.
+  const linkingOptions = useMemo(() => getLinkingConfig(), []);
+  const dispatchInboundUrl = (url: string) => {
+    const state = stateForInboundUrl(url);
+    if (!state || !navigationRef.current) return;
+    const action = getActionFromState(state, linkingConfig as never);
+    if (action) navigationRef.current.dispatch(action);
+  };
+  useEffect(() => {
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      noteInboundUrl(url);
+      if (lockedRef.current) pendingLinkRef.current = url;
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -132,6 +164,28 @@ function AppContent() {
   // mirrors web/desktop's always-mounted Sidebar handling, made possible here by
   // the same navigationRef already used for notification-tap navigation above.
   const { onWsEvent, walletAddress, status, nodeUrl } = useConnection();
+
+  // Cold start: the saved account usually finishes restoring AFTER the
+  // NavigationContainer applied the launch link, and the tab tree below is
+  // keyed on the wallet — the remount drops the screen the link opened. Re-
+  // dispatch a link that arrived moments ago, but only on that first
+  // no-account → account restore (never across a switch between two accounts:
+  // a link opened as one account is not replayed as another).
+  const prevWalletRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevWalletRef.current;
+    prevWalletRef.current = walletAddress;
+    if (prev !== null || !walletAddress) return;
+    // Once per process: only the very first account restore after launch may
+    // replay a link — never a later sign-in after a disconnect, which could be
+    // another account.
+    if (coldStartRedispatchUsed) return;
+    coldStartRedispatchUsed = true;
+    const url = takeRecentInboundUrl(15_000);
+    if (!url) return;
+    const timer = setTimeout(() => { if (!lockedRef.current) dispatchInboundUrl(url); }, 150);
+    return () => clearTimeout(timer);
+  }, [walletAddress]);
 
   // Pull the user's synced objects (channel org, hidden DMs, followed topics)
   // once the node connection is up, so a fresh device shows them without a
@@ -227,12 +281,19 @@ function AppContent() {
       <LockScreen
         onUnlock={() => {
           setLocked(false);
-          if (pendingNavRef.current && navigationRef.current) {
-            const route = pendingNavRef.current;
-            pendingNavRef.current = null;
+          // Captured and cleared NOW: the navigation container is unmounted
+          // while locked (navigationRef is null), so it is only used once it
+          // has remounted, in the timeout.
+          const link = pendingLinkRef.current;
+          pendingLinkRef.current = null;
+          const pendingRoute = pendingNavRef.current;
+          pendingNavRef.current = null;
+          if (link || pendingRoute) {
             setTimeout(() => {
+              if (!navigationRef.current) return;
+              if (link) dispatchInboundUrl(link);
               // @ts-expect-error — dynamic navigation
-              navigationRef.current?.navigate(route.screen, route.params);
+              else if (pendingRoute) navigationRef.current.navigate(pendingRoute.screen, pendingRoute.params);
             }, 100);
           }
         }}
@@ -241,7 +302,7 @@ function AppContent() {
   }
 
   return (
-    <NavigationContainer ref={navigationRef} theme={navTheme} linking={getLinkingConfig()}>
+    <NavigationContainer ref={navigationRef} theme={navTheme} linking={linkingOptions}>
       {/* Keyed on the active account so a switch remounts the whole tree.
           Most screens fetch on mount without `walletAddress` in their deps, so
           without this they would keep showing the previous account's channels,

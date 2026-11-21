@@ -1,10 +1,15 @@
 /**
- * News Detail — single news post with reactions, bookmark, repost, reply.
+ * News Detail — single news post with reactions, bookmark, repost, reply,
+ * comments and share links.
  *
- * Receives post data from the feed to avoid 404 on missing single-post endpoint.
+ * Shows the post handed over by the feed immediately, and loads
+ * `GET /api/v1/news/{msg_id}` (post + its comments, capped at 200 by the node)
+ * — the only source when the screen is opened from a link
+ * (`news/<hex>[?c=<hex>]`, spec 06 §6.5). A `commentId` param scrolls to and
+ * highlights that comment.
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,7 +18,13 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
+  Share,
+  ActivityIndicator,
+  type ScrollViewInstance,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import Toast, { useToast } from '../components/Toast';
+import { buildNewsShareUrl } from '../lib/share';
 import KeyboardAwareView from '../components/KeyboardAwareView';
 import NewsReactionBar from '../components/NewsReactionBar';
 import PostImage from '../components/PostImage';
@@ -25,13 +36,13 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, fontSize, radius } from '../theme';
 import { useConnection } from '../context/ConnectionContext';
 import { useUserDisplay } from '../hooks/useUserDisplay';
-import { decodeNewsPost } from '../lib/payloadDecoder';
-import { normalizeEnvelope } from '../lib/envelopeNormalizer';
+import { decodeNewsPost, decodePayload } from '../lib/payloadDecoder';
+import { normalizeEnvelope, normalizeEnvelopes } from '../lib/envelopeNormalizer';
 import { formatDateTime } from '../lib/datetime';
 import { debugLog } from '../lib/debug';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { NewsStackParamList } from '../navigation/types';
-import { MSG_TYPE_NAME } from '@ogmara/sdk';
+import { MSG_TYPE_NAME, normalizeMsgId, type Envelope } from '@ogmara/sdk';
 import { showAlert } from '../components/AlertHost';
 import Button from '../components/Button';
 
@@ -39,13 +50,63 @@ type Props = NativeStackScreenProps<NewsStackParamList, 'NewsDetail'>;
 
 /** 30-minute edit window */
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
+/** The node returns at most 200 comments inline; never render more. */
+const MAX_COMMENTS = 200;
+/** How long a linked comment stays highlighted. */
+const COMMENT_HIGHLIGHT_MS = 4000;
+
+/** Hex id of an envelope (`msg_id` may arrive as hex or bytes). */
+function hexId(m: { msg_id: unknown }): string {
+  const id = m.msg_id;
+  if (typeof id === 'string') return id.toLowerCase();
+  if (id instanceof Uint8Array || Array.isArray(id)) {
+    return Array.from(id as ArrayLike<number>).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return '';
+}
 
 
 export default function NewsDetailScreen({ route, navigation }: Props) {
-  const { msgId, post: rawPost } = route.params;
+  const { post: passedPost } = route.params;
+  // Canonical (lower-case hex) when it is a msg_id; link params were already
+  // validated by `parsePermalink` (deepLinkPaths.ts).
+  const msgId = normalizeMsgId(route.params.msgId) ?? route.params.msgId;
+  const commentTarget = normalizeMsgId(route.params.commentId);
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { client, signer, address: myAddress } = useConnection();
+  const [toast, showToast] = useToast();
+
+  // Post + comments from the node. Keyed by (client, msgId): a result for a
+  // previous post or node is ignored.
+  const [fetched, setFetched] = useState<{ key: string; post: Envelope | null; comments: Envelope[] } | null>(null);
+  const [fetchFailed, setFetchFailed] = useState(false);
+  // Bumped after posting a comment so the list reloads with it.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const fetchKey = `${(client as { nodeUrl?: string } | null)?.nodeUrl ?? ''}|${msgId}`;
+  useEffect(() => {
+    if (!client || !msgId) return;
+    let cancelled = false;
+    setFetchFailed(false);
+    client.getNewsPost(msgId)
+      .then((r) => {
+        if (cancelled) return;
+        const comments = Array.isArray(r?.comments) ? normalizeEnvelopes(r.comments.slice(0, MAX_COMMENTS)) : [];
+        setFetched({ key: fetchKey, post: r?.post ?? null, comments });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        debugLog('warn', `News post fetch failed: ${e instanceof Error ? e.message : ''}`);
+        setFetchFailed(true);
+      });
+    return () => { cancelled = true; };
+  }, [client, msgId, fetchKey, reloadNonce]);
+  const current = fetched && fetched.key === fetchKey ? fetched : null;
+  const rawPost = passedPost ?? current?.post ?? undefined;
+  const comments = useMemo(
+    () => [...(current?.comments ?? [])].sort((a, b) => Number(a.timestamp) - Number(b.timestamp)),
+    [current],
+  );
   // Seeded from the server's counts — see the same fix in NewsFeedScreen. This
   // screen renders the post object handed over by the feed, which carries the
   // node's `reaction_counts`; starting at `{}` meant other people's reactions
@@ -54,6 +115,12 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     (rawPost as unknown as { reaction_counts?: Record<string, number> } | undefined)
       ?.reaction_counts ?? {};
   const [reactionCounts, setReactionCounts] = useState<Record<string, number>>(seededCounts);
+  // Opened from a link: no feed post to seed from — take the fetched post's.
+  const fetchedCounts = passedPost ? undefined
+    : (current?.post as unknown as { reaction_counts?: Record<string, number> } | undefined)?.reaction_counts;
+  useEffect(() => {
+    if (fetchedCounts) setReactionCounts(fetchedCounts);
+  }, [fetchedCounts]);
   const [bookmarked, setBookmarked] = useState(false);
   const [reposted, setReposted] = useState(false);
   const [replyText, setReplyText] = useState('');
@@ -144,6 +211,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     try {
       await client.postComment(msgId, replyText.trim());
       setReplyText('');
+      setReloadNonce((n) => n + 1);
       showAlert(t('news_reply_sent'));
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
@@ -188,10 +256,62 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     );
   }, [client, signer, isOwn, msgId, t]);
 
+  // Share links (spec 06 §6.5): the post through the OS share sheet, a
+  // comment copied to the clipboard.
+  const handleShare = useCallback(async () => {
+    const url = buildNewsShareUrl(msgId);
+    if (!url) { showToast(t('share_link_failed')); return; }
+    try {
+      await Share.share({ message: url });
+    } catch (e) {
+      debugLog('warn', `Share post failed: ${e instanceof Error ? e.message : ''}`);
+    }
+  }, [msgId, showToast, t]);
+  const handleCopyCommentLink = useCallback(async (commentId: string) => {
+    const url = buildNewsShareUrl(msgId, commentId);
+    if (!url) { showToast(t('share_link_failed')); return; }
+    try {
+      await Clipboard.setStringAsync(url);
+      showToast(t('share_link_copied'));
+    } catch {
+      showToast(t('share_link_failed'));
+    }
+  }, [msgId, showToast, t]);
+
+  // News-comment permalink: scroll to + highlight the comment once both the
+  // comments and its row's position are known. A comment beyond the node's
+  // 200-comment cap just leaves the post open.
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const commentY = useRef<Map<string, number>>(new Map());
+  const commentsTopRef = useRef(-1); // -1 until the section is laid out
+  const [highlightComment, setHighlightComment] = useState<string | null>(null);
+  const landedCommentRef = useRef<string | null>(null);
+  const tryLandComment = useCallback(() => {
+    if (!commentTarget || landedCommentRef.current === commentTarget || commentsTopRef.current < 0) return;
+    const y = commentY.current.get(commentTarget);
+    if (y === undefined) return;
+    landedCommentRef.current = commentTarget;
+    scrollRef.current?.scrollTo({ y: Math.max(0, commentsTopRef.current + y - 80), animated: true });
+    setHighlightComment(commentTarget);
+  }, [commentTarget]);
+  useEffect(() => {
+    if (!highlightComment) return;
+    const timer = setTimeout(() => setHighlightComment(null), COMMENT_HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [highlightComment]);
+
   if (deleted) {
     return (
       <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
         <Text style={{ color: colors.textSecondary }}>{t('chat_message_deleted')}</Text>
+      </View>
+    );
+  }
+
+  if (!post && !fetchFailed && client) {
+    return (
+      <View style={[styles.center, { backgroundColor: colors.bgPrimary }]}>
+        <ActivityIndicator color={colors.textSecondary} />
       </View>
     );
   }
@@ -208,7 +328,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
     <KeyboardAwareView
       style={[styles.container, { backgroundColor: colors.bgPrimary }]}
     >
-      <ScrollView style={styles.scroll}>
+      <ScrollView style={styles.scroll} ref={scrollRef}>
         <View style={[styles.card, { backgroundColor: colors.bgSecondary }]}>
           <TouchableOpacity
             style={styles.authorRow}
@@ -241,7 +361,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
                   </Text>
                   {repostFields.original_deleted ? (
                     <Text style={{ color: colors.textSecondary, fontStyle: 'italic' }}>
-                      {t('message_deleted')}
+                      {t('chat_message_deleted')}
                     </Text>
                   ) : (
                     <>
@@ -327,6 +447,9 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
                 <Text style={{ color: colors.textSecondary }}>💰 {t('chat_tip')}</Text>
               </TouchableOpacity>
             )}
+            <TouchableOpacity style={styles.metaBtn} onPress={() => { void handleShare(); }} accessibilityLabel={t('news_share')}>
+              <Text style={{ color: colors.textSecondary }}>🔗 {t('news_share')}</Text>
+            </TouchableOpacity>
           </View>
 
           {/* Owner actions: edit / delete */}
@@ -343,6 +466,62 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
             </View>
           )}
         </View>
+
+        {/* Comments (inline from the node, capped at 200) */}
+        {comments.length > 0 && (
+          <View
+            style={[styles.commentsSection, { backgroundColor: colors.bgSecondary }]}
+            onLayout={(e) => { commentsTopRef.current = e.nativeEvent.layout.y; tryLandComment(); }}
+          >
+            <Text style={[styles.replyTitle, { color: colors.textSecondary }]}>{t('news_comments')}</Text>
+            {comments.map((c) => {
+              const id = hexId(c);
+              // A deleted comment: placeholder, no decode, no link (as web).
+              const isDeleted = (c as { deleted?: boolean }).deleted === true;
+              const body = isDeleted ? null : decodePayload(c.payload);
+              const text = typeof body?.content === 'string' ? body.content : '';
+              const lit = highlightComment !== null && id === highlightComment;
+              return (
+                <View
+                  key={id || `${c.author}-${c.timestamp}`}
+                  style={[
+                    styles.comment,
+                    { borderTopColor: colors.border },
+                    lit && { backgroundColor: colors.bgTertiary, borderLeftColor: colors.accentPrimary, borderLeftWidth: 3 },
+                  ]}
+                  onLayout={(e) => {
+                    if (!id) return;
+                    commentY.current.set(id, e.nativeEvent.layout.y);
+                    if (id === commentTarget) tryLandComment();
+                  }}
+                >
+                  <View style={styles.commentHead}>
+                    <TouchableOpacity onPress={() => navigation.navigate('UserProfile', { address: c.author })} style={{ flex: 1 }}>
+                      <Text style={[styles.commentAuthor, { color: colors.accentPrimary }]} numberOfLines={1}>
+                        {c.author.slice(0, 20)}...
+                      </Text>
+                    </TouchableOpacity>
+                    {!isDeleted && /^[0-9a-f]{64}$/.test(id) && (
+                      <TouchableOpacity
+                        onPress={() => { void handleCopyCommentLink(id); }}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityLabel={t('share_comment_link')}
+                      >
+                        <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm }}>🔗</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  {isDeleted ? (
+                    <Text style={{ color: colors.textSecondary, fontStyle: 'italic' }}>{t('chat_message_deleted')}</Text>
+                  ) : text ? <FormattedText content={text} /> : null}
+                  <Text style={[styles.time, { color: colors.textSecondary, marginBottom: 0 }]}>
+                    {formatDateTime(c.timestamp)}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
 
         {/* Reply section */}
         {signer && (
@@ -374,6 +553,7 @@ export default function NewsDetailScreen({ route, navigation }: Props) {
         recipientAddress={post.author}
         onClose={() => setShowTip(false)}
       />
+      <Toast message={toast} />
     </KeyboardAwareView>
   );
 }
@@ -410,6 +590,20 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   metaBtn: { paddingVertical: 4, paddingHorizontal: 8 },
+  commentsSection: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+  },
+  comment: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.sm,
+  },
+  commentHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 2, gap: spacing.sm },
+  commentAuthor: { fontSize: fontSize.xs, fontWeight: '600' },
   replySection: {
     marginHorizontal: spacing.md,
     marginBottom: spacing.xl,

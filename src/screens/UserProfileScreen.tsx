@@ -294,7 +294,7 @@ export default function UserProfileScreen({ route, navigation }: Props) {
                 </Text>
                 {repostFields.original_deleted ? (
                   <Text style={{ color: colors.textSecondary, fontStyle: 'italic', fontSize: fontSize.sm }}>
-                    {t('message_deleted')}
+                    {t('chat_message_deleted')}
                   </Text>
                 ) : (
                   <>

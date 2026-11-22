@@ -5,6 +5,16 @@ All notable changes to the Ogmara Mobile App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.60.1] - 2026-11-22
+
+### Fixed
+
+- **Links in your own chat messages were invisible.** Own bubbles are filled
+  with the accent colour and links were always drawn in the accent colour, so
+  a message containing only a link looked like an empty bubble (the link
+  still worked when tapped). Links in own bubbles now use the bubble's text
+  colour and stay underlined; other bubbles keep the accent link colour.
+
 ## [0.60.0] - 2026-11-20
 
 Message permalinks (spec 06 §6.5; mobile phase of

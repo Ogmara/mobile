@@ -20,12 +20,15 @@ interface Props {
   attachments?: Attachment[];
   /** Base URL for fetching IPFS media via the node. */
   mediaBaseUrl?: string;
-  /** Override the base text colour (e.g. inverse on an own-message bubble).
-   *  Links keep the accent colour regardless. */
+  /** Override the base text colour (e.g. inverse on an own-message bubble). */
   color?: string;
+  /** Override the link colour. Defaults to the accent colour — which is
+   *  invisible on an own-message bubble whose background IS the accent, so
+   *  that caller passes the bubble's text colour (links stay underlined). */
+  linkColor?: string;
 }
 
-export default function FormattedText({ content, attachments, mediaBaseUrl, color }: Props) {
+export default function FormattedText({ content, attachments, mediaBaseUrl, color, linkColor }: Props) {
   const { colors } = useTheme();
   const segments = useMemo(() => parseMessageContent(content), [content]);
 
@@ -44,7 +47,7 @@ export default function FormattedText({ content, attachments, mediaBaseUrl, colo
         return (
           <Text
             key={idx}
-            style={safe ? [styles.link, { color: colors.accentPrimary }] : undefined}
+            style={safe ? [styles.link, { color: linkColor ?? colors.accentPrimary }] : undefined}
             onPress={safe ? () => { Linking.openURL(inApp ?? seg.url).catch(() => {}); } : undefined}
           >
             {seg.display}

@@ -350,6 +350,7 @@ export default function MessageBubble({
           <FormattedText
             content={content}
             color={isOwn ? colors.textInverse : colors.textPrimary}
+            linkColor={isOwn ? colors.textInverse : undefined}
           />
         ) : null}
         {/* Inline media attachments */}
